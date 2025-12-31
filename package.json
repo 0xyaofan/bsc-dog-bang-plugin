@@ -1,0 +1,28 @@
+{
+  "name": "bsc-dog-bang-plugin",
+  "version": "1.0.0",
+  "description": "Binance Smart Chain 代币交易插件，直接与Four/Flap/PancakeSwap等合约交互。",
+  "main": "background.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "0xyaofan",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@types/chrome": "^0.1.31",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react-swc": "^4.2.2",
+    "typescript": "^5.9.3",
+    "viem": "^2.43.1",
+    "vite": "^7.2.4"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

@@ -1,0 +1,2281 @@
+/// <reference types="chrome" />
+
+import { logger, DEBUG_CONFIG } from '../shared/logger.js';
+import { PerformanceTimer, perf } from '../shared/performance.js';
+import {
+  WALLET_CONFIG,
+  UI_CONFIG,
+  CHANNELS
+} from '../shared/trading-config.js';
+import { CONTENT_CONFIG } from '../shared/content-config.js';
+import {
+  DEFAULT_USER_SETTINGS,
+  UserSettings,
+  loadUserSettings,
+  onUserSettingsChange
+} from '../shared/user-settings.js';
+
+declare global {
+  interface Window {
+    __DOG_BANG_SIDE_PANEL_MODE__?: boolean;
+  }
+}
+
+const SIDE_PANEL_TOKEN_STORAGE_KEY = 'dogBangLastTokenContext';
+const EMBEDDED_PANEL_ENABLED = false;
+
+type SidePanelTokenContext = {
+  tokenAddress: string;
+  url: string;
+  updatedAt: number;
+  preferredChannelId?: string;
+};
+
+type TradingPanelOptions = {
+  tokenAddressOverride?: string;
+  mountPoint?: HTMLElement;
+  defaultChannelId?: string;
+  disableAutoChannelSelection?: boolean;
+  sourceUrl?: string | null;
+};
+
+let backgroundPort: chrome.runtime.Port | null = null;
+let backgroundPortReady = false;
+let panelReady = false;
+let pendingWalletStatus: any = null;
+let pendingTokenBalance: any = null;
+const pendingPortRequests = new Map<string, { resolve: (value: any) => void; reject: (reason?: any) => void; timeoutId: ReturnType<typeof setTimeout> }>();
+let portRequestCounter = 0;
+const PORT_REQUEST_TIMEOUT = CONTENT_CONFIG.PORT_REQUEST_TIMEOUT_MS;
+let tokenContextObserverStarted = false;
+let lastSyncedTokenAddress: string | null = null;
+let lastSyncedUrl = '';
+let tokenContextSyncPromise: Promise<void> | null = null;
+let historyListenersInstalled = false;
+let userSettings: UserSettings = DEFAULT_USER_SETTINGS;
+export const tradingSettingsReady = loadUserSettings().then((settings) => {
+  userSettings = settings;
+});
+onUserSettingsChange((settings) => {
+  userSettings = settings;
+});
+
+type WalletDisplayState =
+  | { type: 'link'; address: string }
+  | { type: 'text'; text: string };
+
+let walletDisplayState: WalletDisplayState = { type: 'text', text: '加载中...' };
+let walletStatusClass: 'wallet-unlocked' | 'wallet-locked' | 'wallet-not-setup' | null = null;
+let walletButtonsEnabled = false;
+let currentTokenRoute: any = null;
+let routeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let userChannelOverride = false;
+let routeLockReason: string | null = null;
+let routeLockType: 'approve' | 'migration' | null = null;
+let walletStatusNoticeActive = false;
+let walletStatusNoticeMessage: string | null = null;
+let statusHideTimer: ReturnType<typeof setTimeout> | null = null;
+let sellEstimateTimer: ReturnType<typeof setInterval> | null = null;
+let sellEstimatePending = false;
+let sellEstimateRequestId = 0;
+let panelSourceUrl: string | null = null;
+
+
+const WEI_PER_BNB = 1000000000000000000n;
+const SELL_PERCENT_SCALE = 100n * 10000n;
+
+const GMGN_WALLET_BASE = 'https://gmgn.ai/bsc/address';
+const BSCSCAN_WALLET_BASE = 'https://bscscan.com/address';
+
+function getDefaultPanelSourceUrl() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    return window.location?.href ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function updatePanelSourceUrl(sourceUrl?: string | null) {
+  const resolved = sourceUrl ?? getDefaultPanelSourceUrl();
+  if (resolved === panelSourceUrl) {
+    return;
+  }
+  panelSourceUrl = resolved ?? null;
+  if (walletDisplayState.type === 'link') {
+    applyWalletDisplayState();
+  }
+}
+
+function getHostnameFromSource(source?: string | null) {
+  if (!source) {
+    return '';
+  }
+  try {
+    return new URL(source).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function getEnvironmentHostname() {
+  try {
+    return window?.location?.hostname?.toLowerCase() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function isExtensionEnvironment() {
+  try {
+    const protocol = window?.location?.protocol ?? '';
+    return (
+      protocol === 'chrome-extension:' ||
+      protocol === 'moz-extension:' ||
+      protocol === 'ms-browser-extension:' ||
+      protocol === 'safari-web-extension:' ||
+      protocol === 'edge-extension:'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getWalletExplorerBaseUrl() {
+  const envHostname = getEnvironmentHostname();
+  if (envHostname && !isExtensionEnvironment()) {
+    return envHostname.includes('gmgn.ai') ? GMGN_WALLET_BASE : BSCSCAN_WALLET_BASE;
+  }
+  const sourceHostname =
+    getHostnameFromSource(panelSourceUrl) || getHostnameFromSource(getDefaultPanelSourceUrl());
+  return sourceHostname.includes('gmgn.ai') ? GMGN_WALLET_BASE : BSCSCAN_WALLET_BASE;
+}
+
+function applyWalletDisplayState() {
+  const walletAddressEl = document.getElementById('wallet-address');
+  if (!walletAddressEl) return;
+
+  if (walletDisplayState.type === 'link') {
+    const address = walletDisplayState.address;
+    const short = `${address.slice(0, 6)}...${address.slice(-4)}`;
+    const explorerUrl = `${getWalletExplorerBaseUrl()}/${address}`;
+    walletAddressEl.innerHTML = `<a class="wallet-link" href="${explorerUrl}" target="_blank" rel="noopener noreferrer">${short}</a>`;
+  } else {
+    walletAddressEl.textContent = walletDisplayState.text;
+  }
+}
+
+function applyWalletStatusClass() {
+  const walletAddressEl = document.getElementById('wallet-address');
+  if (!walletAddressEl) return;
+  walletAddressEl.classList.remove('wallet-unlocked', 'wallet-locked', 'wallet-not-setup');
+  if (walletStatusClass) {
+    walletAddressEl.classList.add(walletStatusClass);
+  }
+}
+
+function applyWalletUiState() {
+  applyWalletDisplayState();
+  applyWalletStatusClass();
+  applyTradeButtonsState();
+}
+
+function setWalletDisplayText(text: string) {
+  walletDisplayState = { type: 'text', text };
+  applyWalletDisplayState();
+}
+
+function setTradeButtonsEnabled(enabled: boolean) {
+  walletButtonsEnabled = enabled;
+  applyTradeButtonsState();
+}
+
+function applyTradeButtonsState() {
+  const buyBtn = document.getElementById('btn-buy') as HTMLButtonElement | null;
+  const sellBtn = document.getElementById('btn-sell') as HTMLButtonElement | null;
+  const locked = Boolean(routeLockReason && routeLockType !== 'approve');
+  if (buyBtn) buyBtn.disabled = !walletButtonsEnabled || locked;
+  if (sellBtn) sellBtn.disabled = !walletButtonsEnabled || locked;
+}
+
+function renderStatusMessage() {
+  if (walletStatusNoticeActive && walletStatusNoticeMessage) {
+    showStatus(walletStatusNoticeMessage, 'warning', { persist: true });
+    return;
+  }
+  if (routeLockReason) {
+    const isApproveLock = routeLockType === 'approve';
+    showStatus(routeLockReason, isApproveLock ? 'info' : 'warning', { persist: !isApproveLock });
+  } else {
+    clearStatusMessage();
+  }
+}
+
+function setRouteLock(reason: string | null, type: 'approve' | 'migration' | null = null) {
+  routeLockReason = reason;
+  const normalizedType = type === 'approve' ? 'approve' : type === 'migration' ? 'migration' : null;
+  routeLockType = reason ? normalizedType : null;
+  applyTradeButtonsState();
+  renderStatusMessage();
+  scheduleSellEstimate();
+}
+
+function showWalletStatusNotice(message: string) {
+  walletStatusNoticeActive = true;
+  walletStatusNoticeMessage = message;
+  renderStatusMessage();
+}
+
+function clearWalletStatusNotice() {
+  if (!walletStatusNoticeActive) {
+    return;
+  }
+  walletStatusNoticeActive = false;
+  walletStatusNoticeMessage = null;
+  renderStatusMessage();
+}
+
+function getActiveTokenAddress() {
+  const panel = document.getElementById('dog-bang-panel');
+  const fromDataset = panel?.dataset?.tokenAddress;
+  if (fromDataset && /^0x[a-fA-F0-9]{40}$/.test(fromDataset)) {
+    return fromDataset;
+  }
+  const urlToken = getTokenAddressFromURL();
+  if (urlToken) {
+    return urlToken;
+  }
+  return currentTokenAddress;
+}
+
+async function copyTextToClipboard(text: string) {
+  if (!text) return false;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error: any) {
+    logger.debug('[Dog Bang] navigator.clipboard 复制失败，使用后备方案:', error);
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const success = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return success;
+  } catch (error) {
+    logger.error('[Dog Bang] 复制地址失败:', error);
+    return false;
+  }
+}
+
+function escapeHtml(value: string) {
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  };
+  return value.replace(/[&<>"']/g, (char) => map[char]);
+}
+
+function renderQuickButtons(values: string[], action: 'buy' | 'sell', suffix = '') {
+  return values.map((rawValue) => {
+    const value = rawValue ?? '';
+    const display = `${value}${suffix}`;
+    return `<button class="btn-quick" data-action="${action}" data-amount="${escapeHtml(value)}">${escapeHtml(display)}</button>`;
+  }).join('');
+}
+
+function renderOptionButtons(values: string[], target: string, suffix = '') {
+  return values.map((rawValue, index) => {
+    const value = rawValue ?? '';
+    const active = index === 0 ? 'active' : '';
+    const display = `${value}${suffix}`;
+    return `<button type="button" class="btn-option ${active}" data-target="${target}" data-value="${escapeHtml(value)}">${escapeHtml(display)}</button>`;
+  }).join('');
+}
+
+function getMaxPresetValue(values: string[], fallback = '100') {
+  let bestValue = fallback;
+  let bestNum = Number(fallback);
+  if (!Number.isFinite(bestNum)) {
+    bestNum = -Infinity;
+  }
+  values.forEach((rawValue) => {
+    const num = Number(rawValue);
+    if (!Number.isFinite(num)) {
+      return;
+    }
+    if (num > bestNum) {
+      bestNum = num;
+      bestValue = rawValue;
+    }
+  });
+  return bestValue ?? fallback;
+}
+
+// ========== 页面层级错误拦截（兼容 SES Lockdown） ==========
+function isSesLockdownException(source: unknown) {
+  if (!source) return false;
+  if (typeof source === 'string') {
+    return source.includes('SES_UNCAUGHT_EXCEPTION') || source.includes('lockdown-install.js');
+  }
+  if (typeof source === 'object') {
+    const message = (source as { message?: unknown })?.message;
+    if (typeof message === 'string' && message.includes('SES_UNCAUGHT_EXCEPTION')) {
+      return true;
+    }
+    const stack = (source as { stack?: unknown })?.stack;
+    if (typeof stack === 'string' && stack.includes('lockdown-install.js')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function shouldSuppressSesError(event: ErrorEvent) {
+  if (!event) return false;
+  if (event.filename && event.filename.includes('lockdown-install.js')) {
+    return true;
+  }
+  if (isSesLockdownException(event.message)) {
+    return true;
+  }
+  if (isSesLockdownException(event.error)) {
+    return true;
+  }
+  return false;
+}
+
+window.addEventListener('error', (event) => {
+  if (shouldSuppressSesError(event)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return false;
+  }
+  return undefined;
+}, true);
+
+window.addEventListener('unhandledrejection', (event) => {
+  if (isSesLockdownException(event?.reason)) {
+    event.preventDefault();
+    if (typeof event.stopImmediatePropagation === 'function') {
+      event.stopImmediatePropagation();
+    }
+    return false;
+  }
+  return undefined;
+}, true);
+
+function getInputValue(id: string): string {
+  const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  return element?.value?.toString() ?? '';
+}
+
+function setInputValue(id: string, value: string) {
+  const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  if (element) {
+    element.value = value;
+  }
+}
+
+function setWalletAddressDisplay(address: string | null) {
+  if (address && /^0x[a-fA-F0-9]{40}$/.test(address)) {
+    walletDisplayState = { type: 'link', address };
+  } else {
+    walletDisplayState = { type: 'text', text: address ?? '加载中...' };
+  }
+  applyWalletDisplayState();
+}
+
+function setTextContent(id: string, value: string) {
+  const element = document.getElementById(id);
+  if (element) {
+    element.textContent = value;
+  }
+}
+
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return '--';
+  }
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+type ButtonTimerController = {
+  getElapsed: () => number;
+  stop: (finalLabel?: string) => number;
+};
+
+function startButtonTimer(button: HTMLButtonElement, runningLabel = '处理中'): ButtonTimerController {
+  const start = performance.now();
+  let stopped = false;
+  let finalElapsed = 0;
+
+  const update = () => {
+    const elapsedSeconds = ((stopped ? finalElapsed : performance.now() - start) / 1000);
+    button.textContent = `${runningLabel}... (${elapsedSeconds.toFixed(2)}s)`;
+  };
+
+  update();
+  const interval = setInterval(update, CONTENT_CONFIG.BUTTON_TIMER_REFRESH_INTERVAL_MS);
+
+  const stopTimer = () => {
+    if (!stopped) {
+      clearInterval(interval);
+      finalElapsed = performance.now() - start;
+      stopped = true;
+    }
+    return finalElapsed;
+  };
+
+  return {
+    getElapsed: () => (stopped ? finalElapsed : performance.now() - start),
+    stop: (finalLabel?: string) => {
+      const elapsed = stopTimer();
+      if (finalLabel) {
+        button.textContent = finalLabel;
+      }
+      return elapsed;
+    }
+  };
+}
+
+function appendDurationSuffix(message: string, durationText: string) {
+  if (!durationText || durationText === '--') {
+    return message;
+  }
+  const separator = message.includes('· 耗时') ? '' : ' · ';
+  return `${message}${separator}耗时 ${durationText}`;
+}
+
+function clearSidePanelTokenContext() {
+  if (!chrome?.storage?.local) {
+    return;
+  }
+
+  try {
+    chrome.storage.local.remove(SIDE_PANEL_TOKEN_STORAGE_KEY, () => {
+      const err = chrome.runtime?.lastError;
+      if (err) {
+        logger.debug('[Dog Bang] 无法清除 Side Panel token 缓存:', err.message);
+      }
+    });
+  } catch (error) {
+    logger.debug('[Dog Bang] 清除 Side Panel token 缓存失败:', error);
+  }
+}
+
+function syncTokenContextToSidePanel(tokenAddress?: string | null, extra: Partial<SidePanelTokenContext> = {}) {
+  if (!chrome?.storage?.local) {
+    return;
+  }
+
+  if (!tokenAddress) {
+    clearSidePanelTokenContext();
+    return;
+  }
+
+  const payload: SidePanelTokenContext = {
+    tokenAddress,
+    url: extra.url ?? window.location.href,
+    updatedAt: extra.updatedAt ?? Date.now(),
+    preferredChannelId: extra.preferredChannelId
+  };
+
+  try {
+    chrome.storage.local.set(
+      {
+        [SIDE_PANEL_TOKEN_STORAGE_KEY]: payload
+      },
+      () => {
+        const err = chrome.runtime?.lastError;
+        if (err) {
+          logger.debug('[Dog Bang] 无法同步 Side Panel 代币信息:', err.message);
+        }
+      }
+    );
+  } catch (error) {
+    logger.debug('[Dog Bang] 写入 Side Panel 代币缓存失败:', error);
+  }
+}
+
+function syncTokenContextFromCurrentPage(force = false) {
+  if (window.__DOG_BANG_SIDE_PANEL_MODE__) {
+    return;
+  }
+
+  if (tokenContextSyncPromise) {
+    return tokenContextSyncPromise;
+  }
+
+  tokenContextSyncPromise = (async () => {
+    const tokenAddress = getTokenAddressFromURL();
+
+    if (!tokenAddress) {
+      if (lastSyncedTokenAddress) {
+        clearSidePanelTokenContext();
+        lastSyncedTokenAddress = null;
+        lastSyncedUrl = '';
+      }
+      return;
+    }
+
+    if (!force && tokenAddress === lastSyncedTokenAddress && window.location.href === lastSyncedUrl) {
+      return;
+    }
+
+    let preferredChannelId: string | undefined;
+    try {
+      const response = await safeSendMessage({
+        action: 'get_token_route',
+        data: { tokenAddress }
+      });
+      if (response && response.success && response.data?.preferredChannel) {
+        preferredChannelId = response.data.preferredChannel;
+      }
+    } catch (error) {
+      logger.debug('[Dog Bang] 同步默认通道失败:', error);
+    }
+
+    syncTokenContextToSidePanel(tokenAddress, {
+      preferredChannelId,
+      url: window.location.href
+    });
+
+    lastSyncedTokenAddress = tokenAddress;
+    lastSyncedUrl = window.location.href;
+  })()
+    .catch((error) => {
+      logger.debug('[Dog Bang] 同步 Side Panel 上下文失败:', error);
+    })
+    .finally(() => {
+      tokenContextSyncPromise = null;
+    });
+
+  return tokenContextSyncPromise;
+}
+
+function initializeTokenContextSync() {
+  if (tokenContextObserverStarted || window.__DOG_BANG_SIDE_PANEL_MODE__) {
+    return;
+  }
+
+  tokenContextObserverStarted = true;
+  syncTokenContextFromCurrentPage(true);
+
+  let observedUrl = window.location.href;
+  const handleUrlChanged = (force = false) => {
+    const currentUrl = window.location.href;
+    if (!force && currentUrl === observedUrl) {
+      return;
+    }
+    observedUrl = currentUrl;
+    syncTokenContextFromCurrentPage(force);
+  };
+
+  const observer = new MutationObserver(() => handleUrlChanged());
+  observer.observe(document, { subtree: true, childList: true });
+
+  if (!historyListenersInstalled) {
+    historyListenersInstalled = true;
+    type HistoryMethod = typeof history['pushState'];
+    const patchHistoryMethod = (method: 'pushState' | 'replaceState') => {
+      const original = history[method] as HistoryMethod;
+      if (typeof original !== 'function') {
+        return;
+      }
+      const patched = function (this: History, ...args: Parameters<HistoryMethod>) {
+        const result = original.apply(this, args);
+        queueMicrotask(() => handleUrlChanged());
+        return result;
+      };
+      history[method] = patched as HistoryMethod;
+    };
+
+    patchHistoryMethod('pushState');
+    patchHistoryMethod('replaceState');
+    window.addEventListener('popstate', () => handleUrlChanged());
+    window.addEventListener('hashchange', () => handleUrlChanged());
+
+    const handleVisibilityOrFocus = () => {
+      if (document.hidden) {
+        return;
+      }
+      syncTokenContextFromCurrentPage(true);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pageshow', handleVisibilityOrFocus);
+  }
+}
+
+
+function rejectPendingPortRequests(reason: string) {
+  pendingPortRequests.forEach(({ reject, timeoutId }) => {
+    clearTimeout(timeoutId);
+    reject(new Error(reason));
+  });
+  pendingPortRequests.clear();
+}
+
+function sendBackgroundPortRequest(message) {
+  if (!backgroundPort) {
+    return Promise.reject(new Error('Background port unavailable'));
+  }
+
+  const requestId = `port_req_${Date.now()}_${portRequestCounter++}`;
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingPortRequests.delete(requestId);
+      reject(new Error('Port request timeout'));
+    }, PORT_REQUEST_TIMEOUT);
+
+    pendingPortRequests.set(requestId, { resolve, reject, timeoutId });
+
+    try {
+      backgroundPort.postMessage({
+        ...message,
+        requestId
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      pendingPortRequests.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
+// ========== 全局状态 ==========
+// 当前代币地址
+let currentTokenAddress = null;
+
+// 当前代币信息（从 background 获取，仅用于 UI 显示）
+let currentTokenInfo = null;
+
+const pendingTransactions = new Map<string, { type: 'buy' | 'sell'; token: string }>();
+const sellAutoApproveCache = new Set<string>();
+
+// Extension context 状态
+let extensionContextValid = true;
+
+// ========== Extension Context 错误处理 ==========
+/**
+ * 安全的 chrome.runtime.sendMessage 包装器
+ * 处理 "Extension context invalidated" 错误
+ */
+async function safeSendMessage(message) {
+  if (!extensionContextValid) {
+    throw new Error('Extension context 已失效，请刷新页面');
+  }
+
+  try {
+    if (backgroundPort && backgroundPortReady) {
+      try {
+        return await sendBackgroundPortRequest(message);
+      } catch (portError: any) {
+        const portMessage = (portError?.message || '').toLowerCase();
+        const shouldFallback = portMessage.includes('background port') || portMessage.includes('port request');
+        if (shouldFallback) {
+          logger.debug('[Dog Bang] Background port 不可用，回退到 sendMessage');
+          backgroundPortReady = false;
+          backgroundPort = null;
+          connectBackgroundPort();
+        } else {
+          throw portError;
+        }
+      }
+    }
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    const errorMessage = typeof error?.message === 'string' ? error.message : String(error || '');
+    if (errorMessage.includes('Extension context invalidated')) {
+      logger.error('[Dog Bang] Extension context 已失效 - Service Worker 可能被重新加载');
+      extensionContextValid = false;
+
+      // 停止轮询
+      stopPolling();
+
+      // 显示友好的错误提示
+      showStatus('⚠️ 扩展已更新，请刷新页面', 'warning');
+
+      // 禁用交易按钮
+      const buyBtn = document.getElementById('btn-buy');
+      const sellBtn = document.getElementById('btn-sell');
+      if (buyBtn) {
+        buyBtn.disabled = true;
+        buyBtn.textContent = '请刷新页面';
+      }
+      if (sellBtn) {
+        sellBtn.disabled = true;
+        sellBtn.textContent = '请刷新页面';
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * 安全发送消息（静默失败版本）
+ * 用于通知等不需要响应的消息
+ */
+function safeSendMessageNoThrow(message) {
+  if (!extensionContextValid) {
+    return;
+  }
+
+  const sender: (msg: any) => Promise<any> = backgroundPort
+    ? sendBackgroundPortRequest
+    : (msg) => chrome.runtime.sendMessage(msg);
+
+  sender(message).catch(error => {
+    if (error.message && error.message.includes('Extension context invalidated')) {
+      extensionContextValid = false;
+    }
+    // 静默失败，不抛出错误
+  });
+}
+
+// ========== 性能监控 ==========
+const performanceMetrics = {
+  transactions: 0,          // 交易次数
+  errors: 0,                // 错误次数
+  startTime: Date.now()     // 监控开始时间
+};
+
+/**
+ * 记录性能指标（仅 DEBUG 模式）
+ */
+function logPerformanceMetrics() {
+  if (!DEBUG_CONFIG.ENABLED) return;
+
+  const uptime = (Date.now() - performanceMetrics.startTime) / 1000;
+
+  console.log(`[性能监控] ========== 性能统计 (运行时间: ${uptime.toFixed(1)}s) ==========`);
+  console.log(`[性能监控] 交易次数: ${performanceMetrics.transactions}`);
+  console.log(`[性能监控] 错误次数: ${performanceMetrics.errors}`);
+  console.log(`[性能监控] ==================================================`);
+}
+
+/**
+ * 每5分钟输出一次性能统计（仅 DEBUG 模式）
+ */
+if (DEBUG_CONFIG.ENABLED) {
+  setInterval(() => {
+    logPerformanceMetrics();
+  }, CONTENT_CONFIG.PERF_LOG_INTERVAL_MS);
+}
+
+// ========== PUSH 模式：被动接收 background 推送 ==========
+// 优化3: 移除定时轮询，改为 PUSH 模式
+// 只在以下情况主动获取状态：
+// 1. 页面首次加载
+// 2. 页面重新可见
+// 3. 用户点击交易按钮时
+
+let pollingActive = false;
+let walletStatusInterval: ReturnType<typeof setInterval> | null = null;
+
+// 初始化钱包状态（只执行一次）
+function initWalletStatus() {
+  if (pollingActive) return;
+  pollingActive = true;
+
+  // 首次加载
+  logger.debug('[Dog Bang] PUSH 模式：首次加载钱包状态');
+  loadWalletStatus();
+
+  if (walletStatusInterval) {
+    clearInterval(walletStatusInterval);
+  }
+  walletStatusInterval = setInterval(() => {
+    if (!document.hidden) {
+      loadWalletStatus();
+    }
+  }, UI_CONFIG.BALANCE_UPDATE_INTERVAL ?? CONTENT_CONFIG.BALANCE_POLL_FALLBACK_MS);
+
+  // 监听页面可见性变化 - 页面重新可见时刷新一次
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && pollingActive) {
+      logger.debug('[Dog Bang] 页面重新可见，刷新钱包状态');
+      loadWalletStatus();
+    }
+  });
+}
+
+// 为了向后兼容，保留 startSmartPolling 函数名
+export function startSmartPolling() {
+  initWalletStatus();
+}
+
+// ========== TxWatcher 和保活机制由 background.js 管理 ==========
+// 优化4: 删除了 initializeTxWatcher 和 enableTradingPageKeepAlive
+// 优化6: 删除了 prewarmConnections
+// background.js 会在 extension 激活时自动初始化这些服务
+
+function stopPolling() {
+  pollingActive = false;
+  if (walletStatusInterval) {
+    clearInterval(walletStatusInterval);
+    walletStatusInterval = null;
+  }
+  logger.debug('[Dog Bang] 停止状态监听');
+}
+
+// ========== 代币信息加载（从 background 获取）==========
+// 优化1: 移除前端缓存，全部从 background 获取
+async function loadTokenInfo(tokenAddress) {
+  try {
+    logger.debug('[Dog Bang] 从 background 获取代币信息');
+
+    const response = await safeSendMessage({
+      action: 'get_token_info',
+      data: {
+        tokenAddress,
+        needApproval: false
+      }
+    });
+
+    if (response && response.success) {
+      // 保存当前代币信息用于 UI 显示
+      currentTokenInfo = {
+        address: tokenAddress,
+        symbol: response.data.symbol,
+        decimals: response.data.decimals,
+        totalSupply: response.data.totalSupply,
+        balance: response.data.balance
+      };
+
+      logger.debug('[Dog Bang] 代币信息已更新:', {
+        symbol: currentTokenInfo.symbol,
+        decimals: currentTokenInfo.decimals
+      });
+
+      // 更新余额显示
+      if (response.data.balance) {
+        updateTokenBalanceDisplay(tokenAddress);
+      }
+      scheduleSellEstimate();
+
+      return currentTokenInfo;
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] Error loading token info:', error);
+  }
+  return null;
+}
+
+function clearRouteRefreshTimer() {
+  if (routeRefreshTimer) {
+    clearTimeout(routeRefreshTimer);
+    routeRefreshTimer = null;
+  }
+}
+
+function scheduleRouteRefresh(tokenAddress: string, delay = CONTENT_CONFIG.ROUTE_REFRESH_DEFAULT_DELAY_MS) {
+  clearRouteRefreshTimer();
+  routeRefreshTimer = setTimeout(() => {
+    loadTokenRoute(tokenAddress).catch((error) => logger.debug('[Dog Bang] 刷新通道状态失败:', error));
+  }, Math.max(CONTENT_CONFIG.ROUTE_REFRESH_MIN_DELAY_MS, delay));
+}
+
+async function loadTokenRoute(tokenAddress: string, options: { force?: boolean } = {}) {
+  if (!tokenAddress) {
+    return;
+  }
+  try {
+    const response = await safeSendMessage({
+      action: 'get_token_route',
+      data: {
+        tokenAddress,
+        force: options.force ?? false
+      }
+    });
+    if (response && response.success) {
+      currentTokenRoute = response.data;
+      applyTokenRouteToUI(currentTokenRoute);
+      const nextDelay = typeof currentTokenRoute?.nextUpdateIn === 'number'
+        ? currentTokenRoute.nextUpdateIn
+        : CONTENT_CONFIG.ROUTE_REFRESH_DEFAULT_DELAY_MS;
+      scheduleRouteRefresh(tokenAddress, nextDelay);
+    } else {
+      scheduleRouteRefresh(tokenAddress, CONTENT_CONFIG.ROUTE_REFRESH_DEFAULT_DELAY_MS);
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] 获取通道状态失败:', error);
+    scheduleRouteRefresh(tokenAddress, CONTENT_CONFIG.ROUTE_REFRESH_DEFAULT_DELAY_MS);
+  }
+}
+
+function applyTokenRouteToUI(route: any) {
+  if (!route) {
+    return;
+  }
+  const statusEl = document.getElementById('channel-status');
+  if (statusEl) {
+    const channelName = getChannelName(route.preferredChannel);
+    let stateLabel = '';
+    if (route.migrationStatus === 'migrating') {
+      stateLabel = '迁移中';
+    } else if (route.readyForPancake) {
+      stateLabel = '已同步 Pancake';
+    } else if (route.migrationStatus === 'monitoring' && typeof route.progress === 'number') {
+      stateLabel = `进度 ${(route.progress * 100).toFixed(1)}%`;
+    } else {
+      stateLabel = '内盘';
+    }
+    statusEl.textContent = `${channelName} · ${stateLabel}`;
+  }
+
+  if (!userChannelOverride && route.preferredChannel) {
+    const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
+    if (channelSelector && channelSelector.value !== route.preferredChannel) {
+      channelSelector.value = route.preferredChannel;
+      logger.debug('[Dog Bang] 根据通道状态自动切换到:', route.preferredChannel);
+      scheduleSellEstimate();
+    }
+  }
+
+  setRouteLock(route.lockReason || null, route.lockType || null);
+}
+
+// ========== 优化的买入流程 ==========
+async function handleBuy(tokenAddress) {
+  // 检查钱包状态
+  const walletAddressEl = document.getElementById('wallet-address');
+  if (!walletAddressEl || !walletAddressEl.classList.contains('wallet-unlocked')) {
+    showStatus('请先解锁钱包', 'error');
+    return;
+  }
+
+  // 创建性能计时器
+  const timer = new PerformanceTimer('buy');
+
+  const amount = getInputValue('buy-amount');
+  const slippage = getInputValue('slippage');
+  const gasPrice = getInputValue('buy-gas-price');
+  const channel = getInputValue('channel-selector');
+
+  timer.step('读取交易参数');
+
+  if (userSettings?.trading?.autoApproveMode === 'buy') {
+    autoApproveToken(tokenAddress, channel);
+  }
+
+  if (!amount || parseFloat(amount) <= 0) {
+    showStatus('请输入买入金额', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-buy') as HTMLButtonElement | null;
+  if (!btn) {
+    return;
+  }
+  btn.disabled = true;
+  const buttonTimer = startButtonTimer(btn, '买入中');
+
+    timer.step('参数验证和UI更新');
+
+  try {
+    showStatus(`正在通过 ${getChannelName(channel)} 买入...`, 'info');
+
+    // 记录消息发送前的时间
+    const messageSendStart = perf.now();
+
+    // 买入不需要传递代币信息,后端会自己查询(有缓存)
+    const response = await safeSendMessage({
+      action: 'buy_token',
+      data: {
+        tokenAddress,
+        amount,
+        slippage: parseFloat(slippage),
+        gasPrice: parseFloat(gasPrice),
+        channel,
+        forceChannel: userChannelOverride
+      }
+    });
+
+    const totalMessageTime = perf.measure(messageSendStart);
+
+    // 计算消息传递开销（总耗时 - 后端实际处理时间）
+    const backendTime = response.performance ? response.performance.totalTime : 0;
+    const messageOverhead = totalMessageTime - backendTime;
+
+    timer.step(`发送买入请求并等待响应 (总计: ${totalMessageTime.toFixed(2)}ms, 后端: ${backendTime.toFixed(2)}ms, 消息开销: ${messageOverhead.toFixed(2)}ms)`);
+
+    if (response.success) {
+      pendingTransactions.set(response.txHash, { type: 'buy', token: tokenAddress });
+      safeSendMessageNoThrow({
+        action: 'show_notification',
+        data: {
+          title: '买入已提交',
+          message: `等待链上确认: ${response.txHash.slice(0, 10)}...`
+        }
+      });
+
+      setTimeout(() => {
+        loadWalletStatus();
+        loadTokenInfo(tokenAddress);
+        loadTokenRoute(tokenAddress, { force: true });
+      }, CONTENT_CONFIG.POST_TRADE_REFRESH_DELAY_MS);
+
+      timer.step('处理成功响应和通知');
+
+      const perfResult = timer.finish();
+      const durationText = formatDuration(buttonTimer.stop('买入'));
+      const baseMessage = `⏳ 买入交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
+      showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
+
+      if (response.performance) {
+        perf.printBackgroundReport('buy', response.performance);
+      }
+    } else {
+      performanceMetrics.errors++;
+      timer.step('处理失败响应');
+      const perfResult = timer.finish();
+      const durationText = formatDuration(buttonTimer.stop('买入'));
+      const baseMessage = `❌ 买入失败: ${response.error}`;
+      showStatus(appendDurationSuffix(baseMessage, durationText), 'error');
+
+      // 失败时也打印 background 性能数据
+      if (response.performance) {
+        perf.printBackgroundReport('buy', response.performance);
+      }
+    }
+  } catch (error) {
+    performanceMetrics.errors++;
+    timer.step(`捕获异常: ${error.message}`);
+    const perfResult = timer.finish();
+    const durationText = formatDuration(buttonTimer.stop('买入'));
+    const baseMessage = `❌ 错误: ${error.message}`;
+    showStatus(appendDurationSuffix(baseMessage, durationText), 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ========== 优化的卖出流程 ==========
+async function handleSell(tokenAddress) {
+  // 检查钱包状态
+  const walletAddressEl = document.getElementById('wallet-address');
+  if (!walletAddressEl || !walletAddressEl.classList.contains('wallet-unlocked')) {
+    showStatus('请先解锁钱包', 'error');
+    return;
+  }
+
+  // 创建性能计时器
+  const timer = new PerformanceTimer('sell');
+
+  const percent = getInputValue('sell-percent');
+  const slippage = getInputValue('slippage');
+  const gasPrice = getInputValue('sell-gas-price');
+  const channel = getInputValue('channel-selector');
+
+  timer.step('读取交易参数');
+
+  if (!percent || parseFloat(percent) <= 0 || parseFloat(percent) > 100) {
+    showStatus('请输入有效的卖出百分比 (1-100)', 'error');
+    return;
+  }
+
+  await waitForPendingApprovalIfNeeded('sell');
+
+  const btn = document.getElementById('btn-sell') as HTMLButtonElement | null;
+  if (!btn) {
+    return;
+  }
+  btn.disabled = true;
+  const buttonTimer = startButtonTimer(btn, '卖出中');
+
+  timer.step('参数验证和UI更新');
+
+  if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel) {
+    const sellApprovalKey = `${tokenAddress.toLowerCase()}:${channel}`;
+    if (!sellAutoApproveCache.has(sellApprovalKey)) {
+      await autoApproveToken(tokenAddress, channel);
+      sellAutoApproveCache.add(sellApprovalKey);
+    }
+  }
+
+  try {
+    // 优化1: 简化前端逻辑，数据查询全由 background 处理
+    showStatus(`正在通过 ${getChannelName(channel)} 卖出...`, 'info');
+
+    // 记录消息发送前的时间
+    const messageSendStart = perf.now();
+
+    // 直接发送请求给 background，background 会处理所有数据获取
+    const response = await safeSendMessage({
+      action: 'sell_token',
+      data: {
+        tokenAddress,
+        percent: parseFloat(percent),
+        slippage: parseFloat(slippage),
+        gasPrice: parseFloat(gasPrice),
+        channel,
+        forceChannel: userChannelOverride,
+        tokenInfo: currentTokenInfo
+      }
+    });
+
+    const totalMessageTime = perf.measure(messageSendStart);
+
+    // 计算消息传递开销（总耗时 - 后端实际处理时间）
+    const backendTime = response.performance ? response.performance.totalTime : 0;
+    const messageOverhead = totalMessageTime - backendTime;
+
+    timer.step(`发送卖出请求并等待响应 (总计: ${totalMessageTime.toFixed(2)}ms, 后端: ${backendTime.toFixed(2)}ms, 消息开销: ${messageOverhead.toFixed(2)}ms)`);
+
+    if (response.success) {
+      pendingTransactions.set(response.txHash, { type: 'sell', token: tokenAddress });
+      safeSendMessageNoThrow({
+        action: 'show_notification',
+        data: {
+          title: '卖出已提交',
+          message: `等待链上确认: ${response.txHash.slice(0, 10)}...`
+        }
+      });
+
+      setTimeout(() => {
+        loadWalletStatus();
+        loadTokenInfo(tokenAddress);
+        loadTokenRoute(tokenAddress, { force: true });
+      }, CONTENT_CONFIG.POST_TRADE_REFRESH_DELAY_MS);
+
+      timer.step('处理成功响应和通知');
+
+      const perfResult = timer.finish();
+      const durationText = formatDuration(buttonTimer.stop('卖出'));
+      const baseMessage = `⏳ 卖出交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
+      showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
+
+      if (response.performance) {
+        perf.printBackgroundReport('sell', response.performance);
+      }
+      updateSellEstimateDisplay(null);
+      stopSellEstimateTimer();
+    } else {
+      performanceMetrics.errors++;
+      timer.step('处理失败响应');
+      const perfResult = timer.finish();
+      const durationText = formatDuration(buttonTimer.stop('卖出'));
+      const baseMessage = `❌ 卖出失败: ${response.error}`;
+      showStatus(appendDurationSuffix(baseMessage, durationText), 'error');
+
+      // 失败时也打印 background 性能数据
+      if (response.performance) {
+        perf.printBackgroundReport('sell', response.performance);
+      }
+      updateSellEstimateDisplay(null);
+    }
+  } catch (error) {
+    performanceMetrics.errors++;
+    timer.step(`捕获异常: ${error.message}`);
+    const perfResult = timer.finish();
+    const durationText = formatDuration(buttonTimer.stop('卖出'));
+    const baseMessage = `❌ 错误: ${error.message}`;
+    showStatus(appendDurationSuffix(baseMessage, durationText), 'error');
+    updateSellEstimateDisplay(null);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ========== 优化的钱包状态加载 ==========
+async function loadWalletStatus() {
+  try {
+    const response = await safeSendMessage({
+      action: 'get_wallet_status',
+      data: {
+        tokenAddress: currentTokenAddress  // 只传递代币地址,让后端决定是否查询
+      }
+    });
+
+    if (response.success) {
+      const { address, bnbBalance, tokenBalance } = response.data;
+
+      setWalletAddressDisplay(address);
+      walletStatusClass = 'wallet-unlocked';
+      applyWalletStatusClass();
+      setTradeButtonsEnabled(true);
+      clearWalletStatusNotice();
+
+      setTextContent('bnb-balance', bnbBalance || '0.00');
+      if (tokenBalance !== undefined) {
+        setTextContent('token-balance', tokenBalance);
+      }
+    } else {
+      // 处理各种错误状态(保持原有逻辑)
+      const status = response.status || response.error;
+      const isLockState = status === 'not_setup' || status === 'locked' || status === 'not_loaded';
+
+      if (!isLockState) {
+        showStatus(`钱包状态错误: ${response.error || status}`, 'error');
+        return;
+      }
+
+      setTradeButtonsEnabled(false);
+
+      if (status === 'not_setup') {
+        setWalletDisplayText('未设置');
+        walletStatusClass = 'wallet-not-setup';
+        applyWalletStatusClass();
+        clearWalletStatusNotice();
+        showStatus('请先在插件中设置钱包', 'warning', { persist: true });
+      } else if (status === 'locked' || status === 'not_loaded') {
+        const address = response.address;
+        let messageText: string;
+        if (address) {
+          const lockIcon = status === 'locked' ? '🔒' : '⚠️';
+          messageText = `${address.slice(0, 6)}...${address.slice(-4)} ${lockIcon}`;
+        } else {
+          messageText = status === 'locked' ? '已锁定 🔒' : '未加载 ⚠️';
+        }
+        setWalletDisplayText(messageText);
+        walletStatusClass = 'wallet-locked';
+        applyWalletStatusClass();
+
+        const message = status === 'locked' ? '钱包已锁定,请在插件中解锁' : '钱包未加载,请在插件中重新解锁';
+        if (status === 'not_loaded') {
+          showWalletStatusNotice(message);
+        } else {
+          clearWalletStatusNotice();
+          const statusOptions = status === 'locked' ? { persist: true } : undefined;
+          showStatus(message, 'warning', statusOptions);
+        }
+      }
+
+      setTextContent('bnb-balance', '--');
+      setTextContent('token-balance', '--');
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] Failed to load wallet status:', error);
+  }
+}
+
+// ========== 辅助函数 ==========
+// 从URL获取代币地址（支持多平台）
+function getTokenAddressFromURL() {
+  const href = window.location.href || window.location.pathname || '';
+  let pathname = window.location.pathname || '';
+  let hostname = window.location.hostname?.toLowerCase() || '';
+  try {
+    const parsed = new URL(href);
+    pathname = parsed.pathname || pathname;
+    hostname = parsed.hostname?.toLowerCase() || hostname;
+  } catch {
+    // ignore parse errors
+  }
+
+  const matchFirstGroup = (pattern: RegExp, target: string) => {
+    const match = target.match(pattern);
+    return match ? (match[1] || match[0]) : null;
+  };
+
+  type HostPattern = {
+    hostIncludes: string;
+    pathPattern: RegExp;
+  };
+
+  const hostPatterns: HostPattern[] = [
+    { hostIncludes: 'gmgn.ai', pathPattern: /\/token\/(0x[a-fA-F0-9]{40})/i },
+    { hostIncludes: 'four.meme', pathPattern: /\/token\/(0x[a-fA-F0-9]{40})/i },
+    { hostIncludes: 'web3.binance.com', pathPattern: /\/token\/[a-z0-9-]+\/(0x[a-fA-F0-9]{40})/i },
+    { hostIncludes: 'flap.sh', pathPattern: /\/(?:bnb|bsc|eth|arb|op)\/(0x[a-fA-F0-9]{40})(?:\/|$)/i }
+  ];
+
+  for (const pattern of hostPatterns) {
+    if (hostname.includes(pattern.hostIncludes)) {
+      return matchFirstGroup(pattern.pathPattern, pathname);
+    }
+  }
+
+  return null;
+}
+
+// 获取通道显示名称
+function getChannelName(channelId) {
+  const channelNames = {
+    'pancake': 'PancakeSwap',
+    'four': 'Four.meme',
+    'xmode': 'X Mode',
+    'flap': 'Flap'
+  };
+  return channelNames[channelId] || channelId;
+}
+
+// 显示状态消息
+type StatusOptions = {
+  persist?: boolean;
+};
+
+function showStatus(message: string, type = 'info', options: StatusOptions = {}) {
+  const { persist = false } = options;
+  const statusEl = document.getElementById('status-message');
+  if (!statusEl) return;
+
+  if (statusHideTimer) {
+    clearTimeout(statusHideTimer);
+    statusHideTimer = null;
+  }
+
+  window.requestAnimationFrame(() => {
+    statusEl.textContent = message;
+    statusEl.className = `status-message status-${type}`;
+    statusEl.style.display = 'block';
+  });
+
+  if (type !== 'error' && !persist) {
+    const timeout = UI_CONFIG?.STATUS_MESSAGE_TIMEOUT ?? CONTENT_CONFIG.STATUS_MESSAGE_FALLBACK_MS;
+    statusHideTimer = setTimeout(() => {
+      statusHideTimer = null;
+      if (statusEl.textContent === message) {
+        statusEl.style.display = 'none';
+      }
+    }, timeout);
+  }
+}
+
+function clearStatusMessage() {
+  const statusEl = document.getElementById('status-message');
+  if (!statusEl) return;
+  if (statusHideTimer) {
+    clearTimeout(statusHideTimer);
+    statusHideTimer = null;
+  }
+  statusEl.textContent = '';
+  statusEl.style.display = 'none';
+}
+
+function updateSellEstimateDisplay(value: string | null, symbol = 'BNB') {
+  const estimateEl = document.getElementById('sell-estimate');
+  if (!estimateEl) return;
+  const safeSymbol = symbol || 'BNB';
+  estimateEl.textContent = value ? `≈ ${value} ${safeSymbol}` : `≈ -- ${safeSymbol}`;
+}
+
+function stopSellEstimateTimer() {
+  if (sellEstimateTimer) {
+    clearInterval(sellEstimateTimer);
+    sellEstimateTimer = null;
+  }
+  sellEstimatePending = false;
+  sellEstimateRequestId++;
+}
+
+function formatBnbAmount(weiValue: string | bigint, fractionDigits = 4) {
+  try {
+    const value = typeof weiValue === 'bigint' ? weiValue : BigInt(weiValue);
+    const scale = BigInt(10 ** fractionDigits);
+    const scaled = (value * scale) / WEI_PER_BNB;
+    const integerPart = scaled / scale;
+    let fractionalPart = (scaled % scale).toString().padStart(fractionDigits, '0');
+    fractionalPart = fractionalPart.replace(/0+$/, '');
+    return fractionalPart ? `${integerPart.toString()}.${fractionalPart}` : integerPart.toString();
+  } catch (error) {
+    logger.debug('[Dog Bang] 格式化 BNB 失败:', error);
+    return '--';
+  }
+}
+
+function clampFractionDigits(value: string | null | undefined, digits = 5) {
+  if (!value) {
+    return null;
+  }
+  if (digits <= 0) {
+    return value.split('.')[0];
+  }
+  const [integerPart, fractionalPart = ''] = value.split('.');
+  const trimmedFraction = fractionalPart.slice(0, digits);
+  if (!trimmedFraction) {
+    return integerPart;
+  }
+  return `${integerPart}.${trimmedFraction}`;
+}
+
+function getSellPercentValue() {
+  const raw = getInputValue('sell-percent') || '0';
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.min(Math.max(parsed, 0), 100);
+}
+
+function calculateSellAmount(amountPercent: number) {
+  if (!currentTokenInfo?.balance) {
+    return null;
+  }
+  const balance = BigInt(currentTokenInfo.balance);
+  if (balance <= 0n) {
+    return null;
+  }
+  const scaledPercent = Math.round(amountPercent * 10000);
+  if (scaledPercent <= 0) {
+    return null;
+  }
+  const numerator = BigInt(scaledPercent);
+  return balance * numerator / SELL_PERCENT_SCALE;
+}
+
+function shouldEstimateSellAmount() {
+  if (routeLockReason) {
+    return false;
+  }
+  if (!currentTokenAddress || !currentTokenInfo?.balance) {
+    return false;
+  }
+  const percent = getSellPercentValue();
+  return percent > 0;
+}
+
+async function refreshSellEstimate() {
+  if (!shouldEstimateSellAmount()) {
+    stopSellEstimateTimer();
+    updateSellEstimateDisplay(null);
+    return;
+  }
+
+  if (sellEstimatePending) {
+    return;
+  }
+
+  const percent = getSellPercentValue();
+  const amountToSell = calculateSellAmount(percent);
+  if (!amountToSell || amountToSell <= 0n) {
+    updateSellEstimateDisplay(null);
+    return;
+  }
+
+  const channel = getInputValue('channel-selector') || currentTokenRoute?.preferredChannel || 'pancake';
+  sellEstimatePending = true;
+  const requestId = ++sellEstimateRequestId;
+
+  try {
+    const response = await safeSendMessage({
+      action: 'estimate_sell_amount',
+      data: {
+        tokenAddress: currentTokenAddress,
+        amount: amountToSell.toString(),
+        channel
+      }
+    });
+
+    if (requestId !== sellEstimateRequestId) {
+      return;
+    }
+
+    const displaySymbol = response?.data?.symbol || 'BNB';
+    if (response?.success && response.data?.amount) {
+      const formattedValue =
+        response.data.formatted ??
+        formatBnbAmount(response.data.amount, 4);
+      const trimmedValue = clampFractionDigits(formattedValue, 5);
+      updateSellEstimateDisplay(trimmedValue, displaySymbol);
+    } else {
+      updateSellEstimateDisplay(null, displaySymbol);
+    }
+  } catch (error) {
+    logger.debug('[Dog Bang] 获取卖出预估失败:', error);
+    updateSellEstimateDisplay(null);
+  } finally {
+    sellEstimatePending = false;
+  }
+}
+
+function scheduleSellEstimate() {
+  stopSellEstimateTimer();
+  if (!shouldEstimateSellAmount()) {
+    updateSellEstimateDisplay(null);
+    return;
+  }
+  refreshSellEstimate();
+  sellEstimateTimer = setInterval(() => {
+    refreshSellEstimate();
+  }, CONTENT_CONFIG.SELL_ESTIMATE_INTERVAL_MS);
+}
+
+// 更新代币余额显示
+function updateTokenBalanceDisplay(tokenAddress) {
+  try {
+    if (currentTokenAddress !== tokenAddress) {
+      return;
+    }
+
+    // 使用 currentTokenInfo 代替旧的缓存变量
+    if (currentTokenInfo && currentTokenInfo.address === tokenAddress &&
+        currentTokenInfo.balance && currentTokenInfo.decimals) {
+      const balance = BigInt(currentTokenInfo.balance);
+      const decimals = currentTokenInfo.decimals;
+
+      const decimalsBigInt = BigInt(decimals);
+      const divisor = 10n ** decimalsBigInt;
+      const integerPart = balance / divisor;
+      const fractionalPart = balance % divisor;
+
+      let formattedBalance;
+      if (fractionalPart === 0n) {
+        formattedBalance = integerPart.toString();
+      } else {
+        const fractionalStr = fractionalPart.toString().padStart(decimals, '0');
+        const trimmedFractional = fractionalStr.replace(/0+$/, '');
+        formattedBalance = `${integerPart}.${trimmedFractional}`;
+      }
+
+      const balanceEl = document.getElementById('token-balance');
+      if (balanceEl) {
+        balanceEl.textContent = formattedBalance;
+      }
+      logger.debug('[Dog Bang] 更新余额显示:', formattedBalance);
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] 更新余额显示失败:', error);
+  }
+}
+
+// ========== 页面卸载时清理 ==========
+window.addEventListener('beforeunload', () => {
+  stopPolling();
+  clearRouteRefreshTimer();
+  stopSellEstimateTimer();
+});
+
+// ========== UI创建和事件绑定 ==========
+// 创建交易面板 UI
+export function createTradingPanel(options: TradingPanelOptions = {}) {
+  const {
+    tokenAddressOverride,
+    mountPoint,
+    defaultChannelId,
+    disableAutoChannelSelection = false,
+    sourceUrl
+  } = options;
+  const shouldAutoSelectChannel = !disableAutoChannelSelection;
+  updatePanelSourceUrl(sourceUrl);
+  userChannelOverride = shouldAutoSelectChannel ? false : true;
+  currentTokenRoute = null;
+  clearRouteRefreshTimer();
+
+  if (!mountPoint && window !== window.top) {
+    logger.debug('[Dog Bang] 检测到 iframe 上下文，跳过面板创建');
+    return;
+  }
+
+  panelReady = false;
+  const tokenAddress = tokenAddressOverride || getTokenAddressFromURL();
+
+  if (!tokenAddress) {
+    logger.debug('[Dog Bang] No token address found');
+    return;
+  }
+
+  const existingPanel = document.getElementById('dog-bang-panel');
+  if (existingPanel) {
+    existingPanel.remove();
+    logger.debug('[Dog Bang] 已存在旧面板，已移除以避免重复渲染');
+  }
+
+  currentTokenAddress = tokenAddress;
+  if (!tokenAddressOverride) {
+    syncTokenContextToSidePanel(tokenAddress);
+  }
+
+  const panel = document.createElement('div');
+  panel.id = 'dog-bang-panel';
+  if (mountPoint) {
+    panel.classList.add('embedded-trader-panel');
+  }
+  panel.dataset.tokenAddress = tokenAddress;
+
+  const tradingPresets = userSettings?.trading ?? DEFAULT_USER_SETTINGS.trading;
+  const buyPresets = tradingPresets.buyPresets ?? DEFAULT_USER_SETTINGS.trading.buyPresets;
+  const sellPresets = tradingPresets.sellPresets ?? DEFAULT_USER_SETTINGS.trading.sellPresets;
+  const slippagePresets = tradingPresets.slippagePresets ?? DEFAULT_USER_SETTINGS.trading.slippagePresets;
+  const buyGasPresets = tradingPresets.buyGasPresets ?? DEFAULT_USER_SETTINGS.trading.buyGasPresets;
+  const sellGasPresets = tradingPresets.sellGasPresets ?? DEFAULT_USER_SETTINGS.trading.sellGasPresets;
+
+  const buyButtonsHtml = renderQuickButtons(buyPresets, 'buy');
+  const sellButtonsHtml = renderQuickButtons(sellPresets, 'sell', '%');
+  const slippageButtonsHtml = renderOptionButtons(slippagePresets, 'slippage', '%');
+  const buyGasButtonsHtml = renderOptionButtons(buyGasPresets, 'buy-gas-price', '');
+  const sellGasButtonsHtml = renderOptionButtons(sellGasPresets, 'sell-gas-price', '');
+
+  const defaultBuyValue = escapeHtml(
+    tradingPresets.defaultBuyValue ?? buyPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultBuyValue
+  );
+  const defaultSellValue = escapeHtml(
+    tradingPresets.defaultSellValue ??
+      getMaxPresetValue(sellPresets, DEFAULT_USER_SETTINGS.trading.defaultSellValue)
+  );
+  const defaultSlippageValue = escapeHtml(
+    tradingPresets.defaultSlippageValue ?? slippagePresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSlippageValue
+  );
+  const defaultBuyGasValue = escapeHtml(
+    tradingPresets.defaultBuyGasValue ??
+      buyGasPresets[0] ??
+      DEFAULT_USER_SETTINGS.trading.defaultBuyGasValue
+  );
+  const defaultSellGasValue = escapeHtml(
+    tradingPresets.defaultSellGasValue ??
+      tradingPresets.defaultBuyGasValue ??
+      sellGasPresets[0] ??
+      DEFAULT_USER_SETTINGS.trading.defaultSellGasValue
+  );
+
+  panel.innerHTML = `
+    <div class="trader-core">
+      <div class="trader-body">
+        <div class="wallet-status">
+          <div class="status-row">
+            <span>钱包:</span>
+            <span id="wallet-address">加载中...</span>
+          </div>
+          <div class="status-row">
+            <span>BNB:</span>
+            <span id="bnb-balance">0.00</span>
+          </div>
+        </div>
+        <div class="token-info">
+          <div class="info-row">
+            <span>代币:</span>
+            <span
+              id="token-address"
+              class="token-address-link"
+              title="${tokenAddress}"
+              data-full-address="${tokenAddress}"
+              role="button"
+              tabindex="0"
+            >
+              ${tokenAddress.slice(0, 6)}...${tokenAddress.slice(-4)}
+            </span>
+          </div>
+          <div class="info-row">
+            <span>余额:</span>
+            <span id="token-balance">0.00</span>
+          </div>
+        </div>
+        <div class="trade-section">
+          <label>买入 (BNB)</label>
+          <div class="input-group">
+            <input type="number" id="buy-amount" placeholder="0.1" step="0.01" min="0" value="${defaultBuyValue}"/>
+            <div class="quick-amounts">
+              ${buyButtonsHtml}
+            </div>
+          </div>
+          <button id="btn-buy" class="btn-trade btn-buy" disabled>买入</button>
+        </div>
+        <div class="trade-section">
+          <label>卖出 (%) <span id="sell-estimate" class="sell-estimate">≈ -- BNB</span></label>
+          <div class="input-group">
+            <input type="number" id="sell-percent" placeholder="100" step="1" min="1" max="100" value="${defaultSellValue}" />
+            <div class="quick-amounts">
+              ${sellButtonsHtml}
+            </div>
+          </div>
+          <button id="btn-sell" class="btn-trade btn-sell" disabled>卖出</button>
+        </div>
+        <div class="settings">
+          <div class="setting-row">
+            <label>交易通道:</label>
+            <select id="channel-selector" class="channel-selector">
+              <option value="pancake">PancakeSwap</option>
+              <option value="four">Four.meme</option>
+              <option value="xmode">X Mode</option>
+              <option value="flap">Flap</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>滑点 (%):</label>
+            <div class="option-control">
+              <div class="option-buttons" role="group" aria-label="Slippage Options" data-target-group="slippage">
+                ${slippageButtonsHtml}
+              </div>
+              <input type="number" id="slippage" class="option-input" value="${defaultSlippageValue}" min="1" max="90" step="1" />
+            </div>
+          </div>
+          <div class="setting-row">
+            <label>Buy Gas (Gwei):</label>
+            <div class="option-control">
+              <div class="option-buttons" role="group" aria-label="Buy Gas Options" data-target-group="buy-gas-price">
+                ${buyGasButtonsHtml}
+              </div>
+              <input type="number" id="buy-gas-price" class="option-input" value="${defaultBuyGasValue}" min="0.01" max="100" step="0.01" />
+            </div>
+          </div>
+          <div class="setting-row">
+            <label>Sell Gas (Gwei):</label>
+            <div class="option-control">
+              <div class="option-buttons" role="group" aria-label="Sell Gas Options" data-target-group="sell-gas-price">
+                ${sellGasButtonsHtml}
+              </div>
+              <input type="number" id="sell-gas-price" class="option-input" value="${defaultSellGasValue}" min="0.01" max="100" step="0.01" />
+            </div>
+          </div>
+        </div>
+        <div id="status-message" class="status-message"></div>
+      </div>
+    </div>
+  `;
+
+
+  const container = mountPoint ?? document.body;
+  container.appendChild(panel);
+  applyWalletUiState();
+
+  if (defaultChannelId) {
+    const channelSelector = panel.querySelector('#channel-selector') as HTMLSelectElement | null;
+    if (channelSelector) {
+      channelSelector.value = defaultChannelId;
+      logger.debug('[Dog Bang] 应用默认通道:', defaultChannelId);
+    }
+  }
+
+  panelReady = true;
+  flushPendingUiUpdates();
+  attachEventListeners();
+  loadWalletStatus();
+  loadTokenRoute(tokenAddress, { force: true });
+  loadTokenInfo(tokenAddress);
+  updateSellEstimateDisplay(null);
+  stopSellEstimateTimer();
+
+}
+
+type SwitchTokenOptions = Pick<TradingPanelOptions, 'defaultChannelId' | 'disableAutoChannelSelection' | 'sourceUrl'>;
+
+export function switchTradingPanelToken(tokenAddress: string, options: SwitchTokenOptions = {}) {
+  if (!tokenAddress) {
+    return;
+  }
+  const panel = document.getElementById('dog-bang-panel');
+  const mountPoint = panel?.parentElement ?? undefined;
+  if (panel) {
+    panel.remove();
+    panelReady = false;
+  }
+  currentTokenAddress = null;
+  currentTokenInfo = null;
+  currentTokenRoute = null;
+  stopSellEstimateTimer();
+  updateSellEstimateDisplay(null);
+  clearRouteRefreshTimer();
+  createTradingPanel({
+    tokenAddressOverride: tokenAddress,
+    mountPoint,
+    defaultChannelId: options.defaultChannelId,
+    disableAutoChannelSelection: options.disableAutoChannelSelection,
+    sourceUrl: options.sourceUrl ?? null
+  });
+}
+
+export function updateTradingPanelSourceUrl(sourceUrl?: string | null) {
+  updatePanelSourceUrl(sourceUrl);
+}
+
+// 绑定事件监听
+function attachEventListeners() {
+  document.querySelectorAll('.btn-quick').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const action = target?.dataset?.action;
+      const amount = target?.dataset?.amount ?? '';
+      if (action === 'buy') {
+        setInputValue('buy-amount', amount);
+      } else if (action === 'sell') {
+        setInputValue('sell-percent', amount);
+        scheduleSellEstimate();
+      }
+    });
+  });
+
+  const sellPercentInput = document.getElementById('sell-percent') as HTMLInputElement | null;
+  sellPercentInput?.addEventListener('input', () => {
+    scheduleSellEstimate();
+  });
+
+  const updateOptionButtonState = (targetId: string, value: string) => {
+    const group = document.querySelector(`.option-buttons[data-target-group="${targetId}"]`);
+    if (!group) return;
+    group.querySelectorAll<HTMLButtonElement>('.btn-option').forEach((btn) => {
+      if (btn.dataset.value === value) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  };
+
+  document.querySelectorAll('.option-buttons').forEach(group => {
+    group.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.btn-option');
+      if (!button) return;
+      const targetId = button.dataset.target;
+      if (!targetId) return;
+      const value = button.dataset.value ?? '';
+
+      setInputValue(targetId, value);
+      updateOptionButtonState(targetId, value);
+    });
+  });
+
+  document.querySelectorAll<HTMLInputElement>('.option-input').forEach((input) => {
+    input.addEventListener('input', () => {
+      updateOptionButtonState(input.id, input.value);
+    });
+  });
+
+  document.getElementById('btn-buy')?.addEventListener('click', () => {
+    const activeToken = getActiveTokenAddress();
+    if (!activeToken) {
+      showStatus('未找到当前代币地址', 'error');
+      return;
+    }
+    handleBuy(activeToken);
+  });
+
+  document.getElementById('btn-sell')?.addEventListener('click', () => {
+    const activeToken = getActiveTokenAddress();
+    if (!activeToken) {
+      showStatus('未找到当前代币地址', 'error');
+      return;
+    }
+    handleSell(activeToken);
+  });
+
+  const tokenAddressEl = document.getElementById('token-address');
+  if (tokenAddressEl) {
+    const copyTokenAddress = async () => {
+      const activeToken = tokenAddressEl.getAttribute('data-full-address') || getActiveTokenAddress();
+      if (!activeToken) {
+        showStatus('未找到当前代币地址', 'error');
+        return;
+      }
+      const copied = await copyTextToClipboard(activeToken);
+      if (copied) {
+        showStatus('代币地址已复制', 'success');
+      } else {
+        showStatus('复制失败，请手动复制', 'error');
+      }
+    };
+
+    tokenAddressEl.addEventListener('click', (event) => {
+      event.preventDefault();
+      copyTokenAddress();
+    });
+
+    tokenAddressEl.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        copyTokenAddress();
+      }
+    });
+  }
+
+  // 监听通道切换，检查新通道是否需要授权
+  const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
+  channelSelector?.addEventListener('change', (e) => {
+    const newChannel = (e.target as HTMLSelectElement).value;
+    userChannelOverride = true;
+    logger.debug('[Dog Bang] 通道已切换到:', newChannel);
+
+    // 异步检查新通道是否需要授权
+    const activeToken = getActiveTokenAddress();
+    if (activeToken) {
+      checkChannelApproval(activeToken, newChannel);
+    }
+    scheduleSellEstimate();
+  });
+}
+
+// 检查指定通道的授权状态并在需要时自动授权
+async function checkChannelApproval(tokenAddress, channel) {
+  await requestTokenApproval(tokenAddress, channel);
+}
+
+let pendingApprovalKey: string | null = null;
+let pendingApprovalPromise: Promise<void> | null = null;
+
+async function waitForPendingApprovalIfNeeded(action: 'sell' | 'buy' = 'sell') {
+  if (!pendingApprovalPromise) {
+    return;
+  }
+  const actionLabel = action === 'sell' ? '卖出' : '买入';
+  showStatus(`⚙️ 正在完成代币授权，请稍候再${actionLabel}...`, 'info', { persist: true });
+  try {
+    await pendingApprovalPromise;
+  } catch (error) {
+    logger.debug('[Dog Bang] 等待授权完成失败:', error);
+  }
+}
+
+async function requestTokenApproval(tokenAddress?: string | null, channel?: string | null) {
+  if (!tokenAddress || !channel) {
+    return;
+  }
+  const requestKey = `${tokenAddress}:${channel}`;
+  if (pendingApprovalKey === requestKey && pendingApprovalPromise) {
+    return pendingApprovalPromise;
+  }
+
+  const approvalPromise = (async () => {
+    try {
+      logger.debug('[Dog Bang] 检查通道授权:', { tokenAddress, channel });
+
+      const response = await safeSendMessage({
+        action: 'approve_token',
+        data: {
+          tokenAddress,
+          channel
+        }
+      });
+
+      if (response && response.success && response.needApproval) {
+        logger.debug('[Dog Bang] ✓ 自动授权完成:', response.message);
+      } else if (response?.message) {
+        logger.debug('[Dog Bang] 授权状态:', response.message);
+      }
+    } catch (error) {
+      logger.debug('[Dog Bang] 授权检查异常:', error.message);
+    } finally {
+      if (pendingApprovalKey === requestKey) {
+        pendingApprovalKey = null;
+        pendingApprovalPromise = null;
+      }
+    }
+  })();
+
+  pendingApprovalKey = requestKey;
+  pendingApprovalPromise = approvalPromise;
+  return approvalPromise;
+}
+
+// ========== 自动授权代币（简化版，由 background 处理判断逻辑）==========
+async function autoApproveToken(tokenAddress, channelOverride?: string) {
+  try {
+    // 等待一小段时间，让钱包状态和通道选择先完成
+    await new Promise(resolve => setTimeout(resolve, CONTENT_CONFIG.AUTO_APPROVE_DEBOUNCE_MS));
+
+    logger.debug('[Dog Bang] 开始自动授权检查，token:', tokenAddress);
+
+    // 获取当前选择的通道
+    let channel = channelOverride;
+    if (!channel) {
+      const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
+      if (!channelSelector) {
+        logger.warn('[Dog Bang] 找不到通道选择器，跳过自动授权');
+        return;
+      }
+      channel = channelSelector.value;
+    }
+    logger.debug('[Dog Bang] 当前通道:', channel);
+
+    await requestTokenApproval(tokenAddress, channel);
+
+  } catch (error) {
+    // 自动授权失败不应该影响用户体验，静默处理
+    logger.debug('[Dog Bang] 自动授权异常:', error.message);
+  }
+}
+
+function handleTxConfirmationPush(data) {
+  if (!data || !data.txHash) {
+    return;
+  }
+
+  const { txHash, status, reason } = data;
+  const pendingInfo = pendingTransactions.get(txHash);
+  if (pendingInfo) {
+    pendingTransactions.delete(txHash);
+  }
+
+  let message: string | null = null;
+  let statusType: 'success' | 'error' | 'warning' = 'success';
+
+  const actionText = pendingInfo?.type === 'sell'
+    ? '卖出'
+    : pendingInfo?.type === 'buy'
+      ? '买入'
+      : '交易';
+
+  if (status === 'success') {
+    message = `✅ ${actionText}完成: ${txHash.slice(0, 10)}...`;
+    statusType = 'success';
+    performanceMetrics.transactions++;
+
+    if ((pendingInfo?.token && pendingInfo.token === currentTokenAddress) || (!pendingInfo && currentTokenAddress)) {
+      loadTokenInfo(currentTokenAddress);
+    }
+    loadWalletStatus();
+  } else if (status === 'failed') {
+    const actionText = pendingInfo?.type === 'sell' ? '卖出' : pendingInfo?.type === 'buy' ? '买入' : '交易';
+    message = `❌ ${actionText}失败: ${reason || '链上执行失败'}`;
+    statusType = 'error';
+    performanceMetrics.errors++;
+  } else if (status === 'timeout') {
+    const actionText = pendingInfo?.type === 'sell' ? '卖出' : pendingInfo?.type === 'buy' ? '买入' : '交易';
+    message = `⚠️ ${actionText}未确认: ${reason || '节点长时间未返回结果'}`;
+    statusType = 'warning';
+    performanceMetrics.errors++;
+  }
+
+  if (message) {
+    showStatus(message, statusType);
+  }
+}
+
+function handleExtensionMessage(request) {
+  if (!request || !request.action) {
+    return;
+  }
+
+  if (request.action === 'wallet_status_updated') {
+    logger.debug('[Dog Bang] PUSH: 收到钱包状态更新');
+    handleWalletStatusPush(request.data);
+  } else if (request.action === 'token_balance_updated') {
+    logger.debug('[Dog Bang] PUSH: 收到代币余额更新');
+    handleTokenBalancePush(request.data);
+  } else if (request.action === 'wallet_unlocked') {
+    logger.debug('[Dog Bang] Wallet unlocked (legacy)');
+  } else if (request.action === 'tx_confirmed') {
+    logger.debug('[Dog Bang] Transaction confirmed');
+    handleTxConfirmationPush(request.data);
+  }
+}
+
+function registerRuntimeListeners() {
+  chrome.runtime.onMessage.addListener((request) => {
+    handleExtensionMessage(request);
+    return false;
+  });
+}
+
+function connectBackgroundPort() {
+  try {
+    backgroundPort = chrome.runtime.connect({ name: 'dog-bang-content' });
+    backgroundPortReady = true;
+  } catch (error) {
+    console.warn('[Dog Bang] 无法连接到 background port:', error);
+    return;
+  }
+
+  backgroundPort.onMessage.addListener((message) => {
+    if (message && message.requestId && pendingPortRequests.has(message.requestId)) {
+      const pending = pendingPortRequests.get(message.requestId);
+      pendingPortRequests.delete(message.requestId);
+      clearTimeout(pending.timeoutId);
+      if (message.data && message.data.success === false) {
+        pending.reject(new Error(message.data.error || 'Port request failed'));
+      } else {
+        pending.resolve(message.data);
+      }
+      return;
+    }
+
+    handleExtensionMessage(message);
+  });
+
+  backgroundPort.onDisconnect.addListener(() => {
+    backgroundPortReady = false;
+    backgroundPort = null;
+    rejectPendingPortRequests('Background port disconnected');
+    // 尝试延迟重连
+    setTimeout(() => {
+      connectBackgroundPort();
+    }, 3000);
+  });
+
+  backgroundPort.postMessage({ action: 'subscribe_wallet_updates' });
+}
+
+/**
+ * 处理钱包状态推送
+ */
+function handleWalletStatusPush(data, options: { fromPending?: boolean } = {}) {
+  const { fromPending = false } = options;
+
+  if (!data) {
+    logger.warn('[Dog Bang] PUSH: 收到空数据');
+    return;
+  }
+
+  logger.debug('[Dog Bang] PUSH: 处理钱包状态', data);
+
+  const walletAddressEl = document.getElementById('wallet-address');
+  const buyBtn = document.getElementById('btn-buy');
+  const sellBtn = document.getElementById('btn-sell');
+  const bnbBalanceEl = document.getElementById('bnb-balance');
+  const tokenBalanceEl = document.getElementById('token-balance');
+
+  if (!walletAddressEl) {
+    if (!fromPending) {
+      pendingWalletStatus = data;
+      logger.debug('[Dog Bang] PUSH: 面板未就绪，已缓存钱包状态');
+    } else {
+      logger.warn('[Dog Bang] PUSH: 面板仍未就绪，无法更新钱包状态');
+    }
+    return;
+  }
+
+  if (data.success) {
+    // 钱包已解锁
+    const address = data.address;
+    const bnbBalance = data.bnbBalance;
+    const tokenBalance = data.tokenBalance;
+
+    logger.debug('[Dog Bang] PUSH: 钱包已解锁', { address, bnbBalance, tokenBalance });
+
+    setWalletAddressDisplay(address);
+    walletStatusClass = 'wallet-unlocked';
+    applyWalletStatusClass();
+    setTradeButtonsEnabled(true);
+
+    if (bnbBalanceEl) {
+      bnbBalanceEl.textContent = bnbBalance || '0.00';
+    }
+
+    if (tokenBalance !== undefined && tokenBalanceEl) {
+      tokenBalanceEl.textContent = tokenBalance;
+    }
+
+    logger.debug('[Dog Bang] PUSH: UI 已更新 (unlocked)');
+  } else {
+    // 钱包锁定或未设置
+    const status = data.status || data.error;
+
+    logger.debug('[Dog Bang] PUSH: 钱包状态', status);
+
+    setTradeButtonsEnabled(false);
+
+    if (status === 'not_setup') {
+      setWalletDisplayText('未设置');
+      walletStatusClass = 'wallet-not-setup';
+      applyWalletStatusClass();
+    } else if (status === 'locked' || status === 'not_loaded') {
+      const address = data.address;
+      if (address) {
+        setWalletDisplayText(`${address.slice(0, 6)}...${address.slice(-4)} 🔒`);
+      } else {
+        setWalletDisplayText('已锁定 🔒');
+      }
+      walletStatusClass = 'wallet-locked';
+      applyWalletStatusClass();
+    }
+
+    logger.debug('[Dog Bang] PUSH: UI 已更新 (locked/not_setup)');
+  }
+}
+
+/**
+ * 处理代币余额推送
+ */
+function handleTokenBalancePush(data, options: { fromPending?: boolean } = {}) {
+  const { fromPending = false } = options;
+
+  if (!data || !data.tokenAddress) return;
+
+  // 只更新当前代币的余额
+  if (data.tokenAddress === currentTokenAddress) {
+    const tokenBalanceEl = document.getElementById('token-balance');
+
+    if (!tokenBalanceEl) {
+      if (!fromPending) {
+        pendingTokenBalance = data;
+        logger.debug('[Dog Bang] PUSH: 面板未就绪，已缓存代币余额');
+      } else {
+        logger.warn('[Dog Bang] PUSH: 面板仍未就绪，无法更新代币余额');
+      }
+      return;
+    }
+
+    if (data.balance && currentTokenInfo) {
+      currentTokenInfo.balance = data.balance;
+    }
+    if (tokenBalanceEl && data.balance !== undefined) {
+      tokenBalanceEl.textContent = data.balance;
+    }
+    updateTokenBalanceDisplay(currentTokenAddress);
+    logger.debug('[Dog Bang] PUSH: 代币余额已更新');
+    scheduleSellEstimate();
+  }
+}
+
+function flushPendingUiUpdates() {
+  if (!panelReady) return;
+
+  if (pendingWalletStatus) {
+    const data = pendingWalletStatus;
+    pendingWalletStatus = null;
+    handleWalletStatusPush(data, { fromPending: true });
+  }
+
+  if (pendingTokenBalance) {
+    const data = pendingTokenBalance;
+    pendingTokenBalance = null;
+    handleTokenBalancePush(data, { fromPending: true });
+  }
+}
+
+const isSidePanelContext = Boolean(window.__DOG_BANG_SIDE_PANEL_MODE__);
+const shouldMountEmbeddedPanel = !isSidePanelContext && EMBEDDED_PANEL_ENABLED;
+
+if (!isSidePanelContext) {
+  initializeTokenContextSync();
+}
+
+// ========== URL 变化监听（仅在嵌入模式启用时需要）==========
+if (shouldMountEmbeddedPanel) {
+  let lastUrl = location.href;
+  new MutationObserver(() => {
+    const url = location.href;
+    if (url !== lastUrl) {
+      lastUrl = url;
+      logger.debug('[Dog Bang] URL changed');
+
+      // 移除旧面板
+      const oldPanel = document.getElementById('dog-bang-panel');
+      if (oldPanel) {
+        panelReady = false;
+        oldPanel.remove();
+      }
+
+      // 重新创建面板
+      setTimeout(() => {
+        createTradingPanel();
+      }, 1000);
+    }
+  }).observe(document, { subtree: true, childList: true });
+}
+
+registerRuntimeListeners();
+connectBackgroundPort();
+
+function bootstrapTradingPanel() {
+  createTradingPanel();
+  startSmartPolling();
+  logger.debug('[Dog Bang] 初始化交易页面');
+}
+
+if (shouldMountEmbeddedPanel) {
+  const startWithSettings = () => tradingSettingsReady.then(() => {
+    bootstrapTradingPanel();
+  });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startWithSettings, { once: true });
+  } else {
+    startWithSettings();
+  }
+} else if (!isSidePanelContext) {
+  logger.debug('[Dog Bang] 嵌入式交易面板已禁用，仅同步 Side Panel 上下文');
+}

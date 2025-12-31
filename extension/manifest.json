@@ -1,0 +1,81 @@
+{
+  "manifest_version": 3,
+  "name": "BSC 打狗棒",
+  "version": "1.0.0",
+  "description": "Binance Smart Chain 代币交易插件，直接与Four/Flap/Luna/PancakeSwap等合约交互。",
+
+  "permissions": [
+    "storage",
+    "notifications",
+    "offscreen",
+    "sidePanel",
+    "tabs"
+  ],
+
+  "host_permissions": [
+    "https://gmgn.ai/*",
+    "https://web3.binance.com/*",
+    "https://four.meme/*",
+    "https://flap.sh/*",
+    "https://bsc-dataseed.binance.org/*",
+    "https://bsc-dataseed1.binance.org/*"
+  ],
+
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://gmgn.ai/*/token/*",
+        "https://web3.binance.com/*/token/*",
+        "https://four.meme/token/*",
+        "https://flap.sh/*"
+      ],
+      "js": ["content-wrapper.js"],
+      "css": ["styles.css"],
+      "run_at": "document_end"
+    }
+  ],
+
+  "action": {
+    "default_popup": "dist/popup.html",
+    "default_icon": {
+      "16": "icons/16x16.png",
+      "48": "icons/48x48.png",
+      "128": "icons/128x128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/16x16.png",
+    "48": "icons/48x48.png",
+    "128": "icons/128x128.png"
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dist/content.js",
+        "dist/background.js",
+        "dist/assets/*",
+        "icons/*"
+      ],
+      "matches": [
+        "https://gmgn.ai/*",
+        "https://web3.binance.com/*",
+        "https://four.meme/*",
+        "https://flap.sh/*"
+      ]
+    }
+  ],
+
+  "side_panel": {
+    "default_path": "dist/sidepanel.html"
+  },
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

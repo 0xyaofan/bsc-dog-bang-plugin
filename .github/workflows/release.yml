@@ -1,0 +1,118 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18.x'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build extension
+      run: npm run build
+
+    - name: Get version from tag
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Verify version matches
+      run: |
+        PACKAGE_VERSION=$(node -p "require('./package.json').version")
+        MANIFEST_VERSION=$(node -p "require('./extension/manifest.json').version")
+        TAG_VERSION="${{ steps.get_version.outputs.VERSION }}"
+
+        echo "Tag version: $TAG_VERSION"
+        echo "Package version: $PACKAGE_VERSION"
+        echo "Manifest version: $MANIFEST_VERSION"
+
+        if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
+          echo "Error: package.json version ($PACKAGE_VERSION) doesn't match tag ($TAG_VERSION)"
+          exit 1
+        fi
+
+        if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+          echo "Error: manifest.json version ($MANIFEST_VERSION) doesn't match tag ($TAG_VERSION)"
+          exit 1
+        fi
+
+    - name: Create release directory
+      run: mkdir -p release
+
+    - name: Create release package
+      run: |
+        cd extension
+        zip -r ../release/bsc-dog-bang-plugin-v${{ steps.get_version.outputs.VERSION }}.zip . \
+          -x "*.DS_Store" \
+          -x "__MACOSX*" \
+          -x "dist/.vite/*" \
+          -x "*.map"
+        cd ..
+
+    - name: Generate checksums
+      run: |
+        sha256sum release/bsc-dog-bang-plugin-v${{ steps.get_version.outputs.VERSION }}.zip > release/checksums.txt
+
+    - name: Extract changelog for this version
+      id: changelog
+      run: |
+        VERSION="${{ steps.get_version.outputs.VERSION }}"
+        CHANGELOG=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '$d')
+        echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          release/bsc-dog-bang-plugin-v${{ steps.get_version.outputs.VERSION }}.zip
+          release/checksums.txt
+        body: |
+          ${{ steps.changelog.outputs.CHANGELOG }}
+
+          ## Installation
+
+          1. Download `bsc-dog-bang-plugin-v${{ steps.get_version.outputs.VERSION }}.zip`
+          2. Extract to a local directory
+          3. Open Chrome and navigate to `chrome://extensions/`
+          4. Enable "Developer mode"
+          5. Click "Load unpacked extension"
+          6. Select the extracted `extension` directory
+
+          ## Checksums
+
+          ```
+          $(cat release/checksums.txt)
+          ```
+
+          ## Full Changelog
+
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/v${{ steps.get_version.outputs.VERSION }}/CHANGELOG.md) for the full changelog.
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-package
+        path: release/

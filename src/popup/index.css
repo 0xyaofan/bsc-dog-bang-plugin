@@ -1,0 +1,239 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #030712;
+  color: #e4e4e7;
+}
+
+.popup-root {
+  min-width: 360px;
+  min-height: 220px;
+  padding: 24px;
+  background: #030712;
+  color: #e4e4e7;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.popup-header img {
+  width: 28px;
+  height: 28px;
+}
+
+.popup-header h1 {
+  margin: 0;
+  font-size: 20px;
+  color: #f4d48a;
+}
+
+.panel {
+  background: rgba(2, 6, 23, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 10px 25px rgba(2, 6, 23, 0.6);
+}
+
+.input-group {
+  margin-bottom: 16px;
+}
+
+.input-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.input-group input,
+.input-group select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #e4e4e7;
+  font-size: 14px;
+  outline: none;
+}
+
+.input-group input:focus,
+.input-group select:focus {
+  border-color: #f4d48a;
+  box-shadow: 0 0 0 1px rgba(244, 212, 138, 0.35);
+}
+
+button {
+  width: 100%;
+  padding: 12px;
+  background: #4aa877;
+  border: none;
+  border-radius: 8px;
+  color: #f8fafc;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 12px rgba(74, 168, 119, 0.35);
+}
+
+button:hover {
+  transform: translateY(-1px);
+  background: #3c8a62;
+  box-shadow: 0 6px 14px rgba(74, 168, 119, 0.4);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-unlock {
+  background: #f4d48a;
+  color: #1f2933;
+  box-shadow: 0 4px 12px rgba(244, 212, 138, 0.35);
+}
+
+.btn-unlock:hover {
+  background: #e7c874;
+  box-shadow: 0 6px 14px rgba(244, 212, 138, 0.45);
+}
+
+.btn-secondary {
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5f5;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  box-shadow: none;
+}
+
+.btn-secondary:hover {
+  background: rgba(30, 41, 59, 0.9);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.5);
+}
+
+.btn-lock {
+  background: #4aa877;
+  box-shadow: 0 4px 12px rgba(74, 168, 119, 0.35);
+}
+
+.btn-lock:hover {
+  background: #3c8a62;
+  box-shadow: 0 6px 14px rgba(74, 168, 119, 0.4);
+}
+
+.btn-danger {
+  background: #a13c45;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(161, 60, 69, 0.35);
+}
+
+.btn-danger:hover {
+  background: #812f36;
+  box-shadow: 0 6px 14px rgba(161, 60, 69, 0.4);
+}
+
+.wallet-status {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.status-row:last-child {
+  margin-bottom: 0;
+}
+
+.status-row span:first-child {
+  color: #9ca3af;
+}
+
+.status-row span:last-child {
+  color: #86d9f9;
+  font-weight: 500;
+  font-family: 'Courier New', monospace;
+}
+
+.hint {
+  text-align: center;
+  margin-bottom: 20px;
+  color: #9ca3af;
+}
+
+.button-row {
+  display: flex;
+  gap: 12px;
+}
+
+.message {
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: center;
+  margin-top: 12px;
+  border: 1px solid transparent;
+}
+
+.message.success {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #10b981;
+}
+
+.message.error {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+}
+
+.message.warning {
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.3);
+  color: #fbbf24;
+  margin-bottom: 12px;
+}
+
+.panel-footer {
+  min-height: 32px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.panel-footer .message {
+  width: 100%;
+  margin-top: 0;
+}
