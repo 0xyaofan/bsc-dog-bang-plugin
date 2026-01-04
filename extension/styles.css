@@ -82,6 +82,35 @@
   font-family: 'Courier New', monospace;
 }
 
+/* 浮动窗口按钮 */
+.btn-floating-toggle {
+  width: 100%;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  border: 1px solid #6d28d9;
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.btn-floating-toggle:hover {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-floating-toggle:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(139, 92, 246, 0.3);
+}
+
 #token-address {
   cursor: pointer;
 }

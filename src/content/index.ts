@@ -1646,6 +1646,11 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
             <span>BNB:</span>
             <span id="bnb-balance">0.00</span>
           </div>
+          <div class="status-row">
+            <button id="btn-open-floating-window" class="btn-floating-toggle" title="打开浮动交易窗口">
+              🚀 浮动窗口
+            </button>
+          </div>
         </div>
         <div class="token-info">
           <div class="info-row">
@@ -2169,6 +2174,16 @@ function attachEventListeners() {
       return;
     }
     handleSell(activeToken);
+  });
+
+  // 浮动窗口按钮
+  document.getElementById('btn-open-floating-window')?.addEventListener('click', () => {
+    const activeToken = getActiveTokenAddress();
+    if (!activeToken) {
+      showStatus('未找到当前代币地址', 'error');
+      return;
+    }
+    createFloatingTradingWindow(activeToken);
   });
 
   const tokenAddressEl = document.getElementById('token-address');
