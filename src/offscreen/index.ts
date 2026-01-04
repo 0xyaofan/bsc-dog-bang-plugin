@@ -11,6 +11,14 @@ let autoStopTimer: ReturnType<typeof setTimeout> | null = null;
 const publicClient = createHttpClient(NETWORK_CONFIG.BSC_RPC);
 const typedPublicClient = publicClient as any;
 
+// ========== 代币元数据永久缓存 ==========
+// symbol 和 decimals 是 ERC20 标准中的 view 函数，合约部署后永不改变
+type TokenMetadata = {
+  symbol: string;
+  decimals: number;
+};
+const tokenMetadataCache = new Map<string, TokenMetadata>();
+
 function sendPortMessage(payload: any) {
   if (!port) {
     console.warn('[Offscreen] Port unavailable, drop message:', payload?.action);
@@ -141,9 +149,28 @@ async function rpcGetTokenInfo(payload: { tokenAddress: string; walletAddress: s
   const fourRouter = CONTRACTS.FOUR_TOKEN_MANAGER_V2 as Address;
   const flapRouter = CONTRACTS.FLAP_PORTAL as Address;
 
+  // 优先从永久缓存读取 symbol 和 decimals
+  const cacheKey = tokenAddress.toLowerCase();
+  let symbol: string;
+  let decimals: number;
+
+  const cached = tokenMetadataCache.get(cacheKey);
+  if (cached) {
+    symbol = cached.symbol;
+    decimals = cached.decimals;
+  } else {
+    // 首次查询：从链上读取并永久缓存
+    const [symbolResult, decimalsResult] = await Promise.all([
+      typedPublicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: 'symbol' }),
+      typedPublicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: 'decimals' })
+    ]);
+    symbol = symbolResult;
+    decimals = Number(decimalsResult);
+    tokenMetadataCache.set(cacheKey, { symbol, decimals });
+  }
+
+  // 查询动态数据（totalSupply、balance、allowance）
   const queries = [
-    typedPublicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: 'symbol' }),
-    typedPublicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: 'decimals' }),
     typedPublicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: 'totalSupply' }),
     typedPublicClient.readContract({ address: tokenAddress, abi: ERC20_ABI, functionName: 'balanceOf', args: [walletAddress] })
   ];
@@ -159,18 +186,18 @@ async function rpcGetTokenInfo(payload: { tokenAddress: string; walletAddress: s
   const results = await executeWithRetry(() => Promise.all(queries));
 
   const data: any = {
-    symbol: results[0],
-    decimals: Number(results[1]),
-    totalSupply: results[2].toString(),
-    balance: results[3].toString()
+    symbol,
+    decimals,
+    totalSupply: results[0].toString(),
+    balance: results[1].toString()
   };
 
   if (payload.needApproval) {
     data.allowances = {
-      pancake: results[4].toString(),
-      four: results[5].toString(),
-      flap: results[6].toString(),
-      xmode: results[5].toString()
+      pancake: results[2].toString(),
+      four: results[3].toString(),
+      flap: results[4].toString(),
+      xmode: results[3].toString()
     };
   }
 

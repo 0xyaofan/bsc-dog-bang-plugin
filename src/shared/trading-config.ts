@@ -183,8 +183,8 @@ export const BACKGROUND_TASK_CONFIG = {
   FOUR_QUOTE_BALANCE_RETRY_MAX: 6,
   FOUR_QUOTE_BALANCE_RETRY_DELAY_MS: 500,
 
-  // quote 授权缓存的超时时间
-  QUOTE_ALLOWANCE_CACHE_TTL_MS: 5 * 60 * 1000,
+  // quote 授权缓存的超时时间（优化：从5分钟增加到1天，减少链上查询）
+  QUOTE_ALLOWANCE_CACHE_TTL_MS: 24 * 60 * 60 * 1000,
 
   // 与 offscreen document 通信时的 RPC 超时
   OFFSCREEN_RPC_TIMEOUT_MS: 15000,

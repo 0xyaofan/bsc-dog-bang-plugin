@@ -17,6 +17,7 @@ import { dedupePromise } from './promise-dedupe.js';
 import tokenManagerHelperAbi from '../../abis/token-manager-helper-v3.json';
 
 // ========== 路径缓存（优化4：减少 getAmountsOut 调用）==========
+// 注意：此缓存存储的是兑换金额（价格敏感数据），必须保持短期缓存以反映市场价格变化
 const pathCache = new Map<string, { time: number; amountOut: bigint }>();
 const PATH_CACHE_TTL = 1200; // 1.2秒缓存（balance between freshness and performance）
 const GWEI_DECIMALS = 9;
@@ -40,12 +41,19 @@ function callRpcWithTransportCache(client, cacheKey, cacheTime, fn) {
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const pairExistenceCache = new Map<string, boolean>();
-const dynamicBridgeCache = new Map<string, { timestamp: number; paths: { buy: string[][]; sell: string[][] } }>();
-const DYNAMIC_BRIDGE_CACHE_TTL = 5 * 60 * 1000;
+// 动态桥接路径缓存：存储流动池的存在性（永久缓存，流动池创建后不会消失）
+const dynamicBridgeCache = new Map<string, { buy: string[][]; sell: string[][] }>();
 const dynamicGasCache = new Map<string, { gas: bigint; updatedAt: number }>();
 const DYNAMIC_GAS_CACHE_TTL = 5 * 60 * 1000;
 const V3_FEE_TIERS = [100, 250, 500, 2500, 10000];
 const v3PoolCache = new Map<string, { fee: number; pool: string } | null>();
+
+// 代币元数据永久缓存：symbol 和 decimals 是 ERC20 标准中的 view 函数，永不改变
+type TokenMetadata = {
+  symbol?: string;
+  decimals?: number;
+};
+const tokenMetadataCache = new Map<string, TokenMetadata>();
 
 type TokenTradeHint = {
   channelId: string;
@@ -605,19 +613,26 @@ async function fetchTokenState(publicClient, tokenAddress, ownerAddress, spender
     ];
 
     if (includeDecimals) {
-      fallbackPromises.push(
-        callRpcWithTransportCache(
-          publicClient,
-          `readContract:${tokenAddress}:decimals`,
-          RPC_CACHE_TTL,
-          () =>
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'decimals'
-            })
-        )
-      );
+      // 优先使用永久缓存
+      const cacheKey = tokenAddress.toLowerCase();
+      const cached = tokenMetadataCache.get(cacheKey);
+      if (cached?.decimals !== undefined) {
+        fallbackPromises.push(Promise.resolve(cached.decimals));
+      } else {
+        // 首次查询：从链上读取并永久缓存
+        fallbackPromises.push(
+          publicClient.readContract({
+            address: tokenAddress,
+            abi: ERC20_ABI,
+            functionName: 'decimals'
+          }).then((result: any) => {
+            const decimals = Number(result);
+            const existing = tokenMetadataCache.get(cacheKey) || {};
+            tokenMetadataCache.set(cacheKey, { ...existing, decimals });
+            return decimals;
+          })
+        );
+      }
     }
 
     const results = await Promise.all(fallbackPromises);
@@ -725,8 +740,9 @@ async function getDynamicBridgePaths(publicClient, tokenAddress: string, options
 
   const cacheKey = `${factoryAddress.toLowerCase()}:${tokenAddress.toLowerCase()}`;
   const cached = dynamicBridgeCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < DYNAMIC_BRIDGE_CACHE_TTL) {
-    return cached.paths;
+  // 永久缓存：流动池一旦创建就存在，不会消失
+  if (cached) {
+    return cached;
   }
 
   const buyPaths: string[][] = [];
@@ -753,7 +769,7 @@ async function getDynamicBridgePaths(publicClient, tokenAddress: string, options
   }));
 
   const paths = { buy: buyPaths, sell: sellPaths };
-  dynamicBridgeCache.set(cacheKey, { timestamp: Date.now(), paths });
+  dynamicBridgeCache.set(cacheKey, paths);
   return paths;
 }
 
