@@ -36,6 +36,7 @@ export default function App() {
   const [isImporting, setImporting] = useState(false);
   const [isUnlocking, setUnlocking] = useState(false);
   const [sidePanelSupported, setSidePanelSupported] = useState<boolean>(false);
+  const [floatingWindowSupported, setFloatingWindowSupported] = useState<boolean>(false);
 
   const { message: importMessage, showMessage: showImportMessage } = useTimedMessage();
   const { message: unlockMessage, showMessage: showUnlockMessage } = useTimedMessage();
@@ -127,6 +128,33 @@ export default function App() {
 
   useEffect(() => {
     setSidePanelSupported(Boolean(chrome?.sidePanel?.open));
+  }, []);
+
+  useEffect(() => {
+    const checkFloatingWindowSupport = async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.url) {
+          setFloatingWindowSupported(false);
+          return;
+        }
+
+        // 检查当前页面是否在支持的网站列表中
+        const supportedPatterns = [
+          /^https:\/\/gmgn\.ai\/.*\/token\/.*/,
+          /^https:\/\/web3\.binance\.com\/.*\/token\/.*/,
+          /^https:\/\/four\.meme\/token\/.*/,
+          /^https:\/\/flap\.sh\/.*/
+        ];
+
+        const isSupported = supportedPatterns.some(pattern => pattern.test(tab.url!));
+        setFloatingWindowSupported(isSupported);
+      } catch (error) {
+        setFloatingWindowSupported(false);
+      }
+    };
+
+    checkFloatingWindowSupport();
   }, []);
 
   const handleImport = async () => {
@@ -251,6 +279,11 @@ export default function App() {
   };
 
   const handleOpenFloatingWindow = async () => {
+    if (!floatingWindowSupported) {
+      showWarningMessage('当前页面不支持浮动窗口，请在代币页面使用', 'warning');
+      return;
+    }
+
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) {
@@ -375,7 +408,12 @@ export default function App() {
             >
               {sidePanelSupported ? '打开交易面板' : '交易面板不可用'}
             </button>
-            <button className="btn-floating" onClick={handleOpenFloatingWindow}>
+            <button
+              className="btn-floating"
+              onClick={handleOpenFloatingWindow}
+              disabled={!floatingWindowSupported}
+              title={floatingWindowSupported ? '在当前页面打开浮动交易窗口' : '请在代币页面使用'}
+            >
               🚀 浮动窗口
             </button>
           </div>
