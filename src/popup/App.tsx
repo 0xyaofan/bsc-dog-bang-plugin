@@ -250,6 +250,21 @@ export default function App() {
     }
   };
 
+  const handleOpenFloatingWindow = async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) {
+        showWarningMessage('无法获取当前标签页', 'error');
+        return;
+      }
+
+      await chrome.tabs.sendMessage(tab.id, { action: 'open_floating_window' });
+      showWarningMessage('浮动窗口已打开', 'success');
+    } catch (error) {
+      showWarningMessage(`打开浮动窗口失败: ${(error as Error).message}`, 'error');
+    }
+  };
+
   const renderPanelMessage = (panelMessage: StatusMessage | null) => {
     const activeMessage = warningMessage ?? panelMessage;
     return (
@@ -352,13 +367,18 @@ export default function App() {
               移除钱包
             </button>
           </div>
-          <button
-            className="btn-secondary"
-            onClick={handleOpenSidePanel}
-            disabled={!sidePanelSupported}
-          >
-            {sidePanelSupported ? '打开交易面板' : '交易面板不可用'}
-          </button>
+          <div className="button-row">
+            <button
+              className="btn-secondary"
+              onClick={handleOpenSidePanel}
+              disabled={!sidePanelSupported}
+            >
+              {sidePanelSupported ? '打开交易面板' : '交易面板不可用'}
+            </button>
+            <button className="btn-floating" onClick={handleOpenFloatingWindow}>
+              🚀 浮动窗口
+            </button>
+          </div>
 
           {renderPanelMessage(null)}
         </section>

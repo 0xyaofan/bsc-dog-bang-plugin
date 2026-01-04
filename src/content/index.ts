@@ -1646,11 +1646,6 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
             <span>BNB:</span>
             <span id="bnb-balance">0.00</span>
           </div>
-          <div class="status-row">
-            <button id="btn-open-floating-window" class="btn-floating-toggle" title="打开浮动交易窗口">
-              🚀 浮动窗口
-            </button>
-          </div>
         </div>
         <div class="token-info">
           <div class="info-row">
@@ -2176,16 +2171,6 @@ function attachEventListeners() {
     handleSell(activeToken);
   });
 
-  // 浮动窗口按钮
-  document.getElementById('btn-open-floating-window')?.addEventListener('click', () => {
-    const activeToken = getActiveTokenAddress();
-    if (!activeToken) {
-      showStatus('未找到当前代币地址', 'error');
-      return;
-    }
-    createFloatingTradingWindow(activeToken);
-  });
-
   const tokenAddressEl = document.getElementById('token-address');
   if (tokenAddressEl) {
     const copyTokenAddress = async () => {
@@ -2383,6 +2368,14 @@ function handleExtensionMessage(request) {
   } else if (request.action === 'tx_confirmed') {
     logger.debug('[Dog Bang] Transaction confirmed');
     handleTxConfirmationPush(request.data);
+  } else if (request.action === 'open_floating_window') {
+    logger.debug('[Dog Bang] 打开浮动交易窗口');
+    const tokenAddress = request.tokenAddress || getTokenAddressFromURL();
+    if (tokenAddress) {
+      createFloatingTradingWindow(tokenAddress);
+    } else {
+      logger.warn('[Dog Bang] 无法打开浮动窗口：未找到代币地址');
+    }
   }
 }
 
