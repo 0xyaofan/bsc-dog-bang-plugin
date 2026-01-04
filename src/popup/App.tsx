@@ -457,7 +457,7 @@ export default function App() {
               onClick={handleOpenSidePanel}
               disabled={!sidePanelSupported}
             >
-              {sidePanelSupported ? '打开交易面板' : '交易面板不可用'}
+              {sidePanelSupported ? '交易侧边栏' : '交易面板不可用'}
             </button>
             <button
               className="btn-floating"
@@ -465,7 +465,7 @@ export default function App() {
               disabled={!floatingWindowSupported}
               title={floatingWindowSupported ? '在当前页面打开浮动交易窗口' : '请在代币页面使用'}
             >
-              🚀 浮动窗口
+              交易浮窗
             </button>
           </div>
 
