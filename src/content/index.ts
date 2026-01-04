@@ -2038,24 +2038,42 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           const gasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
           const gasPrice = parseFloat(gasInput?.value || '1');
 
-          await sendPortRequest({
-            action: 'trade-buy',
-            tokenAddress: currentTokenAddress,
-            amount,
-            slippage,
-            gasPrice
+          const response = await safeSendMessage({
+            action: 'buy_token',
+            data: {
+              tokenAddress: currentTokenAddress,
+              amount,
+              slippage,
+              gasPrice,
+              channel: 'pancake'
+            }
           });
+
+          if (response?.success) {
+            logger.debug('[Floating Window] 买入成功');
+          } else {
+            throw new Error(response?.error || '买入失败');
+          }
         } else if (action === 'sell') {
           const gasInput = floatingWindow.querySelector('[data-setting="sell-gas"]') as HTMLInputElement;
           const gasPrice = parseFloat(gasInput?.value || '1');
 
-          await sendPortRequest({
-            action: 'trade-sell',
-            tokenAddress: currentTokenAddress,
-            percent: amount,
-            slippage,
-            gasPrice
+          const response = await safeSendMessage({
+            action: 'sell_token',
+            data: {
+              tokenAddress: currentTokenAddress,
+              percent: amount,
+              slippage,
+              gasPrice,
+              channel: 'pancake'
+            }
           });
+
+          if (response?.success) {
+            logger.debug('[Floating Window] 卖出成功');
+          } else {
+            throw new Error(response?.error || '卖出失败');
+          }
         }
       } catch (error) {
         logger.error('[Floating Window] 交易失败:', error);
