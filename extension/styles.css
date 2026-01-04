@@ -422,6 +422,12 @@
   backdrop-filter: blur(10px);
   user-select: none;
   transition: box-shadow 0.2s ease;
+  will-change: transform;
+}
+
+.dog-bang-floating-window.dragging {
+  transition: none;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
 }
 
 .dog-bang-floating-window:hover {
@@ -430,9 +436,10 @@
 
 /* 顶栏 */
 .floating-header {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   padding: 6px 10px;
   background: rgba(5, 8, 21, 0.9);
   border-bottom: 1px solid rgba(45, 53, 97, 0.5);
@@ -445,14 +452,24 @@
   color: #6b7280;
   cursor: grab;
   user-select: none;
-  padding: 0 4px;
+  padding: 4px 8px;
+  transition: color 0.2s ease;
+}
+
+.floating-drag-handle:hover {
+  color: #9ca3af;
 }
 
 .floating-drag-handle:active {
   cursor: grabbing;
+  color: #cbd5e1;
 }
 
 .floating-close-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   background: transparent;
   border: none;
   color: #9ca3af;

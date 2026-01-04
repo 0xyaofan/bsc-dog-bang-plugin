@@ -1859,8 +1859,10 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   const floatingWindow = document.createElement('div');
   floatingWindow.id = 'dog-bang-floating';
   floatingWindow.className = 'dog-bang-floating-window';
-  floatingWindow.style.left = `${state.position.x}px`;
-  floatingWindow.style.top = `${state.position.y}px`;
+  // 使用 transform 代替 left/top 以获得更好的性能
+  floatingWindow.style.transform = `translate(${state.position.x}px, ${state.position.y}px)`;
+  floatingWindow.style.left = '0';
+  floatingWindow.style.top = '0';
 
   // 生成买入按钮 HTML
   const buyButtonsHtml = buyPresets.map(value =>
@@ -1889,7 +1891,7 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
 
   floatingWindow.innerHTML = `
     <div class="floating-header">
-      <div class="floating-drag-handle">⋮⋮</div>
+      <div class="floating-drag-handle">⋯</div>
       <button class="floating-close-btn" title="关闭">✕</button>
     </div>
     <div class="floating-content">
@@ -1954,42 +1956,72 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     floatingWindow.remove();
   });
 
-  // 拖拽功能
+  // 拖拽功能 - 使用 transform 和 requestAnimationFrame 优化性能
   const dragHandle = floatingWindow.querySelector('.floating-drag-handle');
-  dragHandle?.addEventListener('mousedown', (e) => {
+  let rafId: number | null = null;
+  let currentX = state.position.x;
+  let currentY = state.position.y;
+
+  dragHandle?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     floatingWindowDragging = true;
-    const rect = floatingWindow.getBoundingClientRect();
-    floatingWindowDragOffset.x = (e as MouseEvent).clientX - rect.left;
-    floatingWindowDragOffset.y = (e as MouseEvent).clientY - rect.top;
-    floatingWindow.style.cursor = 'grabbing';
+
+    // 计算初始偏移
+    floatingWindowDragOffset.x = (e as PointerEvent).clientX - currentX;
+    floatingWindowDragOffset.y = (e as PointerEvent).clientY - currentY;
+
+    // 添加拖拽样式
+    floatingWindow.classList.add('dragging');
+    dragHandle.setPointerCapture((e as PointerEvent).pointerId);
   });
 
-  document.addEventListener('mousemove', (e) => {
+  const updatePosition = (clientX: number, clientY: number) => {
     if (!floatingWindowDragging) return;
 
-    let newX = e.clientX - floatingWindowDragOffset.x;
-    let newY = e.clientY - floatingWindowDragOffset.y;
+    // 取消之前的动画帧
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+    }
 
-    // 边界限制
-    const maxX = window.innerWidth - FLOATING_WINDOW_MIN_WIDTH;
-    const maxY = window.innerHeight - FLOATING_WINDOW_MIN_HEIGHT;
-    newX = Math.max(0, Math.min(newX, maxX));
-    newY = Math.max(0, Math.min(newY, maxY));
+    rafId = requestAnimationFrame(() => {
+      let newX = clientX - floatingWindowDragOffset.x;
+      let newY = clientY - floatingWindowDragOffset.y;
 
-    floatingWindow.style.left = `${newX}px`;
-    floatingWindow.style.top = `${newY}px`;
+      // 边界限制
+      const rect = floatingWindow.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width;
+      const maxY = window.innerHeight - rect.height;
+      newX = Math.max(0, Math.min(newX, maxX));
+      newY = Math.max(0, Math.min(newY, maxY));
+
+      currentX = newX;
+      currentY = newY;
+
+      // 使用 transform 而不是 left/top，利用 GPU 加速
+      floatingWindow.style.transform = `translate(${newX}px, ${newY}px)`;
+    });
+  };
+
+  document.addEventListener('pointermove', (e) => {
+    if (!floatingWindowDragging) return;
+    updatePosition(e.clientX, e.clientY);
   });
 
-  document.addEventListener('mouseup', () => {
+  document.addEventListener('pointerup', () => {
     if (floatingWindowDragging) {
       floatingWindowDragging = false;
-      floatingWindow.style.cursor = '';
+      floatingWindow.classList.remove('dragging');
+
+      // 取消任何待处理的动画帧
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
 
       // 保存位置
       state.position = {
-        x: parseInt(floatingWindow.style.left),
-        y: parseInt(floatingWindow.style.top)
+        x: currentX,
+        y: currentY
       };
       saveFloatingWindowState(state);
     }
@@ -2022,7 +2054,17 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       const action = target.dataset.action;
       const amount = target.dataset.amount;
 
-      if (!amount || !currentTokenAddress) return;
+      if (!amount) return;
+
+      // 每次交易前重新从 URL 获取当前代币地址，避免代币切换问题
+      const latestTokenAddress = getTokenAddressFromURL();
+      if (!latestTokenAddress) {
+        logger.error('[Floating Window] 无法获取当前代币地址');
+        return;
+      }
+
+      // 更新全局代币地址
+      currentTokenAddress = latestTokenAddress;
 
       // 禁用按钮
       btn.setAttribute('disabled', 'true');
@@ -2033,6 +2075,10 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         // 获取当前设置
         const slippageInput = floatingWindow.querySelector('[data-setting="slippage"]') as HTMLInputElement;
         const slippage = parseFloat(slippageInput?.value || '10');
+
+        // 获取当前选择的 channel（与 sidepanel 共用）
+        const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
+        const channel = channelSelector?.value || 'pancake';
 
         if (action === 'buy') {
           const gasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
@@ -2045,7 +2091,8 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
               amount,
               slippage,
               gasPrice,
-              channel: 'pancake'
+              channel,
+              forceChannel: userChannelOverride
             }
           });
 
@@ -2065,7 +2112,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
               percent: amount,
               slippage,
               gasPrice,
-              channel: 'pancake'
+              channel,
+              forceChannel: userChannelOverride,
+              tokenInfo: currentTokenInfo
             }
           });
 
@@ -2099,6 +2148,72 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       }
     });
   });
+
+  // 确保窗口位置在视口内的函数
+  const ensureWindowInViewport = () => {
+    const rect = floatingWindow.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    let newX = currentX;
+    let newY = currentY;
+    let changed = false;
+
+    // 确保窗口不超出右边界
+    if (rect.right > viewportWidth) {
+      newX = viewportWidth - rect.width - 10;
+      changed = true;
+    }
+
+    // 确保窗口不超出左边界
+    if (rect.left < 0) {
+      newX = 10;
+      changed = true;
+    }
+
+    // 确保窗口不超出底部边界
+    if (rect.bottom > viewportHeight) {
+      newY = viewportHeight - rect.height - 10;
+      changed = true;
+    }
+
+    // 确保窗口不超出顶部边界
+    if (rect.top < 0) {
+      newY = 10;
+      changed = true;
+    }
+
+    if (changed) {
+      currentX = newX;
+      currentY = newY;
+      floatingWindow.style.transform = `translate(${newX}px, ${newY}px)`;
+      state.position = { x: newX, y: newY };
+      saveFloatingWindowState(state);
+    }
+  };
+
+  // 监听窗口大小变化
+  const resizeObserver = new ResizeObserver(() => {
+    ensureWindowInViewport();
+  });
+  resizeObserver.observe(document.body);
+
+  // 监听页面缩放
+  window.addEventListener('resize', ensureWindowInViewport);
+
+  // 当浮动窗口被移除时清理监听器
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.removedNodes.forEach((node) => {
+        if (node === floatingWindow) {
+          resizeObserver.disconnect();
+          window.removeEventListener('resize', ensureWindowInViewport);
+          observer.disconnect();
+        }
+      });
+    });
+  });
+  observer.observe(document.body, { childList: true });
 }
 
 // 绑定事件监听
@@ -2357,6 +2472,8 @@ function handleExtensionMessage(request) {
     return;
   }
 
+  console.log('[Dog Bang] Received message:', request.action, request);
+
   if (request.action === 'wallet_status_updated') {
     logger.debug('[Dog Bang] PUSH: 收到钱包状态更新');
     handleWalletStatusPush(request.data);
@@ -2380,7 +2497,13 @@ function handleExtensionMessage(request) {
 }
 
 function registerRuntimeListeners() {
-  chrome.runtime.onMessage.addListener((request) => {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // 处理 ping 消息，用于检测 content script 是否已加载
+    if (request?.action === 'ping') {
+      sendResponse({ status: 'ready' });
+      return true;
+    }
+
     handleExtensionMessage(request);
     return false;
   });
@@ -2415,6 +2538,14 @@ function connectBackgroundPort() {
     backgroundPortReady = false;
     backgroundPort = null;
     rejectPendingPortRequests('Background port disconnected');
+
+    // 关闭浮动窗口（插件重新加载）
+    const floatingWindow = document.getElementById('dog-bang-floating');
+    if (floatingWindow) {
+      console.log('[Dog Bang] 检测到插件重新加载，关闭浮动窗口');
+      floatingWindow.remove();
+    }
+
     // 尝试延迟重连
     setTimeout(() => {
       connectBackgroundPort();
@@ -2583,8 +2714,19 @@ if (shouldMountEmbeddedPanel) {
   }).observe(document, { subtree: true, childList: true });
 }
 
+// 确认 content script 已加载
+console.log('[Dog Bang] Content script loaded on:', window.location.href);
+
 registerRuntimeListeners();
 connectBackgroundPort();
+
+// 页面刷新或关闭时清理浮动窗口
+window.addEventListener('beforeunload', () => {
+  const floatingWindow = document.getElementById('dog-bang-floating');
+  if (floatingWindow) {
+    floatingWindow.remove();
+  }
+});
 
 function bootstrapTradingPanel() {
   createTradingPanel();

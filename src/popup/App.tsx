@@ -148,6 +148,7 @@ export default function App() {
         ];
 
         const isSupported = supportedPatterns.some(pattern => pattern.test(tab.url!));
+        console.log('[Popup] 浮动窗口支持检测:', tab.url, 'supported:', isSupported);
         setFloatingWindowSupported(isSupported);
       } catch (error) {
         setFloatingWindowSupported(false);
@@ -286,15 +287,65 @@ export default function App() {
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      console.log('[Popup] 当前标签页:', tab);
+
       if (!tab?.id) {
         showWarningMessage('无法获取当前标签页', 'error');
         return;
       }
 
-      await chrome.tabs.sendMessage(tab.id, { action: 'open_floating_window' });
-      showWarningMessage('浮动窗口已打开', 'success');
+      console.log('[Popup] 发送消息到 tab:', tab.id, 'URL:', tab.url);
+
+      try {
+        // 先发送 ping 消息检查 content script 是否已加载
+        await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
+
+        // Content script 已响应，发送打开浮动窗口消息
+        await chrome.tabs.sendMessage(tab.id, { action: 'open_floating_window' });
+        showWarningMessage('浮动窗口已打开', 'success');
+      } catch (sendError) {
+        console.error('[Popup] 发送消息失败:', sendError);
+        // 检测是否是 content script 未加载的错误
+        if ((sendError as Error).message.includes('Receiving end does not exist')) {
+          // 尝试动态注入 content script
+          try {
+            console.log('[Popup] 尝试动态注入 content script');
+
+            // 注入 CSS
+            await chrome.scripting.insertCSS({
+              target: { tabId: tab.id },
+              files: ['styles.css']
+            });
+
+            // 注入 JavaScript
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ['content-wrapper.js']
+            });
+
+            // 等待 content script 初始化
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            // 重试发送消息
+            await chrome.tabs.sendMessage(tab.id, { action: 'open_floating_window' });
+            showWarningMessage('浮动窗口已打开', 'success');
+          } catch (injectError) {
+            console.error('[Popup] 动态注入失败:', injectError);
+            // 提供刷新选项
+            if (confirm('无法加载浮动窗口功能，是否刷新页面？\n\n点击"确定"将刷新当前页面。')) {
+              await chrome.tabs.reload(tab.id);
+              showWarningMessage('页面已刷新，请稍后重试', 'success');
+            } else {
+              showWarningMessage('请手动刷新页面后重试', 'warning');
+            }
+          }
+        } else {
+          showWarningMessage(`打开浮动窗口失败: ${(sendError as Error).message}`, 'error');
+        }
+      }
     } catch (error) {
-      showWarningMessage(`打开浮动窗口失败: ${(error as Error).message}`, 'error');
+      console.error('[Popup] 获取标签页失败:', error);
+      showWarningMessage(`操作失败: ${(error as Error).message}`, 'error');
     }
   };
 

@@ -9,7 +9,8 @@
     "notifications",
     "offscreen",
     "sidePanel",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
 
   "host_permissions": [
