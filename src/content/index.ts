@@ -1784,6 +1784,305 @@ export function updateTradingPanelSourceUrl(sourceUrl?: string | null) {
   updatePanelSourceUrl(sourceUrl);
 }
 
+// ========== 浮动交易窗口 ==========
+const FLOATING_WINDOW_STORAGE_KEY = 'dogBangFloatingWindow';
+const FLOATING_WINDOW_MIN_WIDTH = 200;
+const FLOATING_WINDOW_MIN_HEIGHT = 100;
+
+type FloatingWindowState = {
+  position: { x: number; y: number };
+  collapsed: boolean;
+};
+
+let floatingWindowDragging = false;
+let floatingWindowDragOffset = { x: 0, y: 0 };
+
+function getFloatingWindowState(): FloatingWindowState {
+  try {
+    const stored = localStorage.getItem(FLOATING_WINDOW_STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (error) {
+    logger.debug('[Floating Window] 读取状态失败:', error);
+  }
+  // 默认位置：右下角
+  return {
+    position: { x: window.innerWidth - 250, y: window.innerHeight - 400 },
+    collapsed: true
+  };
+}
+
+function saveFloatingWindowState(state: FloatingWindowState) {
+  try {
+    localStorage.setItem(FLOATING_WINDOW_STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    logger.debug('[Floating Window] 保存状态失败:', error);
+  }
+}
+
+export function createFloatingTradingWindow(tokenAddressOverride?: string) {
+  const tokenAddress = tokenAddressOverride || getTokenAddressFromURL();
+
+  if (!tokenAddress) {
+    logger.debug('[Floating Window] No token address found');
+    return;
+  }
+
+  // 移除已存在的浮动窗口
+  const existing = document.getElementById('dog-bang-floating');
+  if (existing) {
+    existing.remove();
+  }
+
+  currentTokenAddress = tokenAddress;
+
+  const tradingPresets = userSettings?.trading ?? DEFAULT_USER_SETTINGS.trading;
+  const buyPresets = tradingPresets.buyPresets ?? DEFAULT_USER_SETTINGS.trading.buyPresets;
+  const sellPresets = tradingPresets.sellPresets ?? DEFAULT_USER_SETTINGS.trading.sellPresets;
+  const slippagePresets = tradingPresets.slippagePresets ?? DEFAULT_USER_SETTINGS.trading.slippagePresets;
+  const buyGasPresets = tradingPresets.buyGasPresets ?? DEFAULT_USER_SETTINGS.trading.buyGasPresets;
+  const sellGasPresets = tradingPresets.sellGasPresets ?? DEFAULT_USER_SETTINGS.trading.sellGasPresets;
+
+  const defaultSlippageValue = escapeHtml(
+    tradingPresets.defaultSlippageValue ?? slippagePresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSlippageValue
+  );
+  const defaultBuyGasValue = escapeHtml(
+    tradingPresets.defaultBuyGasValue ?? buyGasPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultBuyGasValue
+  );
+  const defaultSellGasValue = escapeHtml(
+    tradingPresets.defaultSellGasValue ?? sellGasPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSellGasValue
+  );
+
+  const state = getFloatingWindowState();
+
+  const floatingWindow = document.createElement('div');
+  floatingWindow.id = 'dog-bang-floating';
+  floatingWindow.className = 'dog-bang-floating-window';
+  floatingWindow.style.left = `${state.position.x}px`;
+  floatingWindow.style.top = `${state.position.y}px`;
+
+  // 生成买入按钮 HTML
+  const buyButtonsHtml = buyPresets.map(value =>
+    `<button class="floating-quick-btn" data-action="buy" data-amount="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  ).join('');
+
+  // 生成卖出按钮 HTML
+  const sellButtonsHtml = sellPresets.map(value =>
+    `<button class="floating-quick-btn" data-action="sell" data-amount="${escapeHtml(value)}">${escapeHtml(value)}%</button>`
+  ).join('');
+
+  // 生成滑点按钮 HTML
+  const slippageButtonsHtml = slippagePresets.map(value =>
+    `<button class="floating-option-btn" data-target="slippage" data-value="${escapeHtml(value)}">${escapeHtml(value)}%</button>`
+  ).join('');
+
+  // 生成 Buy Gas 按钮 HTML
+  const buyGasButtonsHtml = buyGasPresets.map(value =>
+    `<button class="floating-option-btn" data-target="buy-gas" data-value="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  ).join('');
+
+  // 生成 Sell Gas 按钮 HTML
+  const sellGasButtonsHtml = sellGasPresets.map(value =>
+    `<button class="floating-option-btn" data-target="sell-gas" data-value="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  ).join('');
+
+  floatingWindow.innerHTML = `
+    <div class="floating-header">
+      <div class="floating-drag-handle">⋮⋮</div>
+      <button class="floating-close-btn" title="关闭">✕</button>
+    </div>
+    <div class="floating-content">
+      <div class="floating-trade-section">
+        <div class="floating-trade-group">
+          <div class="floating-label">买入 (BNB)</div>
+          <div class="floating-buttons">
+            ${buyButtonsHtml}
+          </div>
+        </div>
+        <div class="floating-trade-group">
+          <div class="floating-label">卖出 (%)</div>
+          <div class="floating-buttons">
+            ${sellButtonsHtml}
+          </div>
+        </div>
+      </div>
+      <div class="floating-settings-toggle">
+        <button class="floating-toggle-btn" data-collapsed="${state.collapsed}">
+          <span class="toggle-icon">${state.collapsed ? '▼' : '▲'}</span>
+          <span class="toggle-text">设置</span>
+        </button>
+      </div>
+      <div class="floating-settings-section" style="display: ${state.collapsed ? 'none' : 'block'}">
+        <div class="floating-setting-row">
+          <label>滑点 (%):</label>
+          <div class="floating-option-group">
+            ${slippageButtonsHtml}
+            <input type="number" class="floating-input" data-setting="slippage" value="${defaultSlippageValue}" min="1" max="90" step="1" />
+          </div>
+        </div>
+        <div class="floating-setting-row">
+          <label>Buy Gas:</label>
+          <div class="floating-option-group">
+            ${buyGasButtonsHtml}
+            <input type="number" class="floating-input" data-setting="buy-gas" value="${defaultBuyGasValue}" min="0.01" max="100" step="0.01" />
+          </div>
+        </div>
+        <div class="floating-setting-row">
+          <label>Sell Gas:</label>
+          <div class="floating-option-group">
+            ${sellGasButtonsHtml}
+            <input type="number" class="floating-input" data-setting="sell-gas" value="${defaultSellGasValue}" min="0.01" max="100" step="0.01" />
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(floatingWindow);
+
+  // 绑定事件
+  attachFloatingWindowEvents(floatingWindow, state);
+
+  logger.debug('[Floating Window] 浮动交易窗口已创建');
+}
+
+function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: FloatingWindowState) {
+  // 关闭按钮
+  const closeBtn = floatingWindow.querySelector('.floating-close-btn');
+  closeBtn?.addEventListener('click', () => {
+    floatingWindow.remove();
+  });
+
+  // 拖拽功能
+  const dragHandle = floatingWindow.querySelector('.floating-drag-handle');
+  dragHandle?.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    floatingWindowDragging = true;
+    const rect = floatingWindow.getBoundingClientRect();
+    floatingWindowDragOffset.x = (e as MouseEvent).clientX - rect.left;
+    floatingWindowDragOffset.y = (e as MouseEvent).clientY - rect.top;
+    floatingWindow.style.cursor = 'grabbing';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!floatingWindowDragging) return;
+
+    let newX = e.clientX - floatingWindowDragOffset.x;
+    let newY = e.clientY - floatingWindowDragOffset.y;
+
+    // 边界限制
+    const maxX = window.innerWidth - FLOATING_WINDOW_MIN_WIDTH;
+    const maxY = window.innerHeight - FLOATING_WINDOW_MIN_HEIGHT;
+    newX = Math.max(0, Math.min(newX, maxX));
+    newY = Math.max(0, Math.min(newY, maxY));
+
+    floatingWindow.style.left = `${newX}px`;
+    floatingWindow.style.top = `${newY}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (floatingWindowDragging) {
+      floatingWindowDragging = false;
+      floatingWindow.style.cursor = '';
+
+      // 保存位置
+      state.position = {
+        x: parseInt(floatingWindow.style.left),
+        y: parseInt(floatingWindow.style.top)
+      };
+      saveFloatingWindowState(state);
+    }
+  });
+
+  // 折叠/展开功能
+  const toggleBtn = floatingWindow.querySelector('.floating-toggle-btn');
+  const settingsSection = floatingWindow.querySelector('.floating-settings-section') as HTMLElement;
+
+  toggleBtn?.addEventListener('click', () => {
+    state.collapsed = !state.collapsed;
+    toggleBtn.setAttribute('data-collapsed', String(state.collapsed));
+
+    const icon = toggleBtn.querySelector('.toggle-icon');
+    if (icon) {
+      icon.textContent = state.collapsed ? '▼' : '▲';
+    }
+
+    if (settingsSection) {
+      settingsSection.style.display = state.collapsed ? 'none' : 'block';
+    }
+
+    saveFloatingWindowState(state);
+  });
+
+  // 交易按钮事件
+  floatingWindow.querySelectorAll('.floating-quick-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const target = e.target as HTMLElement;
+      const action = target.dataset.action;
+      const amount = target.dataset.amount;
+
+      if (!amount || !currentTokenAddress) return;
+
+      // 禁用按钮
+      btn.setAttribute('disabled', 'true');
+      const originalText = btn.textContent;
+      btn.textContent = '...';
+
+      try {
+        // 获取当前设置
+        const slippageInput = floatingWindow.querySelector('[data-setting="slippage"]') as HTMLInputElement;
+        const slippage = parseFloat(slippageInput?.value || '10');
+
+        if (action === 'buy') {
+          const gasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
+          const gasPrice = parseFloat(gasInput?.value || '1');
+
+          await sendPortRequest({
+            action: 'trade-buy',
+            tokenAddress: currentTokenAddress,
+            amount,
+            slippage,
+            gasPrice
+          });
+        } else if (action === 'sell') {
+          const gasInput = floatingWindow.querySelector('[data-setting="sell-gas"]') as HTMLInputElement;
+          const gasPrice = parseFloat(gasInput?.value || '1');
+
+          await sendPortRequest({
+            action: 'trade-sell',
+            tokenAddress: currentTokenAddress,
+            percent: amount,
+            slippage,
+            gasPrice
+          });
+        }
+      } catch (error) {
+        logger.error('[Floating Window] 交易失败:', error);
+      } finally {
+        btn.removeAttribute('disabled');
+        btn.textContent = originalText;
+      }
+    });
+  });
+
+  // 设置选项按钮事件
+  floatingWindow.querySelectorAll('.floating-option-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const settingTarget = target.dataset.target;
+      const value = target.dataset.value;
+
+      if (settingTarget && value) {
+        const input = floatingWindow.querySelector(`[data-setting="${settingTarget}"]`) as HTMLInputElement;
+        if (input) {
+          input.value = value;
+        }
+      }
+    });
+  });
+}
+
 // 绑定事件监听
 function attachEventListeners() {
   document.querySelectorAll('.btn-quick').forEach(btn => {

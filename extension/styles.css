@@ -407,3 +407,270 @@
     left: 20px;
   }
 }
+
+/* ========== 浮动交易窗口 ========== */
+.dog-bang-floating-window {
+  position: fixed;
+  width: 220px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid #2d3561;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 999999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  color: #e4e4e7;
+  backdrop-filter: blur(10px);
+  user-select: none;
+  transition: box-shadow 0.2s ease;
+}
+
+.dog-bang-floating-window:hover {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* 顶栏 */
+.floating-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: rgba(5, 8, 21, 0.9);
+  border-bottom: 1px solid rgba(45, 53, 97, 0.5);
+  border-radius: 10px 10px 0 0;
+  cursor: move;
+}
+
+.floating-drag-handle {
+  font-size: 14px;
+  color: #6b7280;
+  cursor: grab;
+  user-select: none;
+  padding: 0 4px;
+}
+
+.floating-drag-handle:active {
+  cursor: grabbing;
+}
+
+.floating-close-btn {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+  transition: color 0.2s ease;
+}
+
+.floating-close-btn:hover {
+  color: #ef4444;
+}
+
+/* 内容区 */
+.floating-content {
+  padding: 8px;
+  background: rgba(5, 8, 21, 0.92);
+  border-radius: 0 0 10px 10px;
+}
+
+/* 交易区 */
+.floating-trade-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.floating-trade-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.floating-label {
+  font-size: 11px;
+  color: #9ca3af;
+  font-weight: 500;
+  padding: 0 2px;
+}
+
+.floating-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(45px, 1fr));
+  gap: 4px;
+}
+
+.floating-quick-btn {
+  padding: 6px 8px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  border: 1px solid #1d4ed8;
+  border-radius: 5px;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.floating-quick-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  transform: translateY(-1px);
+}
+
+.floating-quick-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.3);
+}
+
+.floating-quick-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.floating-quick-btn[data-action="sell"] {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  border-color: #b91c1c;
+}
+
+.floating-quick-btn[data-action="sell"]:hover:not(:disabled) {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+}
+
+/* 设置折叠按钮 */
+.floating-settings-toggle {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(45, 53, 97, 0.3);
+}
+
+.floating-toggle-btn {
+  width: 100%;
+  padding: 4px 8px;
+  background: rgba(31, 41, 55, 0.6);
+  border: 1px solid rgba(45, 53, 97, 0.5);
+  border-radius: 5px;
+  color: #9ca3af;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.floating-toggle-btn:hover {
+  background: rgba(31, 41, 55, 0.8);
+  color: #e4e4e7;
+}
+
+.toggle-icon {
+  font-size: 10px;
+}
+
+.toggle-text {
+  font-weight: 500;
+}
+
+/* 设置区 */
+.floating-settings-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(45, 53, 97, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.floating-setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.floating-setting-row label {
+  font-size: 10px;
+  color: #9ca3af;
+  font-weight: 500;
+  padding: 0 2px;
+}
+
+.floating-option-group {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.floating-option-btn {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  background: rgba(31, 41, 55, 0.6);
+  border: 1px solid rgba(45, 53, 97, 0.5);
+  border-radius: 4px;
+  color: #9ca3af;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.floating-option-btn:hover {
+  background: rgba(31, 41, 55, 0.9);
+  color: #e4e4e7;
+  border-color: #3b82f6;
+}
+
+.floating-option-btn:active {
+  transform: scale(0.95);
+}
+
+.floating-input {
+  flex: 1;
+  min-width: 50px;
+  padding: 4px 6px;
+  background: rgba(31, 41, 55, 0.6);
+  border: 1px solid rgba(45, 53, 97, 0.5);
+  border-radius: 4px;
+  color: #e4e4e7;
+  font-size: 11px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.floating-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: rgba(31, 41, 55, 0.8);
+}
+
+.floating-input::-webkit-inner-spin-button,
+.floating-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .dog-bang-floating-window {
+    width: 200px;
+  }
+
+  .floating-buttons {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
