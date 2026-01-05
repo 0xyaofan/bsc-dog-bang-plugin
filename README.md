@@ -119,7 +119,7 @@ BSC 打狗棒是一款专为 BSC 链上 Meme 代币交易设计的 Chrome 浏览
 ## 文档
 
 - [功能说明](docs/features.md) - 详细功能介绍
-- [浮动窗口使用指南](FLOATING_WINDOW.md) - 浮动交易窗口完整文档
+- [浮动窗口使用指南](docs/floating-window.md) - 浮动交易窗口完整文档
 - [环境配置](docs/setup.md) - 开发环境配置指南
 - [开发手册](docs/development.md) - 开发指南和架构说明
 - [部署手册](docs/deployment.md) - 构建和部署指南
