@@ -37,20 +37,32 @@ BSC 打狗棒是一款专为 BSC 链上 Meme 代币交易设计的 Chrome 浏览
 <table>
   <tr>
     <td align="center">
-      <img src="docs/images/popup-wallet-info.png" alt="钱包信息" width="300"/><br/>
+      <img src="docs/images/popup-wallet-info.png" alt="钱包信息" width="280"/><br/>
       <b>钱包管理</b>
     </td>
     <td align="center">
-      <img src="docs/images/sidepanel-trade.png" alt="交易界面" width="300"/><br/>
-      <b>交易面板</b>
+      <img src="docs/images/sidepanel-trade.png" alt="交易界面" width="280"/><br/>
+      <b>交易侧边栏</b>
+    </td>
+    <td align="center">
+      <img src="docs/images/float-trade.png" alt="浮动交易窗口" width="280"/><br/>
+      <b>浮动交易窗口</b>
     </td>
   </tr>
 </table>
+
+*支持侧边栏和浮动窗口两种交易方式，满足不同使用习惯*
 
 </div>
 
 ## 功能特性
 
+### 🎯 多交易界面
+- **侧边栏面板**: 在浏览器侧边栏打开完整交易界面，不遮挡页面内容
+- **浮动交易窗口**: 极简高效的浮动窗口，支持拖拽、自动恢复位置，随时随地快速交易
+- **智能切换**: 根据使用场景自由选择交易方式
+
+### 💼 核心功能
 - **多平台支持**: 支持 Four.meme、Flap.sh、Luna.fun、PancakeSwap 等主流 Meme 代币发射平台
 - **安全钱包管理**: 本地加密存储私钥，密码保护解锁机制
 - **一键交易**: 在浏览代币页面时，直接通过插件快速买卖
@@ -107,6 +119,7 @@ BSC 打狗棒是一款专为 BSC 链上 Meme 代币交易设计的 Chrome 浏览
 ## 文档
 
 - [功能说明](docs/features.md) - 详细功能介绍
+- [浮动窗口使用指南](FLOATING_WINDOW.md) - 浮动交易窗口完整文档
 - [环境配置](docs/setup.md) - 开发环境配置指南
 - [开发手册](docs/development.md) - 开发指南和架构说明
 - [部署手册](docs/deployment.md) - 构建和部署指南

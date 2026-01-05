@@ -1,5 +1,51 @@
 # 浮动交易窗口使用说明
 
+<div align="center">
+
+![浮动交易窗口](docs/images/float-trade.png)
+
+*极简高效的浮动交易窗口，支持拖拽、自动恢复位置*
+
+</div>
+
+---
+
+## 概述
+
+浮动交易窗口是 BSC 打狗棒插件的核心功能之一，它提供了一个极简、高效的交易界面，专为快速交易设计。
+
+### 为什么需要浮动窗口？
+
+- ✅ **不遮挡页面**：相比侧边栏，浮动窗口更加灵活，可以放置在屏幕任意位置
+- ✅ **极简高效**：只显示交易必需功能，去除冗余信息，操作更快速
+- ✅ **跨页面持久**：在网站内导航或切换代币时，浮动窗口保持打开
+- ✅ **位置记忆**：刷新页面后自动恢复到上次的位置和状态
+- ✅ **流畅拖拽**：使用 GPU 加速的拖拽技术，丝滑流畅
+
+## 打开浮动窗口
+
+### 方法一：通过插件 Popup
+
+1. 点击浏览器工具栏的插件图标
+2. 确保钱包已解锁
+3. 点击"交易浮窗"按钮
+
+**支持的页面**：
+- `https://gmgn.ai/*/token/*` - GMGN 代币页面
+- `https://web3.binance.com/*/token/*` - Binance Web3 代币页面
+- `https://four.meme/token/*` - Four.meme 代币页面
+- `https://flap.sh/*` - Flap.sh 页面
+
+### 方法二：通过代码调用
+
+```javascript
+// 自动检测当前页面的代币地址
+createFloatingTradingWindow();
+
+// 或指定代币地址
+createFloatingTradingWindow('0x1234...');
+```
+
 ## 功能特性
 
 浮动交易窗口是一个极简、高效的交易界面，专为快速交易设计。
@@ -17,34 +63,26 @@
    - 可拖拽到屏幕任意位置
 
 3. **智能状态管理**
-   - 窗口位置自动记忆
+   - 窗口位置自动记忆（localStorage）
    - 设置折叠状态自动保存
-   - 刷新页面后保持原有位置和状态
+   - 刷新页面后自动恢复位置和状态
+   - 关闭窗口记录状态，下次不会自动打开
 
 4. **可折叠设置区**
    - 滑点和 Gas 设置默认收起
    - 点击"设置"按钮展开/收起
    - 减少屏幕占用空间
 
-## 使用方法
+5. **性能优化**
+   - 使用 `transform` + GPU 加速实现丝滑拖拽
+   - `requestAnimationFrame` 确保 60fps 流畅度
+   - Pointer Events API 支持触控设备
 
-### 创建浮动窗口
-
-在 content script 或其他页面脚本中调用：
-
-```javascript
-// 自动检测当前页面的代币地址
-createFloatingTradingWindow();
-
-// 或指定代币地址
-createFloatingTradingWindow('0x1234...');
-```
-
-### 窗口结构
+## 窗口结构
 
 ```
 ┌─────────────────────┐
-│ ⋮⋮              ✕  │ ← 顶栏（拖拽手柄 + 关闭按钮）
+│       ⋯          ✕  │ ← 顶栏（拖拽手柄居中 + 关闭按钮）
 ├─────────────────────┤
 │ 买入 (BNB)          │
 │ [0.02] [0.05] ...   │ ← 买入按钮（固定值）
@@ -64,6 +102,8 @@ createFloatingTradingWindow('0x1234...');
 │ [0.05] [1] [输入]   │
 └─────────────────────┘
 ```
+
+## 使用方法
 
 ### 交易流程
 
@@ -85,16 +125,29 @@ createFloatingTradingWindow('0x1234...');
 ### 窗口操作
 
 1. **拖拽移动**
-   - 鼠标移到顶栏"⋮⋮"区域
-   - 按住鼠标左键拖动
-   - 松开鼠标完成移动（位置自动保存）
+   - 鼠标移到顶栏"⋯"区域（横向拖拽图标）
+   - 按住鼠标左键拖动（支持触控设备）
+   - 松开鼠标完成移动
+   - 位置自动保存到 localStorage
+   - 窗口自动保持在视口内，不会超出边界
 
 2. **关闭窗口**
    - 点击右上角"✕"按钮
+   - 关闭状态会被记录，刷新页面后不会自动恢复
 
 3. **折叠/展开设置**
    - 点击"设置"按钮切换展开/收起状态
    - 状态自动保存
+
+4. **刷新页面后**
+   - 如果窗口之前是打开的，会自动恢复
+   - 恢复到上次的位置和折叠状态
+   - 如果窗口之前已关闭，则不会自动打开
+
+5. **切换页面**
+   - 在同一网站内导航，窗口保持打开
+   - 切换到不同代币页面，窗口继续存在
+   - 可以随时通过 Popup 打开/关闭窗口
 
 ## 技术实现
 
@@ -103,13 +156,49 @@ createFloatingTradingWindow('0x1234...');
 窗口使用 `localStorage` 保存以下状态：
 
 ```typescript
-{
-  position: { x: number; y: number },  // 窗口位置
-  collapsed: boolean                    // 设置区折叠状态
+type FloatingWindowState = {
+  position: { x: number; y: number };  // 窗口位置
+  collapsed: boolean;                   // 设置区折叠状态
+  opened: boolean;                      // 窗口是否打开（用于刷新恢复）
 }
 ```
 
-存储键名：`dogBangFloatingWindow`
+**存储键名**：`dogBangFloatingWindow`
+
+**状态管理逻辑**：
+- 打开窗口时：`opened = true`
+- 关闭窗口时：`opened = false`
+- 插件重新加载时：`opened = false`（避免异常恢复）
+- 页面加载时：检查 `opened` 状态，自动恢复窗口
+
+### 性能优化
+
+**拖拽优化**：
+```typescript
+// 使用 transform 代替 left/top，利用 GPU 加速
+floatingWindow.style.transform = `translate(${x}px, ${y}px)`;
+
+// 使用 requestAnimationFrame 批处理更新
+requestAnimationFrame(() => {
+  floatingWindow.style.transform = `translate(${newX}px, ${newY}px)`;
+});
+
+// Pointer Events API 支持触控设备
+dragHandle.addEventListener('pointerdown', (e) => {
+  dragHandle.setPointerCapture(e.pointerId);
+});
+```
+
+**CSS 优化**：
+```css
+.dog-bang-floating-window {
+  will-change: transform;  /* 提示浏览器优化 */
+}
+
+.dog-bang-floating-window.dragging {
+  transition: none;  /* 拖拽时禁用过渡 */
+}
+```
 
 ### 样式类名
 
@@ -124,27 +213,42 @@ createFloatingTradingWindow('0x1234...');
 
 ### 交易接口
 
-浮动窗口复用现有的交易逻辑，通过 `sendPortRequest` 与 background 通信：
+浮动窗口与侧边栏共用相同的后端交易机制，通过 `safeSendMessage` 与 background 通信：
 
 ```javascript
 // 买入
-await sendPortRequest({
-  action: 'trade-buy',
-  tokenAddress,
-  amount,
-  slippage,
-  gasPrice
+await safeSendMessage({
+  action: 'buy_token',
+  data: {
+    tokenAddress,
+    amount,
+    slippage,
+    gasPrice,
+    channel,
+    forceChannel
+  }
 });
 
 // 卖出
-await sendPortRequest({
-  action: 'trade-sell',
-  tokenAddress,
-  percent,
-  slippage,
-  gasPrice
+await safeSendMessage({
+  action: 'sell_token',
+  data: {
+    tokenAddress,
+    percent,
+    slippage,
+    gasPrice,
+    channel,
+    forceChannel,
+    tokenInfo
+  }
 });
 ```
+
+**共享特性**：
+- 使用侧边栏相同的交易通道（PancakeSwap、Four.meme 等）
+- 共享滑点和 Gas 设置
+- 共享 `userChannelOverride` 状态（用户手动选择通道）
+- 统一的错误处理和交易状态通知
 
 ## 设计理念
 
