@@ -2317,39 +2317,6 @@ async function hashPassword(password) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// 打开 SidePanel
-async function handleOpenSidePanel(data: any, sender?: chrome.runtime.MessageSender) {
-  try {
-    if (!chrome?.sidePanel?.open) {
-      return { success: false, error: '当前浏览器版本不支持 Side Panel' };
-    }
-
-    // 优先使用传入的 windowId，否则从 sender.tab.windowId 获取
-    let windowId = data?.windowId;
-    if ((!windowId && windowId !== 0) && sender?.tab?.windowId) {
-      windowId = sender.tab.windowId;
-    }
-
-    if (!windowId && windowId !== 0) {
-      return { success: false, error: '无法获取窗口 ID' };
-    }
-
-    if (chrome.sidePanel.setOptions) {
-      await chrome.sidePanel.setOptions({
-        path: 'dist/sidepanel.html',
-        enabled: true
-      });
-    }
-
-    await chrome.sidePanel.open({ windowId });
-    logger.debug('[Background] Side Panel 已打开, windowId:', windowId);
-    return { success: true };
-  } catch (error) {
-    logger.error('[Background] 打开 Side Panel 失败:', error);
-    return { success: false, error: (error as Error).message };
-  }
-}
-
 type RuntimeRequest = {
   action?: string;
   data?: any;
@@ -2369,7 +2336,6 @@ const ACTION_HANDLER_MAP = {
   get_token_info: handleGetTokenInfo,
   get_token_route: handleGetTokenRoute,
   estimate_sell_amount: handleEstimateSellAmount
-  // open_sidepanel 在 onMessage 中特殊处理，需要 sender 参数
 };
 
 async function processExtensionRequest(action: string, data: any = {}) {
@@ -2399,17 +2365,6 @@ chrome.runtime.onMessage.addListener((request: RuntimeRequest, sender, sendRespo
   }
 
   logger.debug('[Background] Received message:', request.action);
-
-  // 特殊处理 open_sidepanel，需要传递 sender
-  if (request.action === 'open_sidepanel') {
-    handleOpenSidePanel(request.data, sender)
-      .then((result) => sendResponse(result))
-      .catch((error) => {
-        logger.error('[Background] open_sidepanel error:', error);
-        sendResponse({ success: false, error: error.message });
-      });
-    return true;
-  }
 
   processExtensionRequest(request.action, request.data)
     .then((result) => sendResponse(result))

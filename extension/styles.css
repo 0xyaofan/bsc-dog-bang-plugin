@@ -465,25 +465,6 @@
   color: #cbd5e1;
 }
 
-.floating-sidepanel-btn {
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: transparent;
-  border: none;
-  color: #9ca3af;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 2px 6px;
-  line-height: 1;
-  transition: color 0.2s ease;
-}
-
-.floating-sidepanel-btn:hover {
-  color: #3b82f6;
-}
-
 .floating-close-btn {
   position: absolute;
   right: 8px;
