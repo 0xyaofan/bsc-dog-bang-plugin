@@ -409,7 +409,7 @@ function formatDuration(ms: number) {
   if (!Number.isFinite(ms) || ms < 0) {
     return '--';
   }
-  return `${(ms / 1000).toFixed(2)}s`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 type ButtonTimerController = {
@@ -424,7 +424,7 @@ function startButtonTimer(button: HTMLButtonElement, runningLabel = '处理中')
 
   const update = () => {
     const elapsedSeconds = ((stopped ? finalElapsed : performance.now() - start) / 1000);
-    button.textContent = `${runningLabel}... (${elapsedSeconds.toFixed(2)}s)`;
+    button.textContent = `${runningLabel}... (${elapsedSeconds.toFixed(1)}s)`;
   };
 
   update();
