@@ -1961,19 +1961,10 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   const sidePanelBtn = floatingWindow.querySelector('.floating-sidepanel-btn');
   sidePanelBtn?.addEventListener('click', async () => {
     try {
-      // 获取当前窗口 ID
-      const currentWindow = await chrome.windows.getCurrent();
-      const windowId = currentWindow?.id;
-
-      if (!windowId && windowId !== 0) {
-        logger.error('[Floating Window] 无法获取当前窗口 ID');
-        return;
-      }
-
       // 通过消息传递给 background 打开 SidePanel
+      // background 会从 sender.tab.windowId 获取窗口 ID
       const response = await chrome.runtime.sendMessage({
-        action: 'open_sidepanel',
-        data: { windowId }
+        action: 'open_sidepanel'
       });
 
       if (response?.success) {
