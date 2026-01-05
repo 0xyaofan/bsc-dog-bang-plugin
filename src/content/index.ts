@@ -1899,13 +1899,19 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
     <div class="floating-content">
       <div class="floating-trade-section">
         <div class="floating-trade-group">
-          <div class="floating-label">买入 (BNB)</div>
+          <div class="floating-label-row">
+            <div class="floating-label">买入 (BNB)</div>
+            <div class="floating-balance" id="floating-bnb-balance">--</div>
+          </div>
           <div class="floating-buttons">
             ${buyButtonsHtml}
           </div>
         </div>
         <div class="floating-trade-group">
-          <div class="floating-label">卖出 (%)</div>
+          <div class="floating-label-row">
+            <div class="floating-label">卖出 (%)</div>
+            <div class="floating-balance" id="floating-token-balance">--</div>
+          </div>
           <div class="floating-buttons">
             ${sellButtonsHtml}
           </div>
@@ -2057,9 +2063,10 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   });
 
   // 交易按钮事件
-  floatingWindow.querySelectorAll('.floating-quick-btn').forEach(btn => {
+  floatingWindow.querySelectorAll('.floating-quick-btn').forEach(btnElement => {
+    const btn = btnElement as HTMLButtonElement;
     btn.addEventListener('click', async (e) => {
-      const target = e.target as HTMLElement;
+      const target = e.target as HTMLButtonElement;
       const action = target.dataset.action;
       const amount = target.dataset.amount;
 
@@ -2075,10 +2082,10 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       // 更新全局代币地址
       currentTokenAddress = latestTokenAddress;
 
-      // 禁用按钮
+      // 禁用按钮并启动计时器
       btn.setAttribute('disabled', 'true');
-      const originalText = btn.textContent;
-      btn.textContent = '...';
+      const originalText = btn.textContent || '';
+      const timer = startButtonTimer(btn, action === 'buy' ? '买入中' : '卖出中');
 
       try {
         // 获取当前设置
@@ -2106,6 +2113,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           });
 
           if (response?.success) {
+            timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 买入成功');
           } else {
             throw new Error(response?.error || '买入失败');
@@ -2128,16 +2136,27 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           });
 
           if (response?.success) {
+            timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 卖出成功');
           } else {
             throw new Error(response?.error || '卖出失败');
           }
         }
+
+        // 成功后等待一段时间再恢复原文本
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.removeAttribute('disabled');
+        }, 2000);
       } catch (error) {
+        timer.stop(`✗ ${formatDuration(timer.getElapsed())}`);
         logger.error('[Floating Window] 交易失败:', error);
-      } finally {
-        btn.removeAttribute('disabled');
-        btn.textContent = originalText;
+
+        // 失败后等待一段时间再恢复原文本
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.removeAttribute('disabled');
+        }, 2000);
       }
     });
   });
@@ -2210,6 +2229,41 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   // 监听页面缩放
   window.addEventListener('resize', ensureWindowInViewport);
 
+  // 更新余额显示
+  const updateFloatingBalances = async () => {
+    try {
+      const response = await safeSendMessage({
+        action: 'get_wallet_status',
+        data: {
+          tokenAddress: currentTokenAddress
+        }
+      });
+
+      if (response?.success) {
+        const { bnbBalance, tokenBalance } = response.data;
+
+        const bnbBalanceEl = floatingWindow.querySelector('#floating-bnb-balance');
+        const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+
+        if (bnbBalanceEl) {
+          bnbBalanceEl.textContent = bnbBalance || '0.00';
+        }
+
+        if (tokenBalanceEl && tokenBalance !== undefined) {
+          tokenBalanceEl.textContent = tokenBalance;
+        }
+      }
+    } catch (error) {
+      logger.debug('[Floating Window] 更新余额失败:', error);
+    }
+  };
+
+  // 初始加载余额
+  updateFloatingBalances();
+
+  // 定期更新余额（每10秒）
+  const balanceInterval = setInterval(updateFloatingBalances, 10000);
+
   // 当浮动窗口被移除时清理监听器
   const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
@@ -2217,6 +2271,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         if (node === floatingWindow) {
           resizeObserver.disconnect();
           window.removeEventListener('resize', ensureWindowInViewport);
+          clearInterval(balanceInterval);
           observer.disconnect();
         }
       });

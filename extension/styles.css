@@ -504,11 +504,23 @@
   gap: 4px;
 }
 
+.floating-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 2px;
+}
+
 .floating-label {
   font-size: 11px;
   color: #9ca3af;
   font-weight: 500;
-  padding: 0 2px;
+}
+
+.floating-balance {
+  font-size: 10px;
+  color: #6b7280;
+  font-weight: 400;
 }
 
 .floating-buttons {
