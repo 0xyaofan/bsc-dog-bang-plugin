@@ -9,7 +9,7 @@
  */
 
 import { createHttpClient } from './viem-helper.js';
-import { NETWORK_CONFIG, TX_WATCHER_CONFIG } from './trading-config.js';
+import { NETWORK_CONFIG, TX_WATCHER_CONFIG, DEBUG_CONFIG } from './trading-config.js';
 import type { Hash } from 'viem';
 
 type PublicClient = ReturnType<typeof createHttpClient>;
@@ -315,7 +315,9 @@ export class TxWatcher {
       return;
     }
 
-    console.log(`[TxWatcher] 使用 HTTP 轮询模式监听: ${txHash.substring(0, 10)}...`);
+    if (DEBUG_CONFIG.ENABLED) {
+      console.log(`[TxWatcher] 使用 HTTP 轮询模式监听: ${txHash.substring(0, 10)}...`);
+    }
 
     const pollInterval = setInterval(async () => {
       try {
@@ -595,7 +597,9 @@ export class TxWatcher {
     // 无交易时，newHeads 事件仍会触发，但 _checkPendingTransactions 会立即返回（智能节流）
     // 这样下次交易时无需重新建立连接，提升交易执行速度
     if (this.watchingTxs.size === 0) {
-      console.log('[TxWatcher] 无待确认交易，保持 WebSocket 连接以提升下次交易速度');
+      if (DEBUG_CONFIG.ENABLED) {
+        console.log('[TxWatcher] 无待确认交易，保持 WebSocket 连接以提升下次交易速度');
+      }
     }
   }
 }

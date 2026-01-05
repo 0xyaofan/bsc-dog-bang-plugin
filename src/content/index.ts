@@ -1792,6 +1792,7 @@ const FLOATING_WINDOW_MIN_HEIGHT = 100;
 type FloatingWindowState = {
   position: { x: number; y: number };
   collapsed: boolean;
+  opened: boolean; // 记录浮动窗口是否打开
 };
 
 let floatingWindowDragging = false;
@@ -1809,7 +1810,8 @@ function getFloatingWindowState(): FloatingWindowState {
   // 默认位置：右下角
   return {
     position: { x: window.innerWidth - 250, y: window.innerHeight - 400 },
-    collapsed: true
+    collapsed: true,
+    opened: false
   };
 }
 
@@ -1946,6 +1948,10 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   // 绑定事件
   attachFloatingWindowEvents(floatingWindow, state);
 
+  // 保存打开状态
+  state.opened = true;
+  saveFloatingWindowState(state);
+
   logger.debug('[Floating Window] 浮动交易窗口已创建');
 }
 
@@ -1953,6 +1959,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   // 关闭按钮
   const closeBtn = floatingWindow.querySelector('.floating-close-btn');
   closeBtn?.addEventListener('click', () => {
+    // 保存关闭状态
+    state.opened = false;
+    saveFloatingWindowState(state);
     floatingWindow.remove();
   });
 
@@ -2543,6 +2552,10 @@ function connectBackgroundPort() {
     const floatingWindow = document.getElementById('dog-bang-floating');
     if (floatingWindow) {
       console.log('[Dog Bang] 检测到插件重新加载，关闭浮动窗口');
+      // 保存关闭状态，避免重新加载后自动恢复
+      const state = getFloatingWindowState();
+      state.opened = false;
+      saveFloatingWindowState(state);
       floatingWindow.remove();
     }
 
@@ -2720,13 +2733,27 @@ console.log('[Dog Bang] Content script loaded on:', window.location.href);
 registerRuntimeListeners();
 connectBackgroundPort();
 
-// 页面刷新或关闭时清理浮动窗口
-window.addEventListener('beforeunload', () => {
-  const floatingWindow = document.getElementById('dog-bang-floating');
-  if (floatingWindow) {
-    floatingWindow.remove();
+// 页面加载后自动恢复浮动窗口状态
+function restoreFloatingWindow() {
+  const state = getFloatingWindowState();
+  if (state.opened) {
+    const tokenAddress = getTokenAddressFromURL();
+    if (tokenAddress) {
+      // 延迟创建，确保页面已完全加载
+      setTimeout(() => {
+        createFloatingTradingWindow(tokenAddress);
+        logger.debug('[Floating Window] 自动恢复浮动窗口');
+      }, 500);
+    }
   }
-});
+}
+
+// 页面加载完成后检查是否需要恢复浮动窗口
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', restoreFloatingWindow, { once: true });
+} else {
+  restoreFloatingWindow();
+}
 
 function bootstrapTradingPanel() {
   createTradingPanel();
