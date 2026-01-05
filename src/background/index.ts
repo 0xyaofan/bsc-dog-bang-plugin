@@ -2317,6 +2317,34 @@ async function hashPassword(password) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// 打开 SidePanel
+async function handleOpenSidePanel(data: any) {
+  try {
+    if (!chrome?.sidePanel?.open) {
+      return { success: false, error: '当前浏览器版本不支持 Side Panel' };
+    }
+
+    const windowId = data?.windowId;
+    if (!windowId && windowId !== 0) {
+      return { success: false, error: '无效的窗口 ID' };
+    }
+
+    if (chrome.sidePanel.setOptions) {
+      await chrome.sidePanel.setOptions({
+        path: 'dist/sidepanel.html',
+        enabled: true
+      });
+    }
+
+    await chrome.sidePanel.open({ windowId });
+    logger.debug('[Background] Side Panel 已打开');
+    return { success: true };
+  } catch (error) {
+    logger.error('[Background] 打开 Side Panel 失败:', error);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
 type RuntimeRequest = {
   action?: string;
   data?: any;
@@ -2335,7 +2363,8 @@ const ACTION_HANDLER_MAP = {
   get_tx_watcher_status: handleGetTxWatcherStatus,
   get_token_info: handleGetTokenInfo,
   get_token_route: handleGetTokenRoute,
-  estimate_sell_amount: handleEstimateSellAmount
+  estimate_sell_amount: handleEstimateSellAmount,
+  open_sidepanel: handleOpenSidePanel
 };
 
 async function processExtensionRequest(action: string, data: any = {}) {

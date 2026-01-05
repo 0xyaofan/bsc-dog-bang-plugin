@@ -1961,11 +1961,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   const sidePanelBtn = floatingWindow.querySelector('.floating-sidepanel-btn');
   sidePanelBtn?.addEventListener('click', async () => {
     try {
-      if (!chrome?.sidePanel?.open) {
-        logger.error('[Floating Window] 当前浏览器不支持 Side Panel');
-        return;
-      }
-
+      // 获取当前窗口 ID
       const currentWindow = await chrome.windows.getCurrent();
       const windowId = currentWindow?.id;
 
@@ -1974,14 +1970,17 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         return;
       }
 
-      if (chrome.sidePanel.setOptions) {
-        await chrome.sidePanel.setOptions({
-          path: 'dist/sidepanel.html',
-          enabled: true
-        });
+      // 通过消息传递给 background 打开 SidePanel
+      const response = await chrome.runtime.sendMessage({
+        action: 'open_sidepanel',
+        data: { windowId }
+      });
+
+      if (response?.success) {
+        logger.debug('[Floating Window] Side Panel 已打开');
+      } else {
+        logger.error('[Floating Window] 打开 Side Panel 失败:', response?.error);
       }
-      await chrome.sidePanel.open({ windowId });
-      logger.debug('[Floating Window] Side Panel 已打开');
     } catch (error) {
       logger.error('[Floating Window] 打开 Side Panel 失败:', error);
     }
