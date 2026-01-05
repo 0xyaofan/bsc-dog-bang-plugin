@@ -1893,6 +1893,7 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
 
   floatingWindow.innerHTML = `
     <div class="floating-header">
+      <button class="floating-sidepanel-btn" title="打开侧边栏">☰</button>
       <div class="floating-drag-handle">⋯</div>
       <button class="floating-close-btn" title="关闭">✕</button>
     </div>
@@ -1956,6 +1957,36 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
 }
 
 function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: FloatingWindowState) {
+  // SidePanel 打开按钮
+  const sidePanelBtn = floatingWindow.querySelector('.floating-sidepanel-btn');
+  sidePanelBtn?.addEventListener('click', async () => {
+    try {
+      if (!chrome?.sidePanel?.open) {
+        logger.error('[Floating Window] 当前浏览器不支持 Side Panel');
+        return;
+      }
+
+      const currentWindow = await chrome.windows.getCurrent();
+      const windowId = currentWindow?.id;
+
+      if (!windowId && windowId !== 0) {
+        logger.error('[Floating Window] 无法获取当前窗口 ID');
+        return;
+      }
+
+      if (chrome.sidePanel.setOptions) {
+        await chrome.sidePanel.setOptions({
+          path: 'dist/sidepanel.html',
+          enabled: true
+        });
+      }
+      await chrome.sidePanel.open({ windowId });
+      logger.debug('[Floating Window] Side Panel 已打开');
+    } catch (error) {
+      logger.error('[Floating Window] 打开 Side Panel 失败:', error);
+    }
+  });
+
   // 关闭按钮
   const closeBtn = floatingWindow.querySelector('.floating-close-btn');
   closeBtn?.addEventListener('click', () => {
