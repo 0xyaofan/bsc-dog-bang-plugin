@@ -424,7 +424,12 @@ function startButtonTimer(button: HTMLButtonElement, runningLabel = '处理中')
 
   const update = () => {
     const elapsedSeconds = ((stopped ? finalElapsed : performance.now() - start) / 1000);
-    button.textContent = `${runningLabel}... (${elapsedSeconds.toFixed(1)}s)`;
+    if (runningLabel) {
+      button.textContent = `${runningLabel}... (${elapsedSeconds.toFixed(1)}s)`;
+    } else {
+      // 只显示时间，不显示文字
+      button.textContent = `${elapsedSeconds.toFixed(1)}s`;
+    }
   };
 
   update();
@@ -2066,9 +2071,19 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   floatingWindow.querySelectorAll('.floating-quick-btn').forEach(btnElement => {
     const btn = btnElement as HTMLButtonElement;
     btn.addEventListener('click', async (e) => {
-      const target = e.target as HTMLButtonElement;
-      const action = target.dataset.action;
-      const amount = target.dataset.amount;
+      // 阻止事件冒泡，避免重复触发
+      e.stopPropagation();
+      e.preventDefault();
+
+      // 检查按钮是否已禁用，防止重复点击
+      if (btn.disabled) {
+        logger.debug('[Floating Window] 按钮已禁用，忽略重复点击');
+        return;
+      }
+
+      // 使用 btn 而不是 e.target，确保获取正确的按钮数据
+      const action = btn.dataset.action;
+      const amount = btn.dataset.amount;
 
       if (!amount) return;
 
@@ -2085,7 +2100,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       // 禁用按钮并启动计时器
       btn.setAttribute('disabled', 'true');
       const originalText = btn.textContent || '';
-      const timer = startButtonTimer(btn, action === 'buy' ? '买入中' : '卖出中');
+
+      // 直接显示计时，不显示"买入中"/"卖出中"文字
+      const timer = startButtonTimer(btn, '');
 
       try {
         // 获取当前设置
