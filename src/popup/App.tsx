@@ -493,14 +493,14 @@ export default function App() {
                 <h3 style={{ margin: 0, fontSize: '14px' }}>RPC 节点设置</h3>
                 <button
                   onClick={() => setShowRpcSettings(false)}
-                  style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', padding: '0 5px' }}
+                  className="btn-close-small"
                 >
                   ✕
                 </button>
               </div>
 
               <p className="hint" style={{ fontSize: '12px', marginBottom: '10px' }}>
-                自定义 BSC RPC 节点地址。留空则使用默认节点。
+                BSC RPC 节点地址，留空则使用默认节点。
               </p>
 
               <div className="input-group">

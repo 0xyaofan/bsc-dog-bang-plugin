@@ -164,6 +164,30 @@ button:disabled {
   border-color: rgba(148, 163, 184, 0.3);
 }
 
+.btn-close-small {
+  width: auto;
+  min-width: auto;
+  background: none;
+  border: none;
+  color: #6b7280;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  margin: 0;
+  transition: color 0.2s;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.btn-close-small:hover {
+  color: #ef4444;
+  background: none;
+  transform: none;
+  box-shadow: none;
+}
+
 .btn-danger {
   background: #a13c45;
   color: #fff;
