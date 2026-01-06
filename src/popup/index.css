@@ -148,6 +148,22 @@ button:disabled {
   box-shadow: 0 6px 14px rgba(74, 168, 119, 0.4);
 }
 
+.btn-settings {
+  background: rgba(15, 23, 42, 0.6);
+  color: #9ca3af;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: none;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.btn-settings:hover {
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5f5;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
 .btn-danger {
   background: #a13c45;
   color: #fff;

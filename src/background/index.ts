@@ -1533,7 +1533,7 @@ async function callOffscreenRpc<T>(task: string, payload: any, timeout = BACKGRO
 
 // RPC 节点管理
 let currentRpcIndex = 0;
-function applyUserSettings(
+async function applyUserSettings(
   settings: UserSettings,
   options: { refreshClients?: boolean; resetNonce?: boolean } = {}
 ) {
@@ -1551,6 +1551,19 @@ function applyUserSettings(
   if (!allRpcNodes.length) {
     allRpcNodes = [NETWORK_CONFIG.BSC_RPC];
   }
+
+  // 检查是否有用户自定义的 RPC 节点
+  try {
+    const result = await chrome.storage.local.get(['customRpcUrl']);
+    if (result.customRpcUrl && typeof result.customRpcUrl === 'string') {
+      // 将自定义 RPC 放在列表最前面
+      allRpcNodes = [result.customRpcUrl, ...allRpcNodes];
+      logger.debug('[Background] 使用自定义 RPC 节点:', result.customRpcUrl);
+    }
+  } catch (error) {
+    logger.warn('[Background] 读取自定义 RPC 配置失败:', error);
+  }
+
   currentRpcIndex = 0;
   if (options.resetNonce) {
     resetWalletNonce('settings_update');

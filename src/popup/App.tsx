@@ -37,6 +37,9 @@ export default function App() {
   const [isUnlocking, setUnlocking] = useState(false);
   const [sidePanelSupported, setSidePanelSupported] = useState<boolean>(false);
   const [floatingWindowSupported, setFloatingWindowSupported] = useState<boolean>(false);
+  const [showRpcSettings, setShowRpcSettings] = useState(false);
+  const [customRpcUrl, setCustomRpcUrl] = useState('');
+  const [isSavingRpc, setIsSavingRpc] = useState(false);
 
   const { message: importMessage, showMessage: showImportMessage } = useTimedMessage();
   const { message: unlockMessage, showMessage: showUnlockMessage } = useTimedMessage();
@@ -125,6 +128,17 @@ export default function App() {
   useEffect(() => {
     evaluateLocalStatus({ silent: true });
   }, [evaluateLocalStatus]);
+
+  useEffect(() => {
+    // 加载自定义 RPC 配置
+    const loadRpcConfig = async () => {
+      const result = await chrome.storage.local.get(['customRpcUrl']);
+      if (result.customRpcUrl) {
+        setCustomRpcUrl(result.customRpcUrl);
+      }
+    };
+    loadRpcConfig();
+  }, []);
 
   useEffect(() => {
     setSidePanelSupported(Boolean(chrome?.sidePanel?.open));
@@ -250,6 +264,41 @@ export default function App() {
       showWarningMessage(`移除失败: ${(error as Error).message}`, 'error');
     } finally {
       await checkWalletStatus();
+    }
+  };
+
+  const handleSaveRpc = async () => {
+    if (!customRpcUrl) {
+      showWarningMessage('请输入 RPC 地址', 'error');
+      return;
+    }
+
+    if (!customRpcUrl.startsWith('http://') && !customRpcUrl.startsWith('https://')) {
+      showWarningMessage('RPC 地址必须以 http:// 或 https:// 开头', 'error');
+      return;
+    }
+
+    setIsSavingRpc(true);
+    try {
+      await chrome.storage.local.set({ customRpcUrl });
+      showWarningMessage('RPC 配置已保存，重新解锁后生效', 'success');
+      setTimeout(() => {
+        setShowRpcSettings(false);
+      }, 1500);
+    } catch (error) {
+      showWarningMessage(`保存失败: ${(error as Error).message}`, 'error');
+    } finally {
+      setIsSavingRpc(false);
+    }
+  };
+
+  const handleResetRpc = async () => {
+    try {
+      await chrome.storage.local.remove('customRpcUrl');
+      setCustomRpcUrl('');
+      showWarningMessage('已恢复默认 RPC 节点', 'success');
+    } catch (error) {
+      showWarningMessage(`重置失败: ${(error as Error).message}`, 'error');
     }
   };
 
@@ -406,25 +455,78 @@ export default function App() {
 
       {view === 'locked' && (
         <section className="panel">
-          <p className="hint">钱包已锁定，请输入密码解锁</p>
+          {!showRpcSettings && (
+            <>
+              <p className="hint">钱包已锁定，请输入密码解锁</p>
 
-          {!isUnlocking && (
-            <div className="input-group">
-              <label>密码</label>
-              <input
-                type="password"
-                value={unlockPassword}
-                placeholder="输入密码"
-                onChange={(e) => setUnlockPassword(e.target.value)}
-              />
-            </div>
+              {!isUnlocking && (
+                <div className="input-group">
+                  <label>密码</label>
+                  <input
+                    type="password"
+                    value={unlockPassword}
+                    placeholder="输入密码"
+                    onChange={(e) => setUnlockPassword(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {isUnlocking && <p className="hint">正在解锁，请稍候...</p>}
+
+              <button className="btn-unlock" onClick={handleUnlock} disabled={isUnlocking}>
+                {isUnlocking ? '解锁中...' : '解锁'}
+              </button>
+
+              <button
+                className="btn-settings"
+                onClick={() => setShowRpcSettings(true)}
+                style={{ marginTop: '10px' }}
+              >
+                ⚙️ RPC 节点设置
+              </button>
+            </>
           )}
 
-          {isUnlocking && <p className="hint">正在解锁，请稍候...</p>}
+          {showRpcSettings && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h3 style={{ margin: 0, fontSize: '14px' }}>RPC 节点设置</h3>
+                <button
+                  onClick={() => setShowRpcSettings(false)}
+                  style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', padding: '0 5px' }}
+                >
+                  ✕
+                </button>
+              </div>
 
-          <button className="btn-unlock" onClick={handleUnlock} disabled={isUnlocking}>
-            {isUnlocking ? '解锁中...' : '解锁'}
-          </button>
+              <p className="hint" style={{ fontSize: '12px', marginBottom: '10px' }}>
+                自定义 BSC RPC 节点地址。留空则使用默认节点。
+              </p>
+
+              <div className="input-group">
+                <label>RPC 地址</label>
+                <input
+                  type="text"
+                  value={customRpcUrl}
+                  placeholder="https://bsc-dataseed.bnbchain.org/"
+                  onChange={(e) => setCustomRpcUrl(e.target.value.trim())}
+                />
+              </div>
+
+              <div className="button-row">
+                <button className="btn-secondary" onClick={handleResetRpc}>
+                  恢复默认
+                </button>
+                <button className="btn-unlock" onClick={handleSaveRpc} disabled={isSavingRpc}>
+                  {isSavingRpc ? '保存中...' : '保存'}
+                </button>
+              </div>
+
+              <p className="hint" style={{ fontSize: '11px', marginTop: '10px', color: '#9ca3af' }}>
+                💡 提示：修改后需要重新解锁钱包才能生效
+              </p>
+            </>
+          )}
 
           {renderPanelMessage(unlockMessage)}
         </section>
