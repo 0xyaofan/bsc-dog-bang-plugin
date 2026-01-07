@@ -77,9 +77,7 @@ export const NETWORK_CONFIG = {
   // RPC 备用节点列表
   BSC_RPC_FALLBACK: [
     'https://bsc-mainnet.nodereal.io/v1/cafa270f244d4dd0b3edd33c1665767f/',
-    // 'https://bnb-mainnet.g.alchemy.com/v2/ePEV3drvPr5vzDCL7TfQDMhtMYhbBQS5/',
-    // 'https://bsc-dataseed.bnbchain.org/',
-    // 'https://bsc-mainnet.nodereal.io/v1/cafa270f244d4dd0b3edd33c1665767f/',
+    'https://bsc-dataseed.bnbchain.org/',
     // 'https://bsc-rpc.publicnode.com/',
   ]
 };

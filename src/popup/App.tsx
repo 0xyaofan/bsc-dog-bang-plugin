@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import './index.css';
+import { loadUserSettings, saveUserSettings } from '../shared/user-settings.js';
 
 declare const chrome: any;
 
@@ -130,11 +131,15 @@ export default function App() {
   }, [evaluateLocalStatus]);
 
   useEffect(() => {
-    // 加载自定义 RPC 配置
+    // 加载 RPC 配置
     const loadRpcConfig = async () => {
-      const result = await chrome.storage.local.get(['customRpcUrl']);
-      if (result.customRpcUrl) {
-        setCustomRpcUrl(result.customRpcUrl);
+      try {
+        const settings = await loadUserSettings();
+        if (settings.system.primaryRpc) {
+          setCustomRpcUrl(settings.system.primaryRpc);
+        }
+      } catch (error) {
+        console.error('[Popup] 加载 RPC 配置失败:', error);
       }
     };
     loadRpcConfig();
@@ -280,7 +285,9 @@ export default function App() {
 
     setIsSavingRpc(true);
     try {
-      await chrome.storage.local.set({ customRpcUrl });
+      const settings = await loadUserSettings();
+      settings.system.primaryRpc = customRpcUrl;
+      await saveUserSettings(settings);
       showWarningMessage('RPC 配置已保存，重新解锁后生效', 'success');
       setTimeout(() => {
         setShowRpcSettings(false);
@@ -294,7 +301,9 @@ export default function App() {
 
   const handleResetRpc = async () => {
     try {
-      await chrome.storage.local.remove('customRpcUrl');
+      const settings = await loadUserSettings();
+      settings.system.primaryRpc = '';
+      await saveUserSettings(settings);
       setCustomRpcUrl('');
       showWarningMessage('已恢复默认 RPC 节点', 'success');
     } catch (error) {
