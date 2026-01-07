@@ -13,6 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+## [1.1.1] - 2025-01-07
+
+### Added
+- **RPC 节点设置界面** - 在解锁界面提供 RPC 节点配置
+  - 无需解锁钱包即可更改 RPC 节点
+  - 支持自定义 BSC RPC 节点地址
+  - 一键恢复默认节点
+- **浮动窗口增强**
+  - 买卖按钮显示交易计时器（精确到 0.1 秒）
+  - 标题行显示 BNB 余额和代币余额
+  - 实时余额更新
+
+### Changed
+- **统一 RPC 配置管理**
+  - RPC 设置统一使用 `UserSettings.system.primaryRpc`
+  - 移除冗余的 `customRpcUrl` 存储逻辑
+  - 简化 RPC 节点优先级处理流程
+
+### Fixed
+- 修复浮动窗口按钮重复交易问题
+- 修复交易计时显示超出按钮宽度
+- 优化 RPC 设置界面关闭按钮样式
+
 ## [1.1.0] - 2025-01-05
 
 ### Added
@@ -129,12 +152,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.1` - RPC configuration management (2025-01-07)
 - `1.1.0` - Floating trading window (2025-01-05)
 - `1.0.0` - First stable release (2024-12-31)
 - `0.9.0-beta` - Beta testing (2024-12-25)
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.0 to 1.1.1
+
+1. Download version 1.1.1 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. RPC 配置会自动迁移到新的统一存储
+5. 在解锁界面可以修改 RPC 节点设置
 
 ### From 1.0.x to 1.1.0
 
@@ -163,7 +195,8 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.1
 [1.1.0]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.0
 [1.0.0]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.0.0
 [0.9.0-beta]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v0.9.0-beta
