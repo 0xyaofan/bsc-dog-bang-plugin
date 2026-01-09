@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+## [1.1.2] - 2025-01-09
+
+### Added
+- **USDC 筹集币种支持** - 新增 USDC 作为交易筹集币种
+  - 添加 USDC (0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d) 合约地址
+  - 配置 PancakeSwap V3 路由，手续费等级 100 (0.01%)
+  - USDC 可用于 Four.meme 内盘交易
+  - USDC 加入桥接代币和稳定币列表
+  - 支持 USDC 自动兑换为 BNB
+
+### Changed
+- 筹集币种列表顺序：CAKE, USDT, **USDC**, USD1, ASTER, United Stables (U)
+
 ## [1.1.1] - 2025-01-07
 
 ### Added
@@ -152,6 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.2` - USDC quote token support (2025-01-09)
 - `1.1.1` - RPC configuration management (2025-01-07)
 - `1.1.0` - Floating trading window (2025-01-05)
 - `1.0.0` - First stable release (2024-12-31)
@@ -159,6 +173,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.1 to 1.1.2
+
+1. Download version 1.1.2 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. USDC 将自动添加到筹集币种列表
+5. 可以在交易时选择使用 USDC
 
 ### From 1.1.0 to 1.1.1
 
@@ -195,7 +217,8 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.2
 [1.1.1]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.1
 [1.1.0]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.0
 [1.0.0]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.0.0
