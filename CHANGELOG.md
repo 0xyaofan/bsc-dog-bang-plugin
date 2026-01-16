@@ -13,6 +13,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+## [1.1.3] - 2025-01-17
+
+### Added
+- **新平台支持**
+  - Axiom.trade 平台集成
+  - Debot.ai 平台集成
+  - 扩展支持的交易平台列表
+- **钱包地址复制功能**
+  - Popup 界面支持点击钱包地址一键复制
+  - 复制成功/失败即时提示
+
+### Changed
+- **SidePanel 锁定遮罩优化**
+  - 遮罩透明度提升至 98%，可清晰看到底层内容
+  - 添加 4px 轻微模糊效果（glassmorphism 设计）
+  - 锁定提示文字样式与 Tab 标题保持一致（黄色 #facc15）
+  - 移除消息背景框，添加文字阴影提升可读性
+  - 遮罩仅覆盖交易 Tab 内容区域，不影响导航和信息栏
+- **浮动窗口输入框优化**
+  - 输入框宽度自适应，填充剩余空间
+  - 固定值按钮保持 50px 一致宽度
+- **Popup UI 优化**
+  - 二级按钮使用蓝色渐变背景
+  - 提升视觉层次和交互体验
+
+### Fixed
+- **SidePanel 锁定遮罩显示问题**
+  - 添加钱包状态轮询机制（每 3 秒检查一次）
+  - SidePanel 作为特殊扩展页面无法接收广播消息，改用主动轮询
+  - 添加页面可见性监听，自动暂停/恢复轮询以节省资源
+  - 添加详细调试日志，便于问题排查
+- **空指针错误修复**
+  - 修复钱包状态处理中的 "Cannot read properties of null (reading 'address')" 错误
+  - 在 `src/content/index.ts` 中添加可选链操作符（?.）
+  - 确保安全访问可能为 null 的对象属性
+
 ## [1.1.2] - 2025-01-16
 
 ### Added
@@ -180,6 +216,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.3` - Platform support & UI optimization (2025-01-17)
 - `1.1.2` - Token approval management (2025-01-16)
 - `1.1.1` - RPC configuration management (2025-01-07)
 - `1.1.0` - Floating trading window (2025-01-05)
@@ -188,6 +225,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.2 to 1.1.3
+
+1. Download version 1.1.3 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. 钱包锁定遮罩显示修复自动生效
+5. 新平台（Axiom.trade、Debot.ai）支持自动启用
+6. Popup 界面点击钱包地址即可复制
 
 ### From 1.1.1 to 1.1.2
 
@@ -233,7 +279,8 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.3
 [1.1.2]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.2
 [1.1.1]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.1
 [1.1.0]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.0
