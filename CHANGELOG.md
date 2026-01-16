@@ -13,18 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
-## [1.1.2] - 2025-01-09
+## [1.1.2] - 2025-01-16
 
 ### Added
-- **USDC 筹集币种支持** - 新增 USDC 作为交易筹集币种
-  - 添加 USDC (0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d) 合约地址
-  - 配置 PancakeSwap V3 路由，手续费等级 100 (0.01%)
-  - USDC 可用于 Four.meme 内盘交易
-  - USDC 加入桥接代币和稳定币列表
-  - 支持 USDC 自动兑换为 BNB
+- **代币授权管理功能** - 全新的授权控制和管理界面
+  - 三种自动授权模式配置
+    - `buy` - 买入时自动授权
+    - `sell` - 卖出时自动授权
+    - `switch` - 切换通道时自动授权
+  - 实时授权状态显示
+    - 链上授权状态查询
+    - "已授权"/"授权中..."状态提示
+  - 手动授权/撤销功能
+    - 一键手动授权代币
+    - 一键撤销代币授权
+    - 区分授权和撤销操作的 UI 显示
+  - 授权状态缓存失效机制
+    - 授权/撤销后自动清除缓存
+    - 确保显示最新链上状态
 
 ### Changed
-- 筹集币种列表顺序：CAKE, USDT, **USDC**, USD1, ASTER, United Stables (U)
+- 优化授权状态查询逻辑，改为查询实际链上状态而非假设状态
+- 授权按钮样式优化，绿色授权按钮，红色撤销按钮
+- "已授权"状态显示为纯文本，无背景色
+
+### Fixed
+- 修复手动授权后状态不更新的问题
+- 修复买入时自动授权 UI 状态不显示的问题
 
 ## [1.1.1] - 2025-01-07
 
@@ -165,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
-- `1.1.2` - USDC quote token support (2025-01-09)
+- `1.1.2` - Token approval management (2025-01-16)
 - `1.1.1` - RPC configuration management (2025-01-07)
 - `1.1.0` - Floating trading window (2025-01-05)
 - `1.0.0` - First stable release (2024-12-31)
@@ -179,8 +194,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 1. Download version 1.1.2 from Releases
 2. Remove old version from Chrome
 3. Load new version
-4. USDC 将自动添加到筹集币种列表
-5. 可以在交易时选择使用 USDC
+4. 代币授权管理功能自动启用
+5. 可在设置中配置自动授权模式（buy/sell/switch）
+6. 交易面板将显示授权状态和管理按钮
 
 ### From 1.1.0 to 1.1.1
 
