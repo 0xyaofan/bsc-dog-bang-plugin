@@ -1001,13 +1001,16 @@ async function handleManualApprove() {
     if (response && response.success) {
       showStatus('授权成功', 'success');
 
-      // 查询实际的链上授权状态，而不是假设已授权
-      await loadTokenApprovalStatus(tokenAddress, channel);
+      // 延迟查询链上授权状态，确保 RPC 节点同步
+      // 后端已经等待交易确认，但不同 RPC 节点间可能有同步延迟
+      setTimeout(async () => {
+        await loadTokenApprovalStatus(tokenAddress, channel);
 
-      // 刷新代币信息以更新余额等
-      if (currentTokenAddress) {
-        loadTokenInfo(currentTokenAddress);
-      }
+        // 刷新代币信息以更新余额等
+        if (currentTokenAddress) {
+          loadTokenInfo(currentTokenAddress);
+        }
+      }, 1500); // 延迟 1.5 秒
     } else {
       showStatus(response?.error || '授权失败', 'error');
       updateTokenApprovalDisplay(false, false, response?.error);
@@ -1046,13 +1049,15 @@ async function handleRevokeApproval() {
     if (response && response.success) {
       showStatus('撤销授权成功', 'success');
 
-      // 查询实际的链上授权状态
-      await loadTokenApprovalStatus(tokenAddress, channel);
+      // 延迟查询链上授权状态，确保 RPC 节点同步
+      setTimeout(async () => {
+        await loadTokenApprovalStatus(tokenAddress, channel);
 
-      // 刷新代币信息以更新余额等
-      if (currentTokenAddress) {
-        loadTokenInfo(currentTokenAddress);
-      }
+        // 刷新代币信息以更新余额等
+        if (currentTokenAddress) {
+          loadTokenInfo(currentTokenAddress);
+        }
+      }, 1500); // 延迟 1.5 秒
     } else {
       showStatus(response?.error || '撤销授权失败', 'error');
       updateTokenApprovalDisplay(true, false);
@@ -1105,8 +1110,10 @@ async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
     if (response && response.success) {
       logger.debug('[Dog Bang] 自动授权成功');
 
-      // 查询实际的链上授权状态
-      await loadTokenApprovalStatus(tokenAddress, currentChannel);
+      // 延迟查询链上授权状态，确保 RPC 节点同步
+      setTimeout(async () => {
+        await loadTokenApprovalStatus(tokenAddress, currentChannel);
+      }, 1500);
     } else {
       logger.debug('[Dog Bang] 自动授权失败:', response?.error);
       updateTokenApprovalDisplay(false, false, response?.error);
@@ -2730,12 +2737,14 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
       if (response && response.success && response.needApproval) {
         logger.debug('[Dog Bang] ✓ 自动授权完成:', response.message);
 
-        // 查询实际的链上授权状态
-        await loadTokenApprovalStatus(tokenAddress, channel);
+        // 延迟查询链上授权状态，确保 RPC 节点同步
+        setTimeout(async () => {
+          await loadTokenApprovalStatus(tokenAddress, channel);
+        }, 1500);
       } else if (response?.message) {
         logger.debug('[Dog Bang] 授权状态:', response.message);
 
-        // 即使不需要授权，也更新一下状态
+        // 即使不需要授权，也更新一下状态（无需延迟，因为没有新交易）
         await loadTokenApprovalStatus(tokenAddress, channel);
       }
     } catch (error) {
