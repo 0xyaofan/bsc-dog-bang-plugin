@@ -31,7 +31,7 @@ export type TradingSettings = {
   defaultSlippageValue: string;
   defaultBuyGasValue: string;
   defaultSellGasValue: string;
-  autoApproveMode: 'buy' | 'sell';
+  autoApproveMode: 'buy' | 'sell' | 'switch';
   /**
    * @deprecated 仅用于兼容旧版本配置
    */
@@ -292,13 +292,11 @@ export function normalizeUserSettings(raw?: Partial<UserSettings> | null): UserS
     raw.trading?.defaultSellGasValue ?? legacyGasDefault,
     sellGasFallback
   );
-  let autoApproveMode: 'buy' | 'sell' = 'buy';
+  let autoApproveMode: 'buy' | 'sell' | 'switch' = 'buy';
   const modeRaw = (raw.trading as any)?.autoApproveMode;
   if (typeof modeRaw === 'string') {
-    if (modeRaw === 'buy' || modeRaw === 'sell') {
+    if (modeRaw === 'buy' || modeRaw === 'sell' || modeRaw === 'switch') {
       autoApproveMode = modeRaw;
-    } else if (modeRaw === 'switch') {
-      autoApproveMode = 'sell';
     }
   } else if ((raw.trading as any)?.autoApproveEnabled === false) {
     autoApproveMode = 'buy';

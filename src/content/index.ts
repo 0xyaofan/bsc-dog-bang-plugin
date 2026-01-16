@@ -874,12 +874,247 @@ async function loadTokenInfo(tokenAddress) {
       }
       scheduleSellEstimate();
 
+      // 同时更新授权状态
+      const panelElement = document.getElementById('dog-bang-panel');
+      const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
+      const currentChannel = channelSelector?.value || 'pancake';
+      loadTokenApprovalStatus(tokenAddress, currentChannel);
+
       return currentTokenInfo;
     }
   } catch (error) {
     logger.error('[Dog Bang] Error loading token info:', error);
   }
   return null;
+}
+
+// ========== 授权状态加载和显示 ==========
+async function loadTokenApprovalStatus(tokenAddress: string, channel?: string): Promise<boolean> {
+  try {
+    const panelElement = document.getElementById('dog-bang-panel');
+    const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
+    const currentChannel = channel || channelSelector?.value || 'pancake';
+
+    logger.debug('[Dog Bang] 查询授权状态:', { tokenAddress, channel: currentChannel });
+
+    const response = await safeSendMessage({
+      action: 'check_token_approval',
+      data: {
+        tokenAddress,
+        channel: currentChannel
+      }
+    });
+
+    if (response && response.success) {
+      const approved = response.approved === true;
+      updateTokenApprovalDisplay(approved, false);
+      return approved;
+    } else {
+      updateTokenApprovalDisplay(false, false, response?.error);
+      return false;
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] 查询授权状态失败:', error);
+    updateTokenApprovalDisplay(false, false, '查询失败');
+    return false;
+  }
+}
+
+function updateTokenApprovalDisplay(approved: boolean, approving: boolean = false, error?: string, operationType?: 'approve' | 'revoke') {
+  const statusElement = document.getElementById('token-approval-status');
+  const approveButton = document.getElementById('btn-manual-approve') as HTMLButtonElement | null;
+  const revokeButton = document.getElementById('btn-revoke-approve') as HTMLButtonElement | null;
+
+  if (!statusElement) return;
+
+  if (approving) {
+    // 根据操作类型显示不同的文本
+    const loadingText = operationType === 'revoke' ? '撤销中...' : '授权中...';
+    statusElement.textContent = loadingText;
+    statusElement.className = 'approval-status approving';
+    statusElement.style.display = 'inline-block';
+    if (approveButton) {
+      approveButton.style.display = 'none';
+    }
+    if (revokeButton) {
+      revokeButton.style.display = 'none';
+    }
+  } else if (error) {
+    statusElement.textContent = '';
+    statusElement.style.display = 'none';
+    if (approveButton) {
+      approveButton.style.display = 'inline-block';
+      approveButton.disabled = false;
+    }
+    if (revokeButton) {
+      revokeButton.style.display = 'none';
+    }
+  } else if (approved) {
+    statusElement.textContent = '已授权';
+    statusElement.className = 'approval-status approved';
+    statusElement.style.display = 'inline-block';
+    if (approveButton) {
+      approveButton.style.display = 'none';
+    }
+    if (revokeButton) {
+      revokeButton.style.display = 'inline-block';
+      revokeButton.disabled = false;
+    }
+  } else {
+    // 未授权时不显示文本，只显示授权按钮
+    statusElement.textContent = '';
+    statusElement.style.display = 'none';
+    if (approveButton) {
+      approveButton.style.display = 'inline-block';
+      approveButton.disabled = false;
+    }
+    if (revokeButton) {
+      revokeButton.style.display = 'none';
+    }
+  }
+}
+
+// 手动授权
+async function handleManualApprove() {
+  const tokenAddress = currentTokenAddress;
+  if (!tokenAddress) {
+    showStatus('未找到代币地址', 'error');
+    return;
+  }
+
+  const panelElement = document.getElementById('dog-bang-panel');
+  const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
+  const channel = channelSelector?.value || 'pancake';
+
+  updateTokenApprovalDisplay(false, true, undefined, 'approve');
+  showStatus('正在授权...', 'info');
+
+  try {
+    const response = await safeSendMessage({
+      action: 'approve_token',
+      data: {
+        tokenAddress,
+        channel
+      }
+    });
+
+    if (response && response.success) {
+      showStatus('授权成功', 'success');
+
+      // 查询实际的链上授权状态，而不是假设已授权
+      await loadTokenApprovalStatus(tokenAddress, channel);
+
+      // 刷新代币信息以更新余额等
+      if (currentTokenAddress) {
+        loadTokenInfo(currentTokenAddress);
+      }
+    } else {
+      showStatus(response?.error || '授权失败', 'error');
+      updateTokenApprovalDisplay(false, false, response?.error);
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] 手动授权失败:', error);
+    showStatus('授权失败', 'error');
+    updateTokenApprovalDisplay(false, false, '授权失败');
+  }
+}
+
+// 撤销授权
+async function handleRevokeApproval() {
+  const tokenAddress = currentTokenAddress;
+  if (!tokenAddress) {
+    showStatus('未找到代币地址', 'error');
+    return;
+  }
+
+  const panelElement = document.getElementById('dog-bang-panel');
+  const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
+  const channel = channelSelector?.value || 'pancake';
+
+  updateTokenApprovalDisplay(false, true, undefined, 'revoke');
+  showStatus('正在撤销授权...', 'info');
+
+  try {
+    const response = await safeSendMessage({
+      action: 'revoke_token_approval',
+      data: {
+        tokenAddress,
+        channel
+      }
+    });
+
+    if (response && response.success) {
+      showStatus('撤销授权成功', 'success');
+
+      // 查询实际的链上授权状态
+      await loadTokenApprovalStatus(tokenAddress, channel);
+
+      // 刷新代币信息以更新余额等
+      if (currentTokenAddress) {
+        loadTokenInfo(currentTokenAddress);
+      }
+    } else {
+      showStatus(response?.error || '撤销授权失败', 'error');
+      updateTokenApprovalDisplay(true, false);
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] 撤销授权失败:', error);
+    showStatus('撤销授权失败', 'error');
+    updateTokenApprovalDisplay(true, false);
+  }
+}
+
+// 切换时自动授权（如果配置开启）
+async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
+  const settings = userSettings || DEFAULT_USER_SETTINGS;
+  const autoApproveMode = settings.trading.autoApproveMode;
+
+  logger.debug('[Dog Bang] Auto approve mode:', autoApproveMode);
+
+  // 只有在 'switch' 模式下才自动授权
+  if (autoApproveMode !== 'switch') {
+    return;
+  }
+
+  const panelElement = document.getElementById('dog-bang-panel');
+  const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
+  const currentChannel = channel || channelSelector?.value || 'pancake';
+
+  // 先查询当前授权状态
+  const approved = await loadTokenApprovalStatus(tokenAddress, currentChannel);
+
+  // 如果已授权,则不需要重新授权
+  if (approved) {
+    logger.debug('[Dog Bang] 代币已授权,跳过自动授权');
+    return;
+  }
+
+  logger.debug('[Dog Bang] 执行切换时自动授权:', { tokenAddress, channel: currentChannel });
+
+  updateTokenApprovalDisplay(false, true, undefined, 'approve');
+
+  try {
+    const response = await safeSendMessage({
+      action: 'approve_token',
+      data: {
+        tokenAddress,
+        channel: currentChannel
+      }
+    });
+
+    if (response && response.success) {
+      logger.debug('[Dog Bang] 自动授权成功');
+
+      // 查询实际的链上授权状态
+      await loadTokenApprovalStatus(tokenAddress, currentChannel);
+    } else {
+      logger.debug('[Dog Bang] 自动授权失败:', response?.error);
+      updateTokenApprovalDisplay(false, false, response?.error);
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] 自动授权异常:', error);
+    updateTokenApprovalDisplay(false, false, '自动授权失败');
+  }
 }
 
 function clearRouteRefreshTimer() {
@@ -1647,10 +1882,6 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
             <span>钱包:</span>
             <span id="wallet-address">加载中...</span>
           </div>
-          <div class="status-row">
-            <span>BNB:</span>
-            <span id="bnb-balance">0.00</span>
-          </div>
         </div>
         <div class="token-info">
           <div class="info-row">
@@ -1667,12 +1898,19 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
             </span>
           </div>
           <div class="info-row">
-            <span>余额:</span>
-            <span id="token-balance">0.00</span>
+            <span>授权:</span>
+            <div class="approval-container">
+              <span id="token-approval-status" class="approval-status">查询中...</span>
+              <button id="btn-manual-approve" class="btn-manual-approve" style="display:none;" title="手动授权">授权</button>
+              <button id="btn-revoke-approve" class="btn-revoke-approve" style="display:none;" title="撤销授权">撤销</button>
+            </div>
           </div>
         </div>
         <div class="trade-section">
-          <label>买入 (BNB)</label>
+          <div class="label-with-balance">
+            <label>买入 (BNB)</label>
+            <span id="bnb-balance" class="balance-inline">0.00</span>
+          </div>
           <div class="input-group">
             <input type="number" id="buy-amount" placeholder="0.1" step="0.01" min="0" value="${defaultBuyValue}"/>
             <div class="quick-amounts">
@@ -1682,7 +1920,10 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
           <button id="btn-buy" class="btn-trade btn-buy" disabled>买入</button>
         </div>
         <div class="trade-section">
-          <label>卖出 (%) <span id="sell-estimate" class="sell-estimate">≈ -- BNB</span></label>
+          <div class="label-with-balance">
+            <label>卖出 (%) <span id="sell-estimate" class="sell-estimate">≈ -- BNB</span></label>
+            <span id="token-balance" class="balance-inline">0.00</span>
+          </div>
           <div class="input-group">
             <input type="number" id="sell-percent" placeholder="100" step="1" min="1" max="100" value="${defaultSellValue}" />
             <div class="quick-amounts">
@@ -1755,6 +1996,12 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
   loadTokenInfo(tokenAddress);
   updateSellEstimateDisplay(null);
   stopSellEstimateTimer();
+
+  // 查询授权状态和执行切换时自动授权
+  const channelSelector = panel.querySelector('#channel-selector') as HTMLSelectElement | null;
+  const currentChannel = defaultChannelId || channelSelector?.value || 'pancake';
+  loadTokenApprovalStatus(tokenAddress, currentChannel);
+  autoApproveOnSwitch(tokenAddress, currentChannel);
 
 }
 
@@ -2407,8 +2654,22 @@ function attachEventListeners() {
     const activeToken = getActiveTokenAddress();
     if (activeToken) {
       checkChannelApproval(activeToken, newChannel);
+      // 重新查询授权状态
+      loadTokenApprovalStatus(activeToken, newChannel);
     }
     scheduleSellEstimate();
+  });
+
+  // 手动授权按钮监听
+  const manualApproveButton = document.getElementById('btn-manual-approve');
+  manualApproveButton?.addEventListener('click', () => {
+    handleManualApprove();
+  });
+
+  // 撤销授权按钮监听
+  const revokeApproveButton = document.getElementById('btn-revoke-approve');
+  revokeApproveButton?.addEventListener('click', () => {
+    handleRevokeApproval();
   });
 }
 
@@ -2446,6 +2707,18 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
     try {
       logger.debug('[Dog Bang] 检查通道授权:', { tokenAddress, channel });
 
+      // 先查询当前授权状态
+      const currentApprovalStatus = await loadTokenApprovalStatus(tokenAddress, channel);
+
+      // 如果已授权，不需要重新授权
+      if (currentApprovalStatus) {
+        logger.debug('[Dog Bang] 代币已授权，跳过');
+        return;
+      }
+
+      // 显示授权中状态
+      updateTokenApprovalDisplay(false, true, undefined, 'approve');
+
       const response = await safeSendMessage({
         action: 'approve_token',
         data: {
@@ -2456,11 +2729,20 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
 
       if (response && response.success && response.needApproval) {
         logger.debug('[Dog Bang] ✓ 自动授权完成:', response.message);
+
+        // 查询实际的链上授权状态
+        await loadTokenApprovalStatus(tokenAddress, channel);
       } else if (response?.message) {
         logger.debug('[Dog Bang] 授权状态:', response.message);
+
+        // 即使不需要授权，也更新一下状态
+        await loadTokenApprovalStatus(tokenAddress, channel);
       }
     } catch (error) {
       logger.debug('[Dog Bang] 授权检查异常:', error.message);
+
+      // 授权失败，显示错误
+      updateTokenApprovalDisplay(false, false, '授权失败');
     } finally {
       if (pendingApprovalKey === requestKey) {
         pendingApprovalKey = null;

@@ -2332,6 +2332,8 @@ const ACTION_HANDLER_MAP = {
   buy_token: handleBuyToken,
   sell_token: handleSellToken,
   approve_token: handleApproveToken,
+  check_token_approval: handleCheckTokenApproval,
+  revoke_token_approval: handleRevokeTokenApproval,
   init_tx_watcher: handleInitTxWatcher,
   get_tx_watcher_status: handleGetTxWatcherStatus,
   get_token_info: handleGetTokenInfo,
@@ -3297,6 +3299,182 @@ async function handleApproveToken({ tokenAddress, channel = 'pancake' }) {
       });
     }
   });
+}
+
+// 撤销代币授权
+async function handleRevokeTokenApproval({ tokenAddress, channel = 'pancake' }) {
+  return nonceMutex.runExclusive(async () => {
+    let revokeLockApplied = false;
+
+    const ensureRevokeLock = () => {
+      if (!revokeLockApplied) {
+        setManualTokenLock(tokenAddress, 'approve', '正在撤销授权...');
+        revokeLockApplied = true;
+      }
+    };
+
+    try {
+      logger.debug('[Revoke] 开始撤销授权:', { tokenAddress, channel });
+
+      // 使用内存缓存检查钱包状态
+      if (!walletCache.encryptedKey) {
+        return { success: false, error: '请先导入钱包' };
+      }
+
+      if (walletCache.walletLocked === true) {
+        return { success: false, error: '钱包已锁定，请先解锁' };
+      }
+
+      if (!walletClient || !walletAccount) {
+        return { success: false, error: '钱包未加载，请重新解锁' };
+      }
+
+      if (!publicClient) {
+        await createClients();
+      }
+
+      // 获取授权地址（根据通道）
+      let spenderAddress;
+      switch (channel) {
+        case 'pancake':
+          spenderAddress = CONTRACTS.PANCAKE_ROUTER;
+          break;
+        case 'four':
+        case 'xmode':
+          spenderAddress = CONTRACTS.FOUR_TOKEN_MANAGER_V2;
+          break;
+        case 'flap':
+          spenderAddress = CONTRACTS.FLAP_PORTAL;
+          break;
+        default:
+          spenderAddress = CONTRACTS.PANCAKE_ROUTER;
+      }
+
+      // 执行撤销授权（设置为0）
+      ensureRevokeLock();
+      logger.debug('[Revoke] 执行撤销授权交易...');
+      const revokeRequest: any = {
+        account: walletAccount,
+        chain: chainConfig,
+        to: tokenAddress,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [spenderAddress, 0n]  // 设置为0以撤销授权
+        }),
+        gasPrice: parseUnits('1', 9),
+        value: 0n
+      };
+
+      let preparedRevoke: any = revokeRequest;
+      try {
+        preparedRevoke = await walletClient.prepareTransactionRequest(revokeRequest);
+      } catch (error) {
+        logger.warn('[Revoke] prepareTransactionRequest 失败，使用保守 Gas 上限:', error?.message || error);
+        preparedRevoke = { ...revokeRequest, gas: BigInt(TX_CONFIG.GAS_LIMIT.APPROVE) };
+      }
+
+      const hash = await executeWithNonceRetry(async (nonce) => {
+        let requestToSend = { ...preparedRevoke, nonce: BigInt(nonce) };
+        try {
+          requestToSend = await publicClient.fillTransaction(requestToSend);
+        } catch (error) {
+          logger.debug('[Revoke] fillTransaction fallback:', error?.message || error);
+          requestToSend = { ...preparedRevoke, nonce: BigInt(nonce) };
+        }
+
+        const txHash = await walletClient.sendTransaction(requestToSend);
+        logger.debug('[Revoke] 等待交易确认...', txHash);
+        await publicClient.waitForTransactionReceipt({ hash: txHash });
+        return txHash;
+      }, 'revoke');
+      invalidateWalletDerivedCaches(walletAccount.address, tokenAddress, { allowances: true });
+
+      logger.debug('[Revoke] 撤销授权成功');
+      return {
+        success: true,
+        message: '撤销授权成功',
+        txHash: hash
+      };
+
+    } catch (error) {
+      resetWalletNonce('revoke_failed');
+      logger.error('[Revoke] 撤销授权失败:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    } finally {
+      if (revokeLockApplied) {
+        clearManualTokenLock(tokenAddress, 'approve');
+      }
+      resolveTokenRoute(tokenAddress, { force: true }).catch((routeError) => {
+        logger.debug('[Revoke] 刷新通道状态失败:', routeError);
+      });
+    }
+  });
+}
+
+// 查询代币授权状态
+async function handleCheckTokenApproval({ tokenAddress, channel = 'pancake' }) {
+  try {
+    logger.debug('[Check Approval] 查询授权状态:', { tokenAddress, channel });
+
+    if (!walletAccount) {
+      return { success: false, error: '请先导入并解锁钱包', approved: false };
+    }
+
+    if (!publicClient) {
+      await createClients();
+    }
+
+    // 获取授权地址（根据通道）
+    let spenderAddress;
+    switch (channel) {
+      case 'pancake':
+        spenderAddress = CONTRACTS.PANCAKE_ROUTER;
+        break;
+      case 'four':
+      case 'xmode':
+        spenderAddress = CONTRACTS.FOUR_TOKEN_MANAGER_V2;
+        break;
+      case 'flap':
+        spenderAddress = CONTRACTS.FLAP_PORTAL;
+        break;
+      default:
+        spenderAddress = CONTRACTS.PANCAKE_ROUTER;
+    }
+
+    // 查询当前授权额度
+    const allowance = await executeWithRetry(async () => publicClient.readContract({
+      address: tokenAddress,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [walletAccount.address, spenderAddress]
+    }));
+
+    const metadata = await ensureTokenMetadata(tokenAddress, { needTotalSupply: true });
+    const totalSupply = metadata.totalSupply ?? 0n;
+
+    // 如果授权额度大于总供应量的50%，认为已授权
+    const approved = allowance > totalSupply / 2n;
+
+    logger.debug('[Check Approval] 授权状态:', { approved, allowance: allowance.toString(), totalSupply: totalSupply.toString() });
+
+    return {
+      success: true,
+      approved,
+      allowance: allowance.toString(),
+      totalSupply: totalSupply.toString()
+    };
+  } catch (error) {
+    logger.error('[Check Approval] 查询失败:', error);
+    return {
+      success: false,
+      error: error.message,
+      approved: false
+    };
+  }
 }
 
 // 初始化 TxWatcher

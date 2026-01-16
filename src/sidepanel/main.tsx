@@ -228,6 +228,10 @@ tradeForm.innerHTML = `
           <span>买入时自动授权</span>
         </label>
         <label class="config-toggle radio">
+          <input type="radio" name="autoApproveMode" value="switch" />
+          <span>切换页面时自动授权</span>
+        </label>
+        <label class="config-toggle radio">
           <input type="radio" name="autoApproveMode" value="sell" />
           <span>首次卖出时自动授权</span>
         </label>
@@ -1040,7 +1044,15 @@ systemResetButton?.addEventListener('click', (event) => {
 tradeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const formData = new FormData(tradeForm);
-  const autoApproveMode: 'buy' | 'sell' = (formData.get('autoApproveMode') as string) === 'sell' ? 'sell' : 'buy';
+  const autoApproveModeValue = (formData.get('autoApproveMode') as string);
+  let autoApproveMode: 'buy' | 'sell' | 'switch' = 'buy';
+  if (autoApproveModeValue === 'sell') {
+    autoApproveMode = 'sell';
+  } else if (autoApproveModeValue === 'switch') {
+    autoApproveMode = 'switch';
+  } else {
+    autoApproveMode = 'buy';
+  }
   const updatedTrading = {
     buyPresets: collectPresetValues(tradeForm, 'buyPreset', BUY_PRESET_COUNT),
     sellPresets: collectPresetValues(tradeForm, 'sellPreset', SELL_PRESET_COUNT),
