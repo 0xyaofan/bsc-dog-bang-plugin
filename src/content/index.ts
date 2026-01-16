@@ -223,6 +223,10 @@ function setRouteLock(reason: string | null, type: 'approve' | 'migration' | nul
 }
 
 function showWalletStatusNotice(message: string) {
+  // 在 SidePanel 模式下不显示钱包状态通知，因为有遮罩层处理
+  if (window.__DOG_BANG_SIDE_PANEL_MODE__) {
+    return;
+  }
   walletStatusNoticeActive = true;
   walletStatusNoticeMessage = message;
   renderStatusMessage();
@@ -1465,11 +1469,11 @@ async function loadWalletStatus() {
       }
     } else {
       // 处理各种错误状态(保持原有逻辑)
-      const status = response.status || response.error;
+      const status = response?.status || response?.error;
       const isLockState = status === 'not_setup' || status === 'locked' || status === 'not_loaded';
 
       if (!isLockState) {
-        showStatus(`钱包状态错误: ${response.error || status}`, 'error');
+        showStatus(`钱包状态错误: ${response?.error || status || '未知错误'}`, 'error');
         return;
       }
 
@@ -1480,9 +1484,12 @@ async function loadWalletStatus() {
         walletStatusClass = 'wallet-not-setup';
         applyWalletStatusClass();
         clearWalletStatusNotice();
-        showStatus('请先在插件中设置钱包', 'warning', { persist: true });
+        // 在 SidePanel 模式下不显示状态消息，因为有遮罩层处理
+        if (!window.__DOG_BANG_SIDE_PANEL_MODE__) {
+          showStatus('请先在插件中设置钱包', 'warning', { persist: true });
+        }
       } else if (status === 'locked' || status === 'not_loaded') {
-        const address = response.address;
+        const address = response?.address;
         let messageText: string;
         if (address) {
           const lockIcon = status === 'locked' ? '🔒' : '⚠️';
@@ -1495,12 +1502,15 @@ async function loadWalletStatus() {
         applyWalletStatusClass();
 
         const message = status === 'locked' ? '钱包已锁定,请在插件中解锁' : '钱包未加载,请在插件中重新解锁';
-        if (status === 'not_loaded') {
-          showWalletStatusNotice(message);
-        } else {
-          clearWalletStatusNotice();
-          const statusOptions = status === 'locked' ? { persist: true } : undefined;
-          showStatus(message, 'warning', statusOptions);
+        // 在 SidePanel 模式下不显示状态消息，因为有遮罩层处理
+        if (!window.__DOG_BANG_SIDE_PANEL_MODE__) {
+          if (status === 'not_loaded') {
+            showWalletStatusNotice(message);
+          } else {
+            clearWalletStatusNotice();
+            const statusOptions = status === 'locked' ? { persist: true } : undefined;
+            showStatus(message, 'warning', statusOptions);
+          }
         }
       }
 
@@ -1540,7 +1550,9 @@ function getTokenAddressFromURL() {
     { hostIncludes: 'gmgn.ai', pathPattern: /\/token\/(0x[a-fA-F0-9]{40})/i },
     { hostIncludes: 'four.meme', pathPattern: /\/token\/(0x[a-fA-F0-9]{40})/i },
     { hostIncludes: 'web3.binance.com', pathPattern: /\/token\/[a-z0-9-]+\/(0x[a-fA-F0-9]{40})/i },
-    { hostIncludes: 'flap.sh', pathPattern: /\/(?:bnb|bsc|eth|arb|op)\/(0x[a-fA-F0-9]{40})(?:\/|$)/i }
+    { hostIncludes: 'flap.sh', pathPattern: /\/(?:bnb|bsc|eth|arb|op)\/(0x[a-fA-F0-9]{40})(?:\/|$)/i },
+    { hostIncludes: 'axiom.trade', pathPattern: /\/meme\/(0x[a-fA-F0-9]{40})/i },
+    { hostIncludes: 'debot.ai', pathPattern: /\/token\/(?:bsc|eth|bnb|arb|op)\/(0x[a-fA-F0-9]{40})/i }
   ];
 
   for (const pattern of hostPatterns) {
@@ -2962,9 +2974,9 @@ function handleWalletStatusPush(data, options: { fromPending?: boolean } = {}) {
 
   if (data.success) {
     // 钱包已解锁
-    const address = data.address;
-    const bnbBalance = data.bnbBalance;
-    const tokenBalance = data.tokenBalance;
+    const address = data?.address;
+    const bnbBalance = data?.bnbBalance;
+    const tokenBalance = data?.tokenBalance;
 
     logger.debug('[Dog Bang] PUSH: 钱包已解锁', { address, bnbBalance, tokenBalance });
 
@@ -2995,7 +3007,7 @@ function handleWalletStatusPush(data, options: { fromPending?: boolean } = {}) {
       walletStatusClass = 'wallet-not-setup';
       applyWalletStatusClass();
     } else if (status === 'locked' || status === 'not_loaded') {
-      const address = data.address;
+      const address = data?.address;
       if (address) {
         setWalletDisplayText(`${address.slice(0, 6)}...${address.slice(-4)} 🔒`);
       } else {

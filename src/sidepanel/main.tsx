@@ -35,7 +35,7 @@ type TokenContext = {
 };
 
 const STORAGE_KEY = 'dogBangLastTokenContext';
-const EMPTY_HINT = '请先在代币详情页打开一个代币，然后再试一次。';
+const EMPTY_HINT = '请打开代币交易页面。';
 
 const BUY_PRESET_COUNT = 4;
 const SELL_PRESET_COUNT = 4;
@@ -156,6 +156,20 @@ const tradeContainer = document.createElement('div');
 tradeContainer.id = 'dog-bang-sidepanel-container';
 tradePane.appendChild(tradeContainer);
 
+// 创建遮罩层，挂载到 tradePane 以只覆盖交易 Tab 内容区域
+const lockOverlay = document.createElement('div');
+lockOverlay.id = 'sidepanel-lock-overlay';
+lockOverlay.className = 'sidepanel-lock-overlay';
+lockOverlay.style.display = 'none';
+lockOverlay.innerHTML = '<div class="lock-overlay-message">钱包已锁定,请在插件中解锁</div>';
+tradePane.appendChild(lockOverlay);
+console.log('[Dog Bang Side Panel] 锁定遮罩层已创建并添加到 DOM:', {
+  id: lockOverlay.id,
+  className: lockOverlay.className,
+  parent: 'tradePane (tab-pane)',
+  appendedSuccessfully: tradePane.contains(lockOverlay)
+});
+
 const configPane = document.createElement('div');
 configPane.className = 'tab-pane';
 
@@ -170,6 +184,7 @@ infoBar.id = 'dog-bang-sidepanel-infobar';
 infoBar.className = 'sidepanel-hint';
 
 shell.append(tabs, panes, infoBar);
+
 root.appendChild(shell);
 
 setupActiveTabWatcher();
@@ -792,6 +807,11 @@ async function mountTradingPanel(tokenAddress: string, context?: TokenContext) {
   }
   currentToken = tokenAddress;
   updateInfoBar(context?.url);
+
+  // 挂载面板后检查钱包状态
+  console.log('[Dog Bang Side Panel] 交易面板已挂载，准备检查钱包状态');
+  checkInitialWalletStatus();
+  startWalletStatusPolling();
 }
 
 function handleTokenContext(context?: TokenContext | null, force = false) {
@@ -1207,4 +1227,125 @@ onUserSettingsChange((settings) => {
     currentToken = null;
     handleTokenContext(lastTokenContext, true);
   }
+});
+
+function updateLockOverlayState(isLocked: boolean) {
+  const overlay = document.getElementById('sidepanel-lock-overlay');
+  console.log('[Dog Bang Side Panel] 更新锁定遮罩状态:', { isLocked, overlayFound: !!overlay });
+  if (!overlay) {
+    console.error('[Dog Bang Side Panel] 遮罩层元素未找到！');
+    return;
+  }
+
+  // 详细调试信息
+  const computedStyle = window.getComputedStyle(overlay);
+  const rect = overlay.getBoundingClientRect();
+  console.log('[Dog Bang Side Panel] 遮罩层当前状态:', {
+    currentDisplay: overlay.style.display,
+    computedDisplay: computedStyle.display,
+    computedPosition: computedStyle.position,
+    computedZIndex: computedStyle.zIndex,
+    boundingRect: {
+      width: rect.width,
+      height: rect.height,
+      top: rect.top,
+      left: rect.left
+    },
+    parentElement: overlay.parentElement?.id || overlay.parentElement?.className,
+    offsetParent: overlay.offsetParent?.tagName
+  });
+
+  overlay.style.display = isLocked ? 'flex' : 'none';
+  console.log('[Dog Bang Side Panel] 遮罩层显示状态已更新:', overlay.style.display);
+
+  // 再次检查更新后的状态
+  if (isLocked) {
+    const newComputedStyle = window.getComputedStyle(overlay);
+    const newRect = overlay.getBoundingClientRect();
+    console.log('[Dog Bang Side Panel] 更新后的遮罩层状态:', {
+      display: newComputedStyle.display,
+      visibility: newComputedStyle.visibility,
+      opacity: newComputedStyle.opacity,
+      width: newRect.width,
+      height: newRect.height
+    });
+  }
+}
+
+if (chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((request) => {
+    console.log('[Dog Bang Side Panel] 收到消息:', request);
+    if (request?.action === 'wallet_status_updated') {
+      console.log('[Dog Bang Side Panel] 钱包状态更新消息:', request.data);
+      const isLocked = !request.data?.success ||
+                       request.data?.status === 'locked' ||
+                       request.data?.status === 'not_loaded' ||
+                       request.data?.status === 'not_setup';
+      console.log('[Dog Bang Side Panel] 从消息计算锁定状态:', isLocked);
+      updateLockOverlayState(isLocked);
+    }
+    return false;
+  });
+}
+
+async function checkInitialWalletStatus() {
+  try {
+    console.log('[Dog Bang Side Panel] 检查初始钱包状态...');
+    const response = await chrome.runtime.sendMessage({ action: 'get_wallet_status' });
+    console.log('[Dog Bang Side Panel] 钱包状态响应:', response);
+    const isLocked = !response?.success ||
+                     response?.status === 'locked' ||
+                     response?.status === 'not_loaded' ||
+                     response?.status === 'not_setup';
+    console.log('[Dog Bang Side Panel] 计算得到锁定状态:', isLocked);
+    updateLockOverlayState(isLocked);
+  } catch (error) {
+    console.warn('[Dog Bang Side Panel] 无法检查初始钱包状态:', error);
+  }
+}
+
+// 定期检查钱包状态（每3秒）
+let walletStatusCheckInterval: ReturnType<typeof setInterval> | null = null;
+
+function startWalletStatusPolling() {
+  if (walletStatusCheckInterval) {
+    return;
+  }
+
+  console.log('[Dog Bang Side Panel] 启动钱包状态轮询');
+  walletStatusCheckInterval = setInterval(async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({ action: 'get_wallet_status' });
+      const isLocked = !response?.success ||
+                       response?.status === 'locked' ||
+                       response?.status === 'not_loaded' ||
+                       response?.status === 'not_setup';
+      updateLockOverlayState(isLocked);
+    } catch (error) {
+      console.warn('[Dog Bang Side Panel] 轮询钱包状态失败:', error);
+    }
+  }, 3000); // 每3秒检查一次
+}
+
+function stopWalletStatusPolling() {
+  if (walletStatusCheckInterval) {
+    clearInterval(walletStatusCheckInterval);
+    walletStatusCheckInterval = null;
+    console.log('[Dog Bang Side Panel] 停止钱包状态轮询');
+  }
+}
+
+// 监听页面可见性变化
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopWalletStatusPolling();
+  } else {
+    checkInitialWalletStatus();
+    startWalletStatusPolling();
+  }
+});
+
+// 页面卸载时清理
+window.addEventListener('beforeunload', () => {
+  stopWalletStatusPolling();
 });
