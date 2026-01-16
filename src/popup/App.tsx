@@ -112,7 +112,17 @@ export default function App() {
       }
       if (status === 'not_loaded') {
         setView('locked');
-        showWarningMessage('插件已刷新，请重新解锁钱包', 'warning');
+        // 检查是否是插件刷新导致的
+        const result = await chrome.storage.local.get(['lastRefreshTime', 'lastUnlockTime']);
+        if (
+          result.lastRefreshTime &&
+          result.lastUnlockTime &&
+          result.lastRefreshTime > result.lastUnlockTime
+        ) {
+          showWarningMessage('插件已刷新，请重新解锁钱包', 'warning');
+        } else {
+          showWarningMessage('会话已过期，请重新解锁钱包', 'warning');
+        }
         return;
       }
     } catch (error) {
