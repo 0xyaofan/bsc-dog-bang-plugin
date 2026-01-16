@@ -30,6 +30,7 @@ export default function App() {
   const iconUrl = chrome?.runtime?.getURL?.(ICON_RESOURCE_PATH) ?? FALLBACK_ICON_URL;
   const [view, setView] = useState<ViewState>('loading');
   const [walletAddress, setWalletAddress] = useState('');
+  const [fullWalletAddress, setFullWalletAddress] = useState('');
   const [bnbBalance, setBnbBalance] = useState('0.00');
   const [privateKey, setPrivateKey] = useState('');
   const [importPassword, setImportPassword] = useState('');
@@ -92,6 +93,7 @@ export default function App() {
       if (response?.success && response.data) {
         const { address, bnbBalance } = response.data;
         if (address) {
+          setFullWalletAddress(address);
           setWalletAddress(`${address.slice(0, 6)}...${address.slice(-4)}`);
         }
         if (bnbBalance) {
@@ -173,7 +175,9 @@ export default function App() {
           /^https:\/\/gmgn\.ai\/.*\/token\/.*/,
           /^https:\/\/web3\.binance\.com\/.*\/token\/.*/,
           /^https:\/\/four\.meme\/token\/.*/,
-          /^https:\/\/flap\.sh\/.*/
+          /^https:\/\/flap\.sh\/.*/,
+          /^https:\/\/axiom\.trade\/meme\/.*/,
+          /^https:\/\/debot\.ai\/token\/.*/
         ];
 
         const isSupported = supportedPatterns.some(pattern => pattern.test(tab.url!));
@@ -256,6 +260,20 @@ export default function App() {
     await chrome.storage.local.set({ walletLocked: true });
     await chrome.runtime.sendMessage({ action: 'lock_wallet' });
     await checkWalletStatus();
+  };
+
+  const handleCopyAddress = async () => {
+    if (!fullWalletAddress) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(fullWalletAddress);
+      showWarningMessage('地址已复制', 'success');
+    } catch (error) {
+      console.error('[Popup] 复制地址失败:', error);
+      showWarningMessage('复制失败', 'error');
+    }
   };
 
   const handleRemove = async () => {
@@ -556,7 +574,13 @@ export default function App() {
           <div className="wallet-status">
             <div className="status-row">
               <span>地址:</span>
-              <span>{walletAddress}</span>
+              <span
+                onClick={handleCopyAddress}
+                style={{ cursor: 'pointer' }}
+                title="点击复制完整地址"
+              >
+                {walletAddress}
+              </span>
             </div>
             <div className="status-row">
               <span>BNB 余额:</span>
