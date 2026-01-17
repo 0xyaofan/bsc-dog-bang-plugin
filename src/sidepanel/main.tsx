@@ -766,7 +766,45 @@ function setActiveTab(tab: 'trade' | 'config') {
 }
 
 function showPlaceholder(message: string) {
-  tradeContainer.innerHTML = `<div class="sidepanel-placeholder">${message}</div>`;
+  // 如果是默认的空提示，显示详细的支持网站列表
+  if (message === EMPTY_HINT) {
+    tradeContainer.innerHTML = `
+      <div class="sidepanel-placeholder">
+        <div class="placeholder-title">请打开代币交易页面</div>
+        <div class="placeholder-divider"></div>
+        <div class="placeholder-subtitle">支持的交易平台：</div>
+        <div class="placeholder-sites">
+          <div class="site-item">
+            <span class="site-icon">🌐</span>
+            <span class="site-name">gmgn.ai</span>
+          </div>
+          <div class="site-item">
+            <span class="site-icon">🌐</span>
+            <span class="site-name">four.meme</span>
+          </div>
+          <div class="site-item">
+            <span class="site-icon">🌐</span>
+            <span class="site-name">web3.binance.com</span>
+          </div>
+          <div class="site-item">
+            <span class="site-icon">🌐</span>
+            <span class="site-name">flap.sh</span>
+          </div>
+          <div class="site-item">
+            <span class="site-icon">🌐</span>
+            <span class="site-name">axiom.trade</span>
+          </div>
+          <div class="site-item">
+            <span class="site-icon">🌐</span>
+            <span class="site-name">debot.ai</span>
+          </div>
+        </div>
+        <div class="placeholder-hint">在这些平台打开代币页面后，交易面板将自动加载</div>
+      </div>
+    `;
+  } else {
+    tradeContainer.innerHTML = `<div class="sidepanel-placeholder">${message}</div>`;
+  }
   infoBar.textContent = '';
   panelInitialized = false;
 }

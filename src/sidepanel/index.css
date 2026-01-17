@@ -76,6 +76,73 @@ body {
   box-sizing: border-box;
 }
 
+.placeholder-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 16px;
+}
+
+.placeholder-divider {
+  width: 60px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #86d9f9, transparent);
+  margin: 0 auto 16px;
+  opacity: 0.6;
+}
+
+.placeholder-subtitle {
+  font-size: 13px;
+  color: #94a3b8;
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+
+.placeholder-sites {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.site-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(45, 53, 97, 0.3);
+  border: 1px solid rgba(134, 217, 249, 0.2);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #cbd5f5;
+  transition: all 0.2s ease;
+}
+
+.site-item:hover {
+  background: rgba(45, 53, 97, 0.5);
+  border-color: rgba(134, 217, 249, 0.4);
+  transform: translateY(-1px);
+}
+
+.site-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.site-name {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #86d9f9;
+  font-weight: 500;
+}
+
+.placeholder-hint {
+  font-size: 11px;
+  color: #64748b;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
 .sidepanel-hint {
   font-size: 12px;
   color: #94a3b8;
