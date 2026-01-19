@@ -46,9 +46,8 @@
   box-shadow: inset 0 0 25px rgba(2, 6, 23, 0.45);
 }
 
-/* 状态显示 */
-.wallet-status,
-.token-info {
+/* 钱包和代币信息 */
+.wallet-token-info {
   background: rgba(45, 53, 97, 0.2);
   border: 1px solid #2d3561;
   border-radius: 8px;

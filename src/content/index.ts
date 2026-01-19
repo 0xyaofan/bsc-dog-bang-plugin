@@ -1896,13 +1896,11 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
   panel.innerHTML = `
     <div class="trader-core">
       <div class="trader-body">
-        <div class="wallet-status">
-          <div class="status-row">
+        <div class="wallet-token-info">
+          <div class="info-row">
             <span>钱包:</span>
             <span id="wallet-address">加载中...</span>
           </div>
-        </div>
-        <div class="token-info">
           <div class="info-row">
             <span>代币:</span>
             <span
