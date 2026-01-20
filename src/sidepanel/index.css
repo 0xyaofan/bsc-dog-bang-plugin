@@ -16,18 +16,18 @@
 
 /* 日间主题变量 */
 .theme-light {
-  --sp-bg-primary: #ffffff;
-  --sp-bg-secondary: #f8f9fa;
+  --sp-bg-primary: #f5f5f5;
+  --sp-bg-secondary: #ffffff;
   --sp-bg-tab: #ffffff;
   --sp-bg-tab-active: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-  --sp-border-color: rgba(0, 0, 0, 0.1);
-  --sp-border-tab: rgba(0, 0, 0, 0.2);
+  --sp-border-color: rgba(0, 0, 0, 0.12);
+  --sp-border-tab: rgba(0, 0, 0, 0.15);
   --sp-border-tab-active: #d97706;
-  --sp-text-primary: #1f2937;
-  --sp-text-secondary: #4b5563;
+  --sp-text-primary: #111827;
+  --sp-text-secondary: #374151;
   --sp-text-active: #ffffff;
   --sp-text-hint: #6b7280;
-  --sp-shadow-tab: rgba(217, 119, 6, 0.4);
+  --sp-shadow-tab: rgba(217, 119, 6, 0.3);
 }
 
 body {

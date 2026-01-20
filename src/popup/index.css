@@ -18,15 +18,15 @@
 
 /* 日间主题变量 */
 .theme-light {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8f9fa;
-  --border-color: rgba(0, 0, 0, 0.1);
-  --text-primary: #1f2937;
-  --text-secondary: #6b7280;
-  --title-color: #d97706;
-  --input-bg: #ffffff;
-  --input-border: rgba(0, 0, 0, 0.2);
-  --shadow-color: rgba(0, 0, 0, 0.1);
+  --bg-primary: #f5f5f5;
+  --bg-secondary: #1f2937;
+  --border-color: rgba(255, 255, 255, 0.15);
+  --text-primary: #f9fafb;
+  --text-secondary: #d1d5db;
+  --title-color: #fbbf24;
+  --input-bg: #374151;
+  --input-border: rgba(255, 255, 255, 0.2);
+  --shadow-color: rgba(0, 0, 0, 0.15);
 }
 
 *,
