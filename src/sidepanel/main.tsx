@@ -126,6 +126,21 @@ if (!root) {
   throw new Error('[Dog Bang Side Panel] 未找到 sidepanel-root 容器');
 }
 
+// 加载并应用主题
+async function loadAndApplyTheme() {
+  try {
+    const result = await chrome.storage.local.get(['theme']);
+    const theme = result.theme === 'light' ? 'light' : 'dark';
+    document.documentElement.className = `theme-${theme}`;
+    console.log('[Dog Bang Side Panel] 主题已加载:', theme);
+  } catch (error) {
+    console.error('[Dog Bang Side Panel] 加载主题失败:', error);
+  }
+}
+
+// 初始化时加载主题
+loadAndApplyTheme();
+
 const shell = document.createElement('div');
 shell.className = 'sidepanel-shell';
 
@@ -1321,6 +1336,10 @@ if (chrome?.runtime?.onMessage) {
                        request.data?.status === 'not_setup';
       console.log('[Dog Bang Side Panel] 从消息计算锁定状态:', isLocked);
       updateLockOverlayState(isLocked);
+    } else if (request?.action === 'theme_changed') {
+      console.log('[Dog Bang Side Panel] 主题变更消息:', request.data);
+      const theme = request.data?.theme === 'light' ? 'light' : 'dark';
+      document.documentElement.className = `theme-${theme}`;
     }
     return false;
   });

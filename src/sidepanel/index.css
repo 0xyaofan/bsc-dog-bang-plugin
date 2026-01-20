@@ -1,8 +1,41 @@
+/* 夜间主题变量（默认） */
+:root, .theme-dark {
+  --sp-bg-primary: #030712;
+  --sp-bg-secondary: rgba(2, 6, 23, 0.6);
+  --sp-bg-tab: rgba(15, 23, 42, 0.7);
+  --sp-bg-tab-active: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  --sp-border-color: rgba(148, 163, 184, 0.2);
+  --sp-border-tab: rgba(134, 217, 249, 0.3);
+  --sp-border-tab-active: #f4d48a;
+  --sp-text-primary: #e4e4e7;
+  --sp-text-secondary: #cbd5f5;
+  --sp-text-active: #facc15;
+  --sp-text-hint: #94a3b8;
+  --sp-shadow-tab: rgba(244, 212, 138, 0.4);
+}
+
+/* 日间主题变量 */
+.theme-light {
+  --sp-bg-primary: #ffffff;
+  --sp-bg-secondary: #f8f9fa;
+  --sp-bg-tab: #ffffff;
+  --sp-bg-tab-active: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  --sp-border-color: rgba(0, 0, 0, 0.1);
+  --sp-border-tab: rgba(0, 0, 0, 0.2);
+  --sp-border-tab-active: #d97706;
+  --sp-text-primary: #1f2937;
+  --sp-text-secondary: #4b5563;
+  --sp-text-active: #ffffff;
+  --sp-text-hint: #6b7280;
+  --sp-shadow-tab: rgba(217, 119, 6, 0.4);
+}
+
 body {
   margin: 0;
-  background: #030712;
+  background: var(--sp-bg-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  color: #e4e4e7;
+  color: var(--sp-text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 #sidepanel-root {
@@ -29,24 +62,24 @@ body {
   flex: 1;
   padding: 10px;
   border-radius: 8px;
-  border: 1px solid rgba(134, 217, 249, 0.3);
-  background: rgba(15, 23, 42, 0.7);
-  color: #cbd5f5;
+  border: 1px solid var(--sp-border-tab);
+  background: var(--sp-bg-tab);
+  color: var(--sp-text-secondary);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .tab-button.active {
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-  border-color: #f4d48a;
-  color: #facc15;
-  box-shadow: 0 4px 14px rgba(244, 212, 138, 0.4);
+  background: var(--sp-bg-tab-active);
+  border-color: var(--sp-border-tab-active);
+  color: var(--sp-text-active);
+  box-shadow: 0 4px 14px var(--sp-shadow-tab);
 }
 
 .sidepanel-panes {
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--sp-bg-secondary);
+  border: 1px solid var(--sp-border-color);
   border-radius: 12px;
   padding: 12px;
 }
@@ -66,21 +99,23 @@ body {
   width: 100%;
   padding: 24px 16px;
   border-radius: 12px;
-  border: 1px dashed rgba(134, 217, 249, 0.4);
-  background: rgba(15, 23, 42, 0.85);
-  color: #cbd5f5;
+  border: 1px dashed var(--sp-border-tab);
+  background: var(--sp-bg-secondary);
+  color: var(--sp-text-secondary);
   font-size: 14px;
   line-height: 1.6;
   text-align: center;
   margin: 0 auto;
   box-sizing: border-box;
+  transition: all 0.3s ease;
 }
 
 .placeholder-title {
   font-size: 15px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--sp-text-primary);
   margin-bottom: 16px;
+  transition: color 0.3s ease;
 }
 
 .placeholder-divider {
@@ -93,9 +128,10 @@ body {
 
 .placeholder-subtitle {
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--sp-text-hint);
   margin-bottom: 12px;
   font-weight: 500;
+  transition: color 0.3s ease;
 }
 
 .placeholder-sites {
@@ -138,16 +174,18 @@ body {
 
 .placeholder-hint {
   font-size: 11px;
-  color: #64748b;
+  color: var(--sp-text-hint);
   line-height: 1.5;
   margin-top: 8px;
+  transition: color 0.3s ease;
 }
 
 .sidepanel-hint {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--sp-text-hint);
   text-align: center;
   word-break: break-all;
+  transition: color 0.3s ease;
 }
 
 .settings-shell {
