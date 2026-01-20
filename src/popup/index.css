@@ -3,6 +3,32 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
 }
 
+/* 夜间主题变量（默认） */
+:root, .theme-dark {
+  --bg-primary: #030712;
+  --bg-secondary: rgba(2, 6, 23, 0.75);
+  --border-color: rgba(148, 163, 184, 0.2);
+  --text-primary: #e4e4e7;
+  --text-secondary: #94a3b8;
+  --title-color: #f4d48a;
+  --input-bg: rgba(15, 23, 42, 0.85);
+  --input-border: rgba(148, 163, 184, 0.3);
+  --shadow-color: rgba(2, 6, 23, 0.6);
+}
+
+/* 日间主题变量 */
+.theme-light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --border-color: rgba(0, 0, 0, 0.1);
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --title-color: #d97706;
+  --input-bg: #ffffff;
+  --input-border: rgba(0, 0, 0, 0.2);
+  --shadow-color: rgba(0, 0, 0, 0.1);
+}
+
 *,
 *::before,
 *::after {
@@ -11,27 +37,33 @@
 
 body {
   margin: 0;
-  background: #030712;
-  color: #e4e4e7;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .popup-root {
   min-width: 360px;
   min-height: 220px;
   padding: 24px;
-  background: #030712;
-  color: #e4e4e7;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   gap: 16px;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 .popup-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  justify-content: space-between;
   margin-bottom: 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .popup-header img {
@@ -42,18 +74,44 @@ body {
 .popup-header h1 {
   margin: 0;
   font-size: 20px;
-  color: #f4d48a;
+  color: var(--title-color);
+  transition: color 0.3s ease;
+}
+
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  min-width: 40px;
+  height: 36px;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-secondary);
+  transform: scale(1.05);
+}
+
+.theme-toggle:active {
+  transform: scale(0.95);
 }
 
 .panel {
-  background: rgba(2, 6, 23, 0.75);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  box-shadow: 0 10px 25px rgba(2, 6, 23, 0.6);
+  box-shadow: 0 10px 25px var(--shadow-color);
+  transition: all 0.3s ease;
 }
 
 .input-group {
@@ -64,7 +122,8 @@ body {
   display: block;
   margin-bottom: 6px;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--text-secondary);
+  transition: color 0.3s ease;
 }
 
 .input-group input,
@@ -73,18 +132,19 @@ body {
   max-width: 100%;
   box-sizing: border-box;
   padding: 10px 12px;
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   border-radius: 8px;
-  color: #e4e4e7;
+  color: var(--text-primary);
   font-size: 14px;
   outline: none;
+  transition: all 0.2s ease;
 }
 
 .input-group input:focus,
 .input-group select:focus {
-  border-color: #f4d48a;
-  box-shadow: 0 0 0 1px rgba(244, 212, 138, 0.35);
+  border-color: var(--title-color);
+  box-shadow: 0 0 0 1px var(--title-color);
 }
 
 button {

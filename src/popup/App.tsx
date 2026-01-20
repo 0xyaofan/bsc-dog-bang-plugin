@@ -6,6 +6,7 @@ declare const chrome: any;
 
 type MessageType = 'success' | 'error' | 'warning';
 type ViewState = 'loading' | 'import' | 'locked' | 'unlocked';
+type Theme = 'light' | 'dark';
 
 interface StatusMessage {
   text: string;
@@ -29,6 +30,7 @@ const FALLBACK_ICON_URL = new URL('../../extension/icons/48x48.png', import.meta
 export default function App() {
   const iconUrl = chrome?.runtime?.getURL?.(ICON_RESOURCE_PATH) ?? FALLBACK_ICON_URL;
   const [view, setView] = useState<ViewState>('loading');
+  const [theme, setTheme] = useState<Theme>('dark');
   const [walletAddress, setWalletAddress] = useState('');
   const [fullWalletAddress, setFullWalletAddress] = useState('');
   const [bnbBalance, setBnbBalance] = useState('0.00');
@@ -158,6 +160,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // 加载主题设置
+    const loadTheme = async () => {
+      try {
+        const result = await chrome.storage.local.get(['theme']);
+        if (result.theme === 'light' || result.theme === 'dark') {
+          setTheme(result.theme);
+        }
+      } catch (error) {
+        console.error('[Popup] 加载主题失败:', error);
+      }
+    };
+    loadTheme();
+  }, []);
+
+  useEffect(() => {
     setSidePanelSupported(Boolean(chrome?.sidePanel?.open));
   }, []);
 
@@ -273,6 +290,21 @@ export default function App() {
     } catch (error) {
       console.error('[Popup] 复制地址失败:', error);
       showWarningMessage('复制失败', 'error');
+    }
+  };
+
+  const toggleTheme = async () => {
+    const newTheme: Theme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    try {
+      await chrome.storage.local.set({ theme: newTheme });
+      // 广播主题变更消息给其他页面
+      chrome.runtime.sendMessage({
+        action: 'theme_changed',
+        data: { theme: newTheme }
+      });
+    } catch (error) {
+      console.error('[Popup] 保存主题失败:', error);
     }
   };
 
@@ -447,10 +479,20 @@ export default function App() {
   };
 
   return (
-    <div className="popup-root">
+    <div className={`popup-root theme-${theme}`}>
       <header className="popup-header">
-        <img src={iconUrl} alt="BSC MEME Trade" width={28} height={28} />
-        <h1>BSC 打狗棒</h1>
+        <div className="header-left">
+          <img src={iconUrl} alt="BSC MEME Trade" width={28} height={28} />
+          <h1>BSC 打狗棒</h1>
+        </div>
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          title={theme === 'dark' ? '切换到日间模式' : '切换到夜间模式'}
+          aria-label={theme === 'dark' ? '切换到日间模式' : '切换到夜间模式'}
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
       </header>
 
       {view === 'loading' && (

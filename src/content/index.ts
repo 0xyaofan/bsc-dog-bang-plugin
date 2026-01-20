@@ -1001,7 +1001,8 @@ async function handleManualApprove() {
     });
 
     if (response && response.success) {
-      showStatus('授权成功', 'success');
+      // 隐藏授权成功提示
+      // showStatus('授权成功', 'success');
 
       // 延迟查询链上授权状态，确保 RPC 节点同步
       // 后端已经等待交易确认，但不同 RPC 节点间可能有同步延迟
@@ -1049,7 +1050,8 @@ async function handleRevokeApproval() {
     });
 
     if (response && response.success) {
-      showStatus('撤销授权成功', 'success');
+      // 隐藏撤销授权成功提示
+      // showStatus('撤销授权成功', 'success');
 
       // 延迟查询链上授权状态，确保 RPC 节点同步
       setTimeout(async () => {
@@ -1284,8 +1286,9 @@ async function handleBuy(tokenAddress) {
 
       const perfResult = timer.finish();
       const durationText = formatDuration(buttonTimer.stop('买入'));
-      const baseMessage = `⏳ 买入交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
-      showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
+      // 隐藏提交确认成功信息
+      // const baseMessage = `⏳ 买入交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
+      // showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
 
       if (response.performance) {
         perf.printBackgroundReport('buy', response.performance);
@@ -1407,8 +1410,9 @@ async function handleSell(tokenAddress) {
 
       const perfResult = timer.finish();
       const durationText = formatDuration(buttonTimer.stop('卖出'));
-      const baseMessage = `⏳ 卖出交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
-      showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
+      // 隐藏提交确认成功信息
+      // const baseMessage = `⏳ 卖出交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
+      // showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
 
       if (response.performance) {
         perf.printBackgroundReport('sell', response.performance);
@@ -1748,8 +1752,8 @@ async function refreshSellEstimate() {
     if (response?.success && response.data?.amount) {
       const formattedValue =
         response.data.formatted ??
-        formatBnbAmount(response.data.amount, 4);
-      const trimmedValue = clampFractionDigits(formattedValue, 5);
+        formatBnbAmount(response.data.amount, 3);
+      const trimmedValue = clampFractionDigits(formattedValue, 3);
       updateSellEstimateDisplay(trimmedValue, displaySymbol);
     } else {
       updateSellEstimateDisplay(null, displaySymbol);
@@ -1794,16 +1798,9 @@ function updateTokenBalanceDisplay(tokenAddress) {
       const decimalsBigInt = BigInt(decimals);
       const divisor = 10n ** decimalsBigInt;
       const integerPart = balance / divisor;
-      const fractionalPart = balance % divisor;
 
-      let formattedBalance;
-      if (fractionalPart === 0n) {
-        formattedBalance = integerPart.toString();
-      } else {
-        const fractionalStr = fractionalPart.toString().padStart(decimals, '0');
-        const trimmedFractional = fractionalStr.replace(/0+$/, '');
-        formattedBalance = `${integerPart}.${trimmedFractional}`;
-      }
+      // 只显示整数部分，不显示小数
+      const formattedBalance = integerPart.toString();
 
       const balanceEl = document.getElementById('token-balance');
       if (balanceEl) {
