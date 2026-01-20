@@ -872,10 +872,8 @@ async function loadTokenInfo(tokenAddress) {
         decimals: currentTokenInfo.decimals
       });
 
-      // 更新余额显示
-      if (response.data.balance) {
-        updateTokenBalanceDisplay(tokenAddress);
-      }
+      // 更新余额显示（包括余额为0的情况）
+      updateTokenBalanceDisplay(tokenAddress);
       scheduleSellEstimate();
 
       // 同时更新授权状态
@@ -1693,7 +1691,17 @@ function shouldEstimateSellAmount() {
   if (routeLockReason) {
     return false;
   }
+  // 检查余额是否存在且大于0
   if (!currentTokenAddress || !currentTokenInfo?.balance) {
+    return false;
+  }
+  // 确保余额大于0（无论是字符串还是数字）
+  try {
+    const balance = BigInt(currentTokenInfo.balance);
+    if (balance <= 0n) {
+      return false;
+    }
+  } catch {
     return false;
   }
   const percent = getSellPercentValue();
@@ -1774,8 +1782,12 @@ function updateTokenBalanceDisplay(tokenAddress) {
     }
 
     // 使用 currentTokenInfo 代替旧的缓存变量
-    if (currentTokenInfo && currentTokenInfo.address === tokenAddress &&
-        currentTokenInfo.balance && currentTokenInfo.decimals) {
+    // 修改条件：允许余额为0的情况，只要balance和decimals存在
+    if (currentTokenInfo &&
+        currentTokenInfo.address === tokenAddress &&
+        currentTokenInfo.balance !== undefined &&
+        currentTokenInfo.balance !== null &&
+        currentTokenInfo.decimals) {
       const balance = BigInt(currentTokenInfo.balance);
       const decimals = currentTokenInfo.decimals;
 
