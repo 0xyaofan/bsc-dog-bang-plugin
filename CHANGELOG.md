@@ -13,6 +13,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+## [1.1.4] - 2025-01-22
+
+### Added
+- **日夜间主题系统**
+  - 完整的日间/夜间模式切换功能
+  - Popup、SidePanel、Content Script 全局主题支持
+  - 遵循 WCAG AAA 标准的颜色对比度设计
+  - 平滑的主题切换过渡动画
+- **RPC 请求优化分析报告**
+  - 完整的 RPC 节点请求频率分析
+  - 识别 42 个 RPC 调用位置
+  - 提供优化建议，可减少 50-60% 请求量
+  - 详细文档位于 `docs/rpc-request-optimization-report.md`
+
+### Changed
+- **UI 视觉优化**
+  - SidePanel 选项卡按钮使用更亮的金黄色渐变
+    - 夜间模式：amber-300 → amber-400 (更明亮的金黄色)
+    - 日间模式：amber-50 → amber-100 (淡黄色)
+  - Popup 界面主题切换图标底部对齐标题文字
+  - 提升整体视觉一致性和美观度
+- **主题系统颜色规范**
+  - SidePanel 钱包地址在日间模式显示纯黑色 (#000000)
+  - 钱包地址在夜间模式显示淡蓝色 (#86d9f9)
+  - 所有主题颜色使用 CSS 变量统一管理
+  - 确保所有界面元素正确响应主题切换
+
+### Fixed
+- **钱包地址颜色显示问题**
+  - 修复 SidePanel 钱包地址在日间模式下显示淡蓝色的问题
+  - 添加 `.wallet-link` 类的主题特定样式规则
+  - 确保日间模式下钱包地址显示黑色，提升可读性
+- **Popup 图标对齐问题**
+  - 修复主题切换图标垂直居中问题
+  - 改为底部对齐，与标题文字视觉平衡
+- **选项卡按钮亮度问题**
+  - 修复交易和配置选项卡按钮颜色过暗的问题
+  - 调整为更明亮的渐变色，提升视觉吸引力
+
 ## [1.1.3] - 2025-01-17
 
 ### Added
@@ -216,6 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.4` - Light/Dark theme system & UI optimization (2025-01-22)
 - `1.1.3` - Platform support & UI optimization (2025-01-17)
 - `1.1.2` - Token approval management (2025-01-16)
 - `1.1.1` - RPC configuration management (2025-01-07)
@@ -225,6 +265,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.3 to 1.1.4
+
+1. Download version 1.1.4 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. 日夜间主题系统自动启用
+5. Popup 和 SidePanel 界面支持主题切换
+6. 所有界面元素自动适配当前主题
+7. 可在 Popup 右上角点击图标切换主题
 
 ### From 1.1.2 to 1.1.3
 
@@ -279,7 +329,8 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.4
 [1.1.3]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.3
 [1.1.2]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.2
 [1.1.1]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.1
