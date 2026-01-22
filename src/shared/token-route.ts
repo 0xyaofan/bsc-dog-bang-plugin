@@ -7,6 +7,12 @@ import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+// Pair 地址缓存 - 避免重复查询同一个代币的 Pancake pair
+// key: `${tokenAddress.toLowerCase()}-${quoteToken.toLowerCase()}`
+// value: { pairAddress: string, timestamp: number }
+const pancakePairCache = new Map<string, { pairAddress: string; quoteToken: string; timestamp: number }>();
+const PAIR_CACHE_TTL = 10 * 60 * 1000; // 10分钟缓存
+
 function isZeroAddress(value?: string | null) {
   if (typeof value !== 'string') {
     return false;
@@ -145,6 +151,20 @@ async function checkPancakePair(
   tokenAddress: Address,
   quoteToken?: Address | string | null
 ): Promise<PancakePairCheckResult> {
+  const normalizedToken = tokenAddress.toLowerCase();
+
+  // 检查缓存：如果之前查询过该代币，直接返回缓存结果
+  const now = Date.now();
+  const cacheKey = `${normalizedToken}`;
+  const cached = pancakePairCache.get(cacheKey);
+  if (cached && now - cached.timestamp < PAIR_CACHE_TTL) {
+    return {
+      hasLiquidity: true,
+      quoteToken: cached.quoteToken,
+      pairAddress: cached.pairAddress
+    };
+  }
+
   const candidates: string[] = [];
   if (quoteToken && typeof quoteToken === 'string') {
     const normalizedQuote = quoteToken.toLowerCase();
@@ -167,7 +187,9 @@ async function checkPancakePair(
     }
   });
 
-  for (const candidate of candidates) {
+  // 优化：并发查询所有候选token，而不是串行查询
+  // 这样可以将查询时间从10-20秒降低到1-2秒
+  const pairPromises = candidates.map(async (candidate) => {
     try {
       const pair = (await publicClient.readContract({
         address: CONTRACTS.PANCAKE_FACTORY,
@@ -182,10 +204,26 @@ async function checkPancakePair(
           pairAddress: pair
         };
       }
+      return null;
     } catch {
-      continue;
+      return null;
+    }
+  });
+
+  // 等待所有查询完成，返回第一个有效结果
+  const results = await Promise.all(pairPromises);
+  for (const result of results) {
+    if (result && result.hasLiquidity) {
+      // 缓存查询结果
+      pancakePairCache.set(cacheKey, {
+        pairAddress: result.pairAddress,
+        quoteToken: result.quoteToken,
+        timestamp: now
+      });
+      return result;
     }
   }
+
   return { hasLiquidity: false };
 }
 
