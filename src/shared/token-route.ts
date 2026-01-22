@@ -275,13 +275,22 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
   const maxFunds = BigInt(info?.maxFunds ?? infoArray[10] ?? 0n);
   const quoteToken = quoteCandidate;
   const normalizedQuote = typeof quoteToken === 'string' ? quoteToken : undefined;
-  if (!liquidityAdded) {
+
+  // 优化：如果 Four.meme 已经确认迁移到 Pancake (liquidityAdded=true)，
+  // 且有 quoteToken，则不需要查询 Pancake Factory，直接使用这些信息
+  if (liquidityAdded && normalizedQuote) {
+    // 直接构造 pancakePair 结果，无需 RPC 查询
+    pancakePair = {
+      hasLiquidity: true,
+      quoteToken: normalizedQuote,
+      pairAddress: undefined // pair 地址不需要，实际交易时会动态计算
+    };
+  } else if (!liquidityAdded) {
+    // 仅在未迁移时才查询 Pancake，检查是否已有流动性
     pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteToken as Address);
     if (pancakePair.hasLiquidity) {
       liquidityAdded = true;
     }
-  } else if (!pancakePair) {
-    pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteToken as Address);
   }
 
   const offerProgress = maxOffers > 0n ? calculateRatio(offers, maxOffers) : null;
