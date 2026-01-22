@@ -133,7 +133,9 @@ export const TX_CONFIG = {
 // ========== UI 配置 ==========
 export const UI_CONFIG = {
   // 自动更新余额间隔（毫秒）
-  BALANCE_UPDATE_INTERVAL: 2000, // 3秒
+  // 优化：从 2000ms 提高到 10000ms，减少轮询频率
+  // 关键操作（解锁钱包、SidePanel打开、交易完成）会主动触发刷新
+  BALANCE_UPDATE_INTERVAL: 10000, // 10秒
 
   // 状态消息自动隐藏时间（毫秒）
   STATUS_MESSAGE_TIMEOUT: 1200, // 800毫秒

@@ -76,6 +76,7 @@ let walletStatusNoticeActive = false;
 let walletStatusNoticeMessage: string | null = null;
 let statusHideTimer: ReturnType<typeof setTimeout> | null = null;
 let sellEstimateTimer: ReturnType<typeof setInterval> | null = null;
+let sellEstimateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let sellEstimatePending = false;
 let sellEstimateRequestId = 0;
 let panelSourceUrl: string | null = null;
@@ -1632,6 +1633,10 @@ function stopSellEstimateTimer() {
     clearInterval(sellEstimateTimer);
     sellEstimateTimer = null;
   }
+  if (sellEstimateDebounceTimer) {
+    clearTimeout(sellEstimateDebounceTimer);
+    sellEstimateDebounceTimer = null;
+  }
   sellEstimatePending = false;
   sellEstimateRequestId++;
 }
@@ -1772,10 +1777,28 @@ function scheduleSellEstimate() {
     updateSellEstimateDisplay(null);
     return;
   }
+
+  // 优化：添加防抖机制，用户停止输入后才触发估算
+  // 首次立即执行一次估算
   refreshSellEstimate();
+
+  // 设置定时轮询（间隔已从1秒优化到3秒）
   sellEstimateTimer = setInterval(() => {
     refreshSellEstimate();
   }, CONTENT_CONFIG.SELL_ESTIMATE_INTERVAL_MS);
+}
+
+// 优化：用于卖出百分比输入的防抖版本
+function debouncedScheduleSellEstimate() {
+  // 清除之前的防抖定时器
+  if (sellEstimateDebounceTimer) {
+    clearTimeout(sellEstimateDebounceTimer);
+  }
+
+  // 用户停止输入后才触发估算
+  sellEstimateDebounceTimer = setTimeout(() => {
+    scheduleSellEstimate();
+  }, CONTENT_CONFIG.SELL_ESTIMATE_DEBOUNCE_MS);
 }
 
 // 更新代币余额显示
@@ -2588,7 +2611,8 @@ function attachEventListeners() {
 
   const sellPercentInput = document.getElementById('sell-percent') as HTMLInputElement | null;
   sellPercentInput?.addEventListener('input', () => {
-    scheduleSellEstimate();
+    // 优化：用户输入时使用防抖版本，减少频繁的估算请求
+    debouncedScheduleSellEstimate();
   });
 
   const updateOptionButtonState = (targetId: string, value: string) => {

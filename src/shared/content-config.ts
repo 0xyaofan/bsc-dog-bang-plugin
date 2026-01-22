@@ -13,7 +13,12 @@ export const CONTENT_CONFIG = {
   POST_TRADE_REFRESH_DELAY_MS: 1500,
 
   // 卖出估算定时刷新频率
-  SELL_ESTIMATE_INTERVAL_MS: 1000,
+  // 优化：从 1000ms 提高到 3000ms，减少轮询频率
+  // 配合防抖机制，用户停止输入后才触发估算
+  SELL_ESTIMATE_INTERVAL_MS: 3000,
+
+  // 卖出估算防抖延迟（毫秒）- 用户停止输入后才触发估算
+  SELL_ESTIMATE_DEBOUNCE_MS: 800,
 
   // 自动授权前的短暂 debounce，确保通道选择器渲染完成
   AUTO_APPROVE_DEBOUNCE_MS: 10,
