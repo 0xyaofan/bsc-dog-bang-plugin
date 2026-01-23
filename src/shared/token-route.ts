@@ -300,7 +300,6 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
   }
 
   let liquidityAdded = Boolean(info?.liquidityAdded ?? infoArray[11]);
-  let pancakePair: PancakePairCheckResult | null = null;
   const offers = BigInt(info?.offers ?? infoArray[7] ?? 0n);
   const maxOffers = BigInt(info?.maxOffers ?? infoArray[8] ?? 0n);
   const funds = BigInt(info?.funds ?? infoArray[9] ?? 0n);
@@ -308,22 +307,28 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
   const quoteToken = quoteCandidate;
   const normalizedQuote = typeof quoteToken === 'string' ? quoteToken : undefined;
 
-  // 优化：如果 Four.meme 已经确认迁移到 Pancake (liquidityAdded=true)，
-  // 且有 quoteToken，则不需要查询 Pancake Factory，直接使用这些信息
+  // 核心优化：完全信任 Four.meme 的 liquidityAdded 状态
+  //
+  // 未迁移时（liquidityAdded=false）：
+  //   - 使用 Four.meme 合约交易
+  //   - 合约内部自动处理 BNB → 筹集币种 → 代币
+  //   - 不需要查询 Pancake 是否有 pair
+  //
+  // 已迁移时（liquidityAdded=true）：
+  //   - 使用 Pancake 交易
+  //   - 直接使用 Four.meme 返回的 quoteToken
+  //   - 不需要查询验证（Four.meme 是权威来源）
+  let pancakePair: PancakePairCheckResult | null = null;
   if (liquidityAdded && normalizedQuote) {
-    // 直接构造 pancakePair 结果，无需 RPC 查询
+    // 已迁移：直接构造结果，无需 RPC 查询
     pancakePair = {
       hasLiquidity: true,
       quoteToken: normalizedQuote,
-      pairAddress: undefined // pair 地址不需要，实际交易时会动态计算
+      pairAddress: undefined
     };
-  } else if (!liquidityAdded) {
-    // 仅在未迁移时才查询 Pancake，检查是否已有流动性
-    pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteToken as Address);
-    if (pancakePair.hasLiquidity) {
-      liquidityAdded = true;
-    }
   }
+  // 注意：完全删除了未迁移时查询 Pancake 的逻辑
+  // 因为未迁移时应该用 Four.meme 合约，不需要关心 Pancake
 
   const offerProgress = maxOffers > 0n ? calculateRatio(offers, maxOffers) : null;
   const fundProgress = maxFunds > 0n ? calculateRatio(funds, maxFunds) : null;
@@ -421,14 +426,18 @@ async function fetchFlapRoute(publicClient: any, tokenAddress: Address): Promise
     typeof quoteTokenAddress === 'string' && quoteTokenAddress !== ZERO_ADDRESS
       ? quoteTokenAddress
       : undefined;
+
+  // 信任 Flap 返回的状态
+  // pool 地址存在且不为零地址，说明已迁移到 Pancake
   let readyForPancake = Boolean(pool && pool !== ZERO_ADDRESS);
   let pancakePair: PancakePairCheckResult | null = readyForPancake
     ? { hasLiquidity: true, quoteToken: normalizedQuote, pairAddress: pool }
     : null;
-  if (!readyForPancake) {
-    pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteTokenAddress);
-    readyForPancake = pancakePair.hasLiquidity;
-  }
+  // 删除：未迁移时不查询 Pancake（应该用 Flap 合约交易）
+  // if (!readyForPancake) {
+  //   pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteTokenAddress);
+  //   readyForPancake = pancakePair.hasLiquidity;
+  // }
   const migrating = !readyForPancake && progress >= 0.99;
 
   return {
@@ -493,14 +502,18 @@ async function fetchLunaRoute(publicClient: any, tokenAddress: Address): Promise
     (info as any)?.quote ||
     (info as any)?.data?.quote ||
     (Array.isArray(info) ? info[3] : undefined);
+
+  // 信任 Luna 返回的状态
+  // pair 地址存在 + tradingOnUniswap=true 说明已迁移
   let readyForPancake = pair && pair !== ZERO_ADDRESS && tradingOnUniswap;
   let pancakePair: PancakePairCheckResult | null = readyForPancake
     ? { hasLiquidity: true, quoteToken: quoteToken as string, pairAddress: pair }
     : null;
-  if (!readyForPancake) {
-    pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteToken as Address);
-    readyForPancake = pancakePair.hasLiquidity;
-  }
+  // 删除：未迁移时不查询 Pancake（应该用 Luna 合约交易）
+  // if (!readyForPancake) {
+  //   pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteToken as Address);
+  //   readyForPancake = pancakePair.hasLiquidity;
+  // }
 
   return {
     platform: 'luna',
@@ -581,21 +594,23 @@ export async function fetchRouteWithFallback(
     }
     tried.add(platform);
     try {
-      let route = await fetchTokenRouteState(publicClient, tokenAddress, platform);
-      if (route.preferredChannel !== 'pancake') {
-        const pancakePair = await checkPancakePair(publicClient, tokenAddress, route.quoteToken as Address);
-        if (pancakePair.hasLiquidity) {
-          route = {
-            ...route,
-            preferredChannel: 'pancake',
-            readyForPancake: true,
-            progress: 1,
-            migrating: false,
-            metadata: mergePancakeMetadata(route.metadata, pancakePair),
-            notes: '检测到 Pancake 流动性，已自动切换'
-          };
-        }
-      }
+      const route = await fetchTokenRouteState(publicClient, tokenAddress, platform);
+      // 删除：不应该"智能检测"Pancake流动性并覆盖平台状态
+      // 完全信任平台返回的 preferredChannel
+      // if (route.preferredChannel !== 'pancake') {
+      //   const pancakePair = await checkPancakePair(publicClient, tokenAddress, route.quoteToken as Address);
+      //   if (pancakePair.hasLiquidity) {
+      //     route = {
+      //       ...route,
+      //       preferredChannel: 'pancake',
+      //       readyForPancake: true,
+      //       progress: 1,
+      //       migrating: false,
+      //       metadata: mergePancakeMetadata(route.metadata, pancakePair),
+      //       notes: '检测到 Pancake 流动性，已自动切换'
+      //     };
+      //   }
+      // }
       lastValidRoute = route;
       if (!shouldFallbackRoute(route)) {
         return route;
