@@ -165,13 +165,46 @@ async function checkPancakePair(
     };
   }
 
-  const candidates: string[] = [];
+  // 核心优化：如果明确传入了quoteToken，只查询这一个，不遍历其他候选
+  // 因为Four.meme迁移到Pancake时会使用同一个quoteToken创建pair
   if (quoteToken && typeof quoteToken === 'string') {
     const normalizedQuote = quoteToken.toLowerCase();
     if (normalizedQuote && normalizedQuote !== ZERO_ADDRESS) {
-      candidates.push(normalizedQuote);
+      try {
+        const pair = (await publicClient.readContract({
+          address: CONTRACTS.PANCAKE_FACTORY,
+          abi: PANCAKE_FACTORY_ABI,
+          functionName: 'getPair',
+          args: [tokenAddress, normalizedQuote as Address]
+        })) as string;
+
+        if (typeof pair === 'string' && pair !== ZERO_ADDRESS) {
+          const result = {
+            hasLiquidity: true,
+            quoteToken: normalizedQuote,
+            pairAddress: pair
+          };
+          // 缓存查询结果
+          pancakePairCache.set(cacheKey, {
+            pairAddress: pair,
+            quoteToken: normalizedQuote,
+            timestamp: now
+          });
+          return result;
+        }
+      } catch (error) {
+        // 查询失败，继续执行兜底逻辑
+      }
+
+      // 如果明确的quoteToken没有找到pair，直接返回失败
+      // 不再尝试其他候选（因为Four.meme不会换quote token）
+      return { hasLiquidity: false };
     }
   }
+
+  // 兜底逻辑：只在quoteToken未知时才遍历所有候选
+  // 适用场景：Four.meme未返回quoteToken，或返回空值
+  const candidates: string[] = [];
   [CONTRACTS.WBNB, CONTRACTS.BUSD, CONTRACTS.USDT, CONTRACTS.ASTER, CONTRACTS.USD1, CONTRACTS.UNITED_STABLES_U].forEach((token) => {
     if (token) {
       const normalized = token.toLowerCase();
@@ -187,8 +220,7 @@ async function checkPancakePair(
     }
   });
 
-  // 优化：并发查询所有候选token，而不是串行查询
-  // 这样可以将查询时间从10-20秒降低到1-2秒
+  // 并发查询所有候选token
   const pairPromises = candidates.map(async (candidate) => {
     try {
       const pair = (await publicClient.readContract({
