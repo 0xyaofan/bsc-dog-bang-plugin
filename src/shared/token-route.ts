@@ -316,16 +316,36 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
   //
   // 已迁移时（liquidityAdded=true）：
   //   - 使用 Pancake 交易
-  //   - 直接使用 Four.meme 返回的 quoteToken
-  //   - 不需要查询验证（Four.meme 是权威来源）
+  //   - 调用 helper.getPancakePair() 获取实际的 LP 地址
+  //   - Helper 直接返回正确的 pair 地址，无需通过 Factory 查询
   let pancakePair: PancakePairCheckResult | null = null;
-  if (liquidityAdded && normalizedQuote) {
-    // 已迁移：直接构造结果，无需 RPC 查询
-    pancakePair = {
-      hasLiquidity: true,
-      quoteToken: normalizedQuote,
-      pairAddress: undefined
-    };
+  if (liquidityAdded) {
+    // 已迁移：调用 helper.getPancakePair() 获取实际 LP 地址
+    try {
+      const pairAddress = (await publicClient.readContract({
+        address: CONTRACTS.FOUR_HELPER_V3 as Address,
+        abi: tokenManagerHelperAbi as any,
+        functionName: 'getPancakePair',
+        args: [tokenAddress]
+      })) as string;
+
+      if (pairAddress && !isZeroAddress(pairAddress)) {
+        pancakePair = {
+          hasLiquidity: true,
+          quoteToken: normalizedQuote,
+          pairAddress: pairAddress
+        };
+      }
+    } catch (error) {
+      // getPancakePair 调用失败，回退到使用 quoteToken
+      if (normalizedQuote) {
+        pancakePair = {
+          hasLiquidity: true,
+          quoteToken: normalizedQuote,
+          pairAddress: undefined
+        };
+      }
+    }
   }
   // 注意：完全删除了未迁移时查询 Pancake 的逻辑
   // 因为未迁移时应该用 Four.meme 合约，不需要关心 Pancake
