@@ -2131,9 +2131,9 @@ function getFloatingWindowState(): FloatingWindowState {
   } catch (error) {
     logger.debug('[Floating Window] 读取状态失败:', error);
   }
-  // 默认位置：右下角
+  // 默认位置：右下角 (考虑新的尺寸 346x294)
   return {
-    position: { x: window.innerWidth - 250, y: window.innerHeight - 400 },
+    position: { x: window.innerWidth - 360, y: window.innerHeight - 320 },
     collapsed: true,
     opened: false
   };
@@ -2217,7 +2217,16 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
 
   floatingWindow.innerHTML = `
     <div class="floating-header">
-      <div class="floating-drag-handle">⋯</div>
+      <div class="floating-drag-handle">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="3" cy="3" r="2" fill="#9ca3af"/>
+          <circle cx="8" cy="3" r="2" fill="#9ca3af"/>
+          <circle cx="13" cy="3" r="2" fill="#9ca3af"/>
+          <circle cx="3" cy="8" r="2" fill="#9ca3af"/>
+          <circle cx="8" cy="8" r="2" fill="#9ca3af"/>
+          <circle cx="13" cy="8" r="2" fill="#9ca3af"/>
+        </svg>
+      </div>
       <button class="floating-close-btn" title="关闭">✕</button>
     </div>
     <div class="floating-content">
@@ -2432,6 +2441,8 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
         const channel = channelSelector?.value || 'pancake';
 
+        let isSuccess = false;
+
         if (action === 'buy') {
           const gasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
           const gasPrice = parseFloat(gasInput?.value || '1');
@@ -2451,6 +2462,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           if (response?.success) {
             timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 买入成功');
+            isSuccess = true;
           } else {
             throw new Error(response?.error || '买入失败');
           }
@@ -2474,25 +2486,24 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           if (response?.success) {
             timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 卖出成功');
+            isSuccess = true;
           } else {
             throw new Error(response?.error || '卖出失败');
           }
         }
 
-        // 成功后等待一段时间再恢复原文本
-        setTimeout(() => {
-          btn.textContent = originalText;
-          btn.removeAttribute('disabled');
-        }, 2000);
+        // 成功时立即恢复，无需延迟
+        btn.textContent = originalText;
+        btn.removeAttribute('disabled');
       } catch (error) {
         timer.stop(`✗ ${formatDuration(timer.getElapsed())}`);
         logger.error('[Floating Window] 交易失败:', error);
 
-        // 失败后等待一段时间再恢复原文本
+        // 失败时延迟恢复，给用户看到失败提示
         setTimeout(() => {
           btn.textContent = originalText;
           btn.removeAttribute('disabled');
-        }, 2000);
+        }, 500);
       }
     });
   });
