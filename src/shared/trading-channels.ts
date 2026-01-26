@@ -1568,7 +1568,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor }) {
       logger.debug(`${channelLabel} 卖出:`, { tokenAddress, percent, slippage });
 
-      const initialState = await prepareTokenSell({
+      // 性能优化：并发执行 prepareTokenSell 和 findBestRoute（使用预估金额）
+      const preparePromise = prepareTokenSell({
         publicClient,
         tokenAddress,
         accountAddress: account.address,
@@ -1576,12 +1577,38 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         percent,
         tokenInfo
       });
+
+      // 使用缓存的余额或预估值来并发查询路由
+      let estimatedAmount: bigint;
+      if (tokenInfo && tokenInfo.balance) {
+        const balance = BigInt(tokenInfo.balance);
+        estimatedAmount = percent === 100 ? balance : balance * BigInt(percent) / 100n;
+      } else {
+        // 如果没有缓存，使用一个合理的预估值（1 token）
+        estimatedAmount = parseEther('1');
+      }
+
+      const [initialState, routePlan] = await Promise.all([
+        preparePromise,
+        findBestRoute('sell', publicClient, tokenAddress, estimatedAmount)
+      ]);
+
       const { totalSupply, amountToSell } = initialState;
       let allowanceValue = initialState.allowance;
 
-      const routePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell);
-      const spenderAddress = routePlan.kind === 'v2' ? contractAddress : smartRouterAddress;
-      if (routePlan.kind === 'v3') {
+      // 如果实际金额与预估金额差异较大，重新查询路由
+      const amountDiff = amountToSell > estimatedAmount
+        ? amountToSell - estimatedAmount
+        : estimatedAmount - amountToSell;
+      const diffPercent = Number(amountDiff * 10000n / estimatedAmount) / 100;
+
+      let finalRoutePlan = routePlan;
+      if (diffPercent > 5) {
+        logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，重新查询路由`);
+        finalRoutePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell);
+      }
+      const spenderAddress = finalRoutePlan.kind === 'v2' ? contractAddress : smartRouterAddress;
+      if (finalRoutePlan.kind === 'v3') {
         if (!smartRouterAddress) {
           throw new Error('Pancake V3 Router 未配置');
         }
@@ -1613,9 +1640,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       });
 
       const slippageBp = Math.floor(slippage * 100);
-      const amountOutMinBase = routePlan.amountOut * BigInt(10000 - slippageBp) / 10000n;
-      if (routePlan.kind === 'v2') {
-        const { path } = routePlan;
+      const amountOutMinBase = finalRoutePlan.amountOut * BigInt(10000 - slippageBp) / 10000n;
+      if (finalRoutePlan.kind === 'v2') {
+        const { path } = finalRoutePlan;
         const amountOutMin = amountOutMinBase;
         updateTokenTradeHint(tokenAddress, channelId, 'sell', { routerAddress: contractAddress, path, mode: 'v2' });
         const deadline = Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS;
@@ -1652,7 +1679,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         throw new Error('Pancake V3 Router 未配置');
       }
 
-      const v3Route = routePlan.route;
+      const v3Route = finalRoutePlan.route;
       updateTokenTradeHint(tokenAddress, channelId, 'sell', { routerAddress: smartRouterAddress, path: v3Route.tokens, fees: v3Route.fees, mode: 'v3' });
       const amountOutMin = amountOutMinBase > 0n ? amountOutMinBase : 1n;
       const isSingleHop = v3Route.tokens.length === 2;
@@ -1953,7 +1980,8 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
     async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor }) {
       logger.debug(`${channelLabel} 卖出:`, { tokenAddress, percent, slippage });
 
-      const { allowance, totalSupply, amountToSell } = await prepareTokenSell({
+      // 性能优化：并发执行 prepareTokenSell 和 getQuote（使用预估金额）
+      const preparePromise = prepareTokenSell({
         publicClient,
         tokenAddress,
         accountAddress: account.address,
@@ -1961,6 +1989,23 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
         percent,
         tokenInfo
       });
+
+      // 使用缓存的余额或预估值来并发查询报价
+      let estimatedAmount: bigint;
+      if (tokenInfo && tokenInfo.balance) {
+        const balance = BigInt(tokenInfo.balance);
+        estimatedAmount = percent === 100 ? balance : balance * BigInt(percent) / 100n;
+      } else {
+        // 如果没有缓存，使用一个合理的预估值（1 token）
+        estimatedAmount = parseEther('1');
+      }
+
+      const quotePromise = getQuote(publicClient, tokenAddress, nativeTokenAddress, estimatedAmount);
+
+      const [{ allowance, totalSupply, amountToSell }, estimatedNativePreview] = await Promise.all([
+        preparePromise,
+        quotePromise.catch(() => 0n)  // 如果预估失败，稍后重试
+      ]);
 
       await ensureTokenApproval({
         publicClient,
@@ -1976,12 +2021,17 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
         nonceExecutor
       });
 
-      let estimatedNative: bigint;
-      try {
-        estimatedNative = await getQuote(publicClient, tokenAddress, nativeTokenAddress, amountToSell);
-        logger.debug(`${channelLabel} 预计获得原生币:`, formatEther(estimatedNative));
-      } catch (error) {
-        throw new Error(`${channelLabel} 获取报价失败: ${error.message}`);
+      // 如果实际金额与预估金额差异较大，或预估失败，重新查询报价
+      let estimatedNative = estimatedNativePreview;
+      if (estimatedNative === 0n || amountToSell !== estimatedAmount) {
+        try {
+          estimatedNative = await getQuote(publicClient, tokenAddress, nativeTokenAddress, amountToSell);
+          logger.debug(`${channelLabel} 预计获得原生币:`, formatEther(estimatedNative));
+        } catch (error) {
+          throw new Error(`${channelLabel} 获取报价失败: ${error.message}`);
+        }
+      } else {
+        logger.debug(`${channelLabel} 预计获得原生币(缓存):`, formatEther(estimatedNative));
       }
 
       const slippageBp = Math.floor(slippage * 100);

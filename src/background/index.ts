@@ -3136,9 +3136,38 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
 
       let pendingQuoteSettlement: Omit<FourQuoteSettlementParams, 'txHash'> | null = null;
       if (!txHash) {
+        // 性能优化：并发执行 quote balance 查询和卖出交易
+        let quoteBalancePromise: Promise<bigint> | null = null;
+        let quoteToken: string | null = null;
+
         if (useQuoteBridge) {
-          const quoteToken = requireFourQuoteToken(routeInfo);
-          const quoteBalanceBefore = await getQuoteBalance(publicClient, quoteToken, walletAccount.address);
+          quoteToken = requireFourQuoteToken(routeInfo);
+          quoteBalancePromise = getQuoteBalance(publicClient, quoteToken, walletAccount.address);
+          logger.debug('[Sell] 检测到非 BNB 支付，卖出后将自动兑换', {
+            quoteToken,
+            quoteLabel: resolveQuoteTokenName(quoteToken)
+          });
+        }
+
+        // 并发执行：卖出交易和 quote balance 查询
+        const [sellTxHash, quoteBalanceBefore] = await Promise.all([
+          channelHandler.sell({
+            publicClient,
+            walletClient,
+            account: walletAccount,
+            chain: chainConfig,
+            tokenAddress: normalizedTokenAddress,
+            percent: resolvedPercent,
+            slippage: resolvedSlippage,
+            gasPrice: normalizedGasPrice,
+            nonceExecutor
+          }),
+          quoteBalancePromise || Promise.resolve(0n)
+        ]);
+
+        txHash = sellTxHash;
+
+        if (useQuoteBridge && quoteToken) {
           pendingQuoteSettlement = {
             quoteToken,
             quoteBalanceBefore,
@@ -3146,22 +3175,7 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
             gasPriceWei,
             nonceExecutor
           };
-          logger.debug('[Sell] 检测到非 BNB 支付，卖出后将自动兑换', {
-            quoteToken,
-            quoteLabel: resolveQuoteTokenName(quoteToken)
-          });
         }
-        txHash = await channelHandler.sell({
-          publicClient,
-          walletClient,
-          account: walletAccount,
-          chain: chainConfig,
-          tokenAddress: normalizedTokenAddress,
-          percent: resolvedPercent,
-          slippage: resolvedSlippage,
-          gasPrice: normalizedGasPrice,
-          nonceExecutor
-        });
       }
       if (!txHash) {
         throw new Error('未能发送卖出交易');
