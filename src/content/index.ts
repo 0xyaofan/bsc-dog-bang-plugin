@@ -1902,6 +1902,9 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
   }
 
   currentTokenAddress = tokenAddress;
+  // 修复：代币切换时重置 userChannelOverride，让系统自动选择正确的通道
+  // 避免使用旧代币的手动通道设置导致新代币交易失败
+  userChannelOverride = false;
   if (!tokenAddressOverride) {
     syncTokenContextToSidePanel(tokenAddress);
   }
@@ -2162,6 +2165,9 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   }
 
   currentTokenAddress = tokenAddress;
+  // 修复：代币切换时重置 userChannelOverride，让系统自动选择正确的通道
+  // 避免使用旧代币的手动通道设置导致新代币交易失败
+  userChannelOverride = false;
 
   const tradingPresets = userSettings?.trading ?? DEFAULT_USER_SETTINGS.trading;
   const buyPresets = tradingPresets.buyPresets ?? DEFAULT_USER_SETTINGS.trading.buyPresets;
