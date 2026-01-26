@@ -1264,7 +1264,7 @@ async function handleBuy(tokenAddress) {
     timer.step('参数验证和UI更新');
 
   try {
-    showStatus(`正在通过 ${getChannelName(channel)} 买入...`, 'info');
+    // showStatus(`正在通过 ${getChannelName(channel)} 买入...`, 'info');
 
     // 记录消息发送前的时间
     const messageSendStart = perf.now();
@@ -1387,7 +1387,7 @@ async function handleSell(tokenAddress) {
 
   try {
     // 优化1: 简化前端逻辑，数据查询全由 background 处理
-    showStatus(`正在通过 ${getChannelName(channel)} 卖出...`, 'info');
+    // showStatus(`正在通过 ${getChannelName(channel)} 卖出...`, 'info');
 
     // 记录消息发送前的时间
     const messageSendStart = perf.now();
