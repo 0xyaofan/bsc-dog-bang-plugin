@@ -51,6 +51,18 @@ export default defineConfig({
         },
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]'
+      },
+      // 抑制第三方依赖的 PURE 注释警告
+      onwarn(warning, warn) {
+        // 忽略 ox 包中的 PURE 注释位置警告
+        if (
+          warning.code === 'SOURCEMAP_ERROR' ||
+          (warning.code === 'INVALID_ANNOTATION' && warning.message.includes('ox/_esm/core/Base64.js'))
+        ) {
+          return;
+        }
+        // 其他警告正常显示
+        warn(warning);
       }
     }
   }

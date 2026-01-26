@@ -955,7 +955,7 @@ function computeRouteTtl(readyForPancake: boolean, progress: number, migrating: 
     return 20000;
   }
   if (migrating) {
-    return 700;
+    return 500;  // 迁移中：0.5秒（最频繁，快速检测迁移完成）
   }
   if (progress >= 0.9) {
     return 1200;
@@ -2323,6 +2323,103 @@ type RuntimeRequest = {
   data?: any;
 };
 
+// ========================================
+// 预加载处理器 - 用于页面切换时预加载数据
+// ========================================
+
+/**
+ * 预加载代币余额
+ * 在用户切换到代币页面时后台预加载，这样点击买入时数据已缓存
+ */
+async function handlePrefetchTokenBalance({ tokenAddress }: { tokenAddress?: string } = {}) {
+  try {
+    if (!tokenAddress || !walletAccount) {
+      return { success: false, cached: false };
+    }
+
+    // 预加载代币余额（会自动缓存）
+    await fetchWalletBalances(walletAccount.address, tokenAddress);
+
+    // 同时预加载 quote token 余额（如果需要）
+    try {
+      const route = await resolveTokenRoute(tokenAddress, { force: false });
+      if (route?.quoteToken && route.quoteToken.toLowerCase() !== CONTRACTS.WBNB.toLowerCase()) {
+        // 非 BNB 筹集，预加载 quote token 余额
+        await getQuoteBalance(publicClient, route.quoteToken, walletAccount.address);
+      }
+    } catch {
+      // Quote token 余额预加载失败不影响主流程
+    }
+
+    return { success: true, cached: true };
+  } catch (error) {
+    // 预加载失败静默处理
+    logger.debug('[Prefetch] Token balance prefetch failed:', error);
+    return { success: false, cached: false };
+  }
+}
+
+/**
+ * 预加载授权状态
+ * 如果启用了切换页面授权，在页面切换时检查并执行授权
+ */
+async function handlePrefetchApprovalStatus({ tokenAddress }: { tokenAddress?: string } = {}) {
+  try {
+    if (!tokenAddress || !walletAccount) {
+      return { success: false };
+    }
+
+    // 获取路由信息
+    const route = await resolveTokenRoute(tokenAddress, { force: false });
+    if (!route) {
+      return { success: false };
+    }
+
+    // 根据路由信息判断需要授权的代币
+    let tokenToApprove: string | null = null;
+    let spender: string | null = null;
+
+    if (route.readyForPancake) {
+      // 已迁移：需要授权 quote token 给 PancakeRouter
+      if (route.quoteToken && route.quoteToken.toLowerCase() !== CONTRACTS.WBNB.toLowerCase()) {
+        tokenToApprove = route.quoteToken;
+        spender = CONTRACTS.PANCAKE_ROUTER;
+      }
+    } else {
+      // 未迁移：需要授权 quote token 给平台合约
+      if (route.quoteToken && route.quoteToken.toLowerCase() !== CONTRACTS.WBNB.toLowerCase()) {
+        tokenToApprove = route.quoteToken;
+        // 根据平台选择 spender
+        if (route.platform === 'four') {
+          spender = CONTRACTS.FOUR_TOKEN_MANAGER_V2;
+        } else if (route.platform === 'flap') {
+          spender = CONTRACTS.FLAP_PORTAL;
+        }
+      }
+    }
+
+    // 如果需要授权，检查授权状态（会自动缓存）
+    if (tokenToApprove && spender && publicClient) {
+      try {
+        await publicClient.readContract({
+          address: tokenToApprove as Address,
+          abi: ERC20_ABI,
+          functionName: 'allowance',
+          args: [walletAccount.address, spender as Address]
+        });
+      } catch {
+        // 授权查询失败不影响主流程
+      }
+    }
+
+    return { success: true };
+  } catch (error) {
+    // 预加载失败静默处理
+    logger.debug('[Prefetch] Approval status prefetch failed:', error);
+    return { success: false };
+  }
+}
+
 const ACTION_HANDLER_MAP = {
   import_wallet: handleImportWallet,
   unlock_wallet: handleUnlockWallet,
@@ -2338,7 +2435,10 @@ const ACTION_HANDLER_MAP = {
   get_tx_watcher_status: handleGetTxWatcherStatus,
   get_token_info: handleGetTokenInfo,
   get_token_route: handleGetTokenRoute,
-  estimate_sell_amount: handleEstimateSellAmount
+  estimate_sell_amount: handleEstimateSellAmount,
+  // 预加载处理器
+  prefetch_token_balance: handlePrefetchTokenBalance,
+  prefetch_approval_status: handlePrefetchApprovalStatus
 };
 
 async function processExtensionRequest(action: string, data: any = {}) {

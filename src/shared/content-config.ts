@@ -27,7 +27,9 @@ export const CONTENT_CONFIG = {
   PERF_LOG_INTERVAL_MS: 5 * 60 * 1000,
 
   // PUSH 模式下余额轮询频率（当 UI_CONFIG 未配置时的兜底值）
-  BALANCE_POLL_FALLBACK_MS: 5000,
+  // 优化：从 5000ms 提高到 15000ms，减少 RPC 查询频率
+  // 配合页面切换立即更新和交易后立即更新，用户体验不受影响
+  BALANCE_POLL_FALLBACK_MS: 15000,
 
   // 状态提示在 UI_CONFIG 未指定时的默认展示时长
   STATUS_MESSAGE_FALLBACK_MS: 5000

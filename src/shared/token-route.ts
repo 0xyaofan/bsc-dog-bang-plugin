@@ -7,11 +7,81 @@ import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+// 路由信息缓存 - 支持多代币永久缓存
+// key: tokenAddress (lowercase)
+// value: { route, timestamp, migrationStatus }
+type RouteCache = {
+  route: RouteFetchResult;
+  timestamp: number;
+  migrationStatus: 'not_migrated' | 'migrated';
+};
+
+const routeCache = new Map<string, RouteCache>();
+
+// 缓存管理函数
+function getRouteCache(tokenAddress: string): RouteCache | undefined {
+  const normalized = tokenAddress.toLowerCase();
+  return routeCache.get(normalized);
+}
+
+function setRouteCache(tokenAddress: string, route: RouteFetchResult): void {
+  const normalized = tokenAddress.toLowerCase();
+  routeCache.set(normalized, {
+    route,
+    timestamp: Date.now(),
+    migrationStatus: route.readyForPancake ? 'migrated' : 'not_migrated'
+  });
+}
+
+function shouldUpdateRouteCache(
+  tokenAddress: string,
+  cachedRoute: RouteCache | undefined,
+  currentRoute: RouteFetchResult
+): boolean {
+  // 1. 无缓存 → 更新
+  if (!cachedRoute) return true;
+
+  // 2. 迁移状态变化 → 更新
+  const cachedMigrated = cachedRoute.migrationStatus === 'migrated';
+  const currentMigrated = currentRoute.readyForPancake;
+  if (cachedMigrated !== currentMigrated) return true;
+
+  // 3. 迁移状态未变化 → 不更新（永久缓存）
+  // 注意：未迁移和已迁移都使用永久缓存
+  return false;
+}
+
+// 手动清除缓存（用于调试或强制刷新）
+export function clearRouteCache(tokenAddress?: string): void {
+  if (tokenAddress) {
+    const normalized = tokenAddress.toLowerCase();
+    routeCache.delete(normalized);
+  } else {
+    routeCache.clear();
+  }
+}
+
+// 缓存清理策略 - 避免内存泄漏
+const MAX_ROUTE_CACHE_SIZE = 50;
+
+function cleanupRouteCache(): void {
+  if (routeCache.size > MAX_ROUTE_CACHE_SIZE) {
+    // 删除最旧的缓存项
+    const entries = Array.from(routeCache.entries());
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    // 删除最旧的 10 个
+    for (let i = 0; i < 10 && i < entries.length; i++) {
+      routeCache.delete(entries[i][0]);
+    }
+  }
+}
+
 // Pair 地址缓存 - 避免重复查询同一个代币的 Pancake pair
-// key: `${tokenAddress.toLowerCase()}-${quoteToken.toLowerCase()}`
-// value: { pairAddress: string, timestamp: number }
+// key: tokenAddress (lowercase)
+// value: { pairAddress, quoteToken, timestamp }
+// 永久缓存：Pancake pair 一旦创建就不会改变
 const pancakePairCache = new Map<string, { pairAddress: string; quoteToken: string; timestamp: number }>();
-const PAIR_CACHE_TTL = 10 * 60 * 1000; // 10分钟缓存
 
 function isZeroAddress(value?: string | null) {
   if (typeof value !== 'string') {
@@ -152,12 +222,12 @@ async function checkPancakePair(
   quoteToken?: Address | string | null
 ): Promise<PancakePairCheckResult> {
   const normalizedToken = tokenAddress.toLowerCase();
+  const now = Date.now(); // 用于记录缓存时间戳（用于清理策略，非TTL）
 
-  // 检查缓存：如果之前查询过该代币，直接返回缓存结果
-  const now = Date.now();
+  // 检查缓存：如果之前查询过该代币，直接返回缓存结果（永久缓存）
   const cacheKey = `${normalizedToken}`;
   const cached = pancakePairCache.get(cacheKey);
-  if (cached && now - cached.timestamp < PAIR_CACHE_TTL) {
+  if (cached) {
     return {
       hasLiquidity: true,
       quoteToken: cached.quoteToken,
@@ -603,6 +673,19 @@ export async function fetchRouteWithFallback(
   tokenAddress: Address,
   initialPlatform: TokenPlatform
 ): Promise<RouteFetchResult> {
+  // 1. 检查缓存
+  const cached = getRouteCache(tokenAddress);
+  if (cached) {
+    // 如果已迁移，使用永久缓存
+    if (cached.migrationStatus === 'migrated') {
+      return cached.route;
+    }
+
+    // 如果未迁移，需要重新查询以检测是否已迁移
+    // 这样可以及时发现代币的迁移状态变化
+  }
+
+  // 2. 执行查询（无缓存或未迁移需要重新检查）
   const tried = new Set<TokenPlatform>();
   const order = buildPlatformProbeOrder(initialPlatform);
   let lastValidRoute: RouteFetchResult | null = null;
@@ -615,24 +698,14 @@ export async function fetchRouteWithFallback(
     tried.add(platform);
     try {
       const route = await fetchTokenRouteState(publicClient, tokenAddress, platform);
-      // 删除：不应该"智能检测"Pancake流动性并覆盖平台状态
       // 完全信任平台返回的 preferredChannel
-      // if (route.preferredChannel !== 'pancake') {
-      //   const pancakePair = await checkPancakePair(publicClient, tokenAddress, route.quoteToken as Address);
-      //   if (pancakePair.hasLiquidity) {
-      //     route = {
-      //       ...route,
-      //       preferredChannel: 'pancake',
-      //       readyForPancake: true,
-      //       progress: 1,
-      //       migrating: false,
-      //       metadata: mergePancakeMetadata(route.metadata, pancakePair),
-      //       notes: '检测到 Pancake 流动性，已自动切换'
-      //     };
-      //   }
-      // }
       lastValidRoute = route;
       if (!shouldFallbackRoute(route)) {
+        // 3. 检查是否需要更新缓存
+        if (shouldUpdateRouteCache(tokenAddress, cached, route)) {
+          setRouteCache(tokenAddress, route);
+          cleanupRouteCache();
+        }
         return route;
       }
       // If Pancake has流动性才返回，否则尝试下一个平台
@@ -642,6 +715,11 @@ export async function fetchRouteWithFallback(
   }
 
   if (lastValidRoute) {
+    // 缓存最后一个有效路由
+    if (shouldUpdateRouteCache(tokenAddress, cached, lastValidRoute)) {
+      setRouteCache(tokenAddress, lastValidRoute);
+      cleanupRouteCache();
+    }
     return lastValidRoute;
   }
 
@@ -649,11 +727,15 @@ export async function fetchRouteWithFallback(
     throw lastError;
   }
 
-  return {
+  // 默认返回
+  const defaultRoute: RouteFetchResult = {
     platform: 'unknown',
     preferredChannel: 'pancake',
     readyForPancake: true,
     progress: 1,
     migrating: false
   };
+  setRouteCache(tokenAddress, defaultRoute);
+  cleanupRouteCache();
+  return defaultRoute;
 }

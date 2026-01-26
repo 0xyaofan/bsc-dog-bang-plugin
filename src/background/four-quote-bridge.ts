@@ -913,14 +913,19 @@ export async function prepareQuoteFunds(params: {
   walletAddress: string;
 }): Promise<{ quoteAmount: bigint; usedWalletQuote: boolean }> {
   const { tokenAddress, quoteToken, amountInWei, slippage, spender, swapContext, publicClient, walletAddress } = params;
-  const quoteEstimate = await estimateQuoteAmount({
-    publicClient,
-    quoteToken,
-    amountInWei,
-    slippage
-  });
+
+  // 并发优化：同时查询价格估算和钱包余额
+  const [quoteEstimate, walletQuoteBalance] = await Promise.all([
+    estimateQuoteAmount({
+      publicClient,
+      quoteToken,
+      amountInWei,
+      slippage
+    }),
+    getTokenBalance(publicClient, quoteToken, walletAddress)
+  ]);
+
   const targetQuoteAmount = quoteEstimate.expected;
-  const walletQuoteBalance = await getTokenBalance(publicClient, quoteToken, walletAddress);
   let quoteAmount: bigint = 0n;
   let usedWalletQuote = false;
 

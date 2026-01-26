@@ -525,6 +525,12 @@ function syncTokenContextFromCurrentPage(force = false) {
     return;
   }
 
+  // 修复：只有当前标签页可见时才同步上下文
+  // 避免后台标签页覆盖当前标签页的代币信息
+  if (document.hidden && !force) {
+    return;
+  }
+
   if (tokenContextSyncPromise) {
     return tokenContextSyncPromise;
   }
@@ -554,6 +560,23 @@ function syncTokenContextFromCurrentPage(force = false) {
       if (response && response.success && response.data?.preferredChannel) {
         preferredChannelId = response.data.preferredChannel;
       }
+
+      // 预加载优化：在后台预加载余额和授权信息（不阻塞主流程）
+      // 这样用户点击买入时，数据已经缓存好了
+      Promise.all([
+        // 预加载代币余额
+        safeSendMessage({
+          action: 'prefetch_token_balance',
+          data: { tokenAddress }
+        }).catch(() => {}), // 静默失败
+
+        // 预加载授权状态（如果启用了切换页面授权）
+        safeSendMessage({
+          action: 'prefetch_approval_status',
+          data: { tokenAddress }
+        }).catch(() => {}) // 静默失败
+      ]).catch(() => {}); // 整体静默失败，不影响主流程
+
     } catch (error) {
       logger.debug('[Dog Bang] 同步默认通道失败:', error);
     }
