@@ -1084,7 +1084,11 @@ async function resolveTokenRoute(tokenAddress: string, options: { force?: boolea
         ? 'monitoring'
         : 'idle';
 
-  const lockReason = migrationStatus === 'migrating' ? '流动性迁移中，请稍后再试' : undefined;
+  // 修复：移除"迁移中"状态的交易锁定
+  // "迁移中"是一个短暂的过渡状态（通常只有几秒），不应该阻止用户交易
+  // 这样可以避免代币切换时的误判导致前几次交易失败
+  // 用户仍然可以看到"迁移中"的状态提示，但不会被强制阻止交易
+  const lockReason = undefined;
 
   const entry: TokenRouteCacheEntry = {
     tokenAddress: normalized,
