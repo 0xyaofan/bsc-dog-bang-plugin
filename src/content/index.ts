@@ -73,6 +73,7 @@ let userChannelOverride = false;
 let routeLockReason: string | null = null;
 let routeLockType: 'approve' | 'migration' | null = null;
 let walletStatusNoticeActive = false;
+let globalUpdateSettingsDisplay: (() => void) | null = null;
 let walletStatusNoticeMessage: string | null = null;
 let statusHideTimer: ReturnType<typeof setTimeout> | null = null;
 let sellEstimateTimer: ReturnType<typeof setInterval> | null = null;
@@ -1224,6 +1225,11 @@ function applyTokenRouteToUI(route: any) {
   }
 
   setRouteLock(route.lockReason || null, route.lockType || null);
+  
+  // Update floating window settings display if it exists
+  if (globalUpdateSettingsDisplay) {
+    globalUpdateSettingsDisplay();
+  }
 }
 
 // ========== 优化的买入流程 ==========
@@ -2531,7 +2537,6 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     const slippageInput = floatingWindow.querySelector('[data-setting="slippage"]') as HTMLInputElement;
     const buyGasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
     const sellGasInput = floatingWindow.querySelector('[data-setting="sell-gas"]') as HTMLInputElement;
-    const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
 
     if (slippageInput) {
       const displaySlippage = floatingWindow.querySelector('#display-slippage');
@@ -2545,14 +2550,18 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       const displaySellGas = floatingWindow.querySelector('#display-sell-gas');
       if (displaySellGas) displaySellGas.textContent = `${sellGasInput.value}Gwei`;
     }
-    if (channelSelector) {
-      const displayChannel = floatingWindow.querySelector('#display-channel');
-      if (displayChannel) {
-        const channelMap = { 'pancake': 'PCS', 'four': '4M', 'xmode': 'XM', 'flap': 'FLP' };
-        displayChannel.textContent = channelMap[channelSelector.value] || channelSelector.value;
-      }
+    
+    // Display current token's preferred channel instead of global channel selector
+    const displayChannel = floatingWindow.querySelector('#display-channel');
+    if (displayChannel) {
+      const channelMap = { 'pancake': 'PCS', 'four': '4M', 'xmode': 'XM', 'flap': 'FLP' };
+      const currentChannel = currentTokenRoute?.preferredChannel || 'pancake';
+      displayChannel.textContent = channelMap[currentChannel] || currentChannel;
     }
   };
+
+  // Store reference for global access
+  globalUpdateSettingsDisplay = updateSettingsDisplay;
 
   // 设置选项按钮事件
   floatingWindow.querySelectorAll('.floating-option-btn').forEach(btn => {
@@ -2576,12 +2585,6 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     input.addEventListener('change', updateSettingsDisplay);
     input.addEventListener('input', updateSettingsDisplay);
   });
-
-  // 监听channel选择变化
-  const channelSelector = document.getElementById('channel-selector');
-  if (channelSelector) {
-    channelSelector.addEventListener('change', updateSettingsDisplay);
-  }
 
   // 初始化显示
   updateSettingsDisplay();
