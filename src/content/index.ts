@@ -552,6 +552,12 @@ function syncTokenContextFromCurrentPage(force = false) {
       return;
     }
 
+    // Update floating window when token changes
+    const floatingWindow = document.getElementById('dog-bang-floating');
+    if (floatingWindow && tokenAddress !== lastSyncedTokenAddress) {
+      createFloatingTradingWindow(tokenAddress);
+    }
+
     let preferredChannelId: string | undefined;
     try {
       const response = await safeSendMessage({
