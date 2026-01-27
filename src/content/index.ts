@@ -1363,6 +1363,14 @@ async function handleSell(tokenAddress) {
     return;
   }
 
+  // 检查代币余额是否为0
+  const tokenBalanceEl = document.getElementById('token-balance');
+  const tokenBalance = tokenBalanceEl?.textContent?.trim();
+  if (tokenBalance === '0.00' || tokenBalance === '--' || !tokenBalance) {
+    showStatus('代币余额为0，无法卖出', 'error');
+    return;
+  }
+
   // 创建性能计时器
   const timer = new PerformanceTimer('sell');
 
