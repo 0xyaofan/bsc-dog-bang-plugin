@@ -3762,6 +3762,14 @@ async function handleGetTokenRoute({ tokenAddress, force = false }: { tokenAddre
     if (!tokenAddress) {
       return { success: false, error: '缺少代币地址' };
     }
+
+    // 修复：更新 currentTokenContext，避免"检测到代币已切换"错误
+    // 当前端查询新代币的路由时，说明用户已经切换到新代币
+    const normalized = normalizeTokenAddressValue(tokenAddress);
+    if (normalized) {
+      updateTokenContext({ tokenAddress: normalized, source: 'tabs' });
+    }
+
     const route = await resolveTokenRoute(tokenAddress, { force });
     return { success: true, data: formatRouteForClient(route) };
   } catch (error) {

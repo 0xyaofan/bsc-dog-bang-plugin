@@ -2438,15 +2438,13 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       // 直接显示计时，不显示"买入中"/"卖出中"文字
       const timer = startButtonTimer(btn, '');
 
+      // 获取当前设置（在 try 外面定义，方便 catch 块使用）
+      const slippageInput = floatingWindow.querySelector('[data-setting="slippage"]') as HTMLInputElement;
+      const slippage = parseFloat(slippageInput?.value || '10');
+      const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
+      const channel = channelSelector?.value || 'pancake';
+
       try {
-        // 获取当前设置
-        const slippageInput = floatingWindow.querySelector('[data-setting="slippage"]') as HTMLInputElement;
-        const slippage = parseFloat(slippageInput?.value || '10');
-
-        // 获取当前选择的 channel（与 sidepanel 共用）
-        const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
-        const channel = channelSelector?.value || 'pancake';
-
         let isSuccess = false;
 
         if (action === 'buy') {
@@ -2503,7 +2501,15 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         btn.removeAttribute('disabled');
       } catch (error) {
         timer.stop(`✗ ${formatDuration(timer.getElapsed())}`);
+        // 详细的错误日志，帮助调试
         logger.error('[Floating Window] 交易失败:', error);
+        logger.error('[Floating Window] 错误详情:', {
+          message: error?.message,
+          tokenAddress: currentTokenAddress,
+          channel,
+          forceChannel: userChannelOverride,
+          action
+        });
 
         // 失败时延迟恢复，给用户看到失败提示
         setTimeout(() => {
