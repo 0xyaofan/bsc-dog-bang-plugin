@@ -2554,9 +2554,8 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     // Display current token's preferred channel instead of global channel selector
     const displayChannel = floatingWindow.querySelector('#display-channel');
     if (displayChannel) {
-      const channelMap = { 'pancake': 'PCS', 'four': '4M', 'xmode': 'XM', 'flap': 'FLP' };
       const currentChannel = currentTokenRoute?.preferredChannel || 'pancake';
-      displayChannel.textContent = channelMap[currentChannel] || currentChannel;
+      displayChannel.textContent = getChannelName(currentChannel);
     }
   };
 
