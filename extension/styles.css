@@ -763,6 +763,38 @@ html.theme-light .wallet-link:hover {
   box-shadow: 0 4px 12px rgba(236, 72, 153, 0.35);
 }
 
+/* 设置显示行 */
+.floating-settings-display {
+  padding: 8px 12px;
+  background: rgba(15, 15, 30, 0.5);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  flex-wrap: wrap;
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 70px;
+}
+
+.setting-label {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.setting-value {
+  color: #60a5fa;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
 /* 设置折叠按钮 */
 .floating-settings-toggle {
   margin-top: 8px;
@@ -832,8 +864,8 @@ html.theme-light .wallet-link:hover {
 
 .floating-setting-row label {
   font-size: 11px;
-  color: #9ca3af;
-  font-weight: 500;
+  color: #d1d5db;
+  font-weight: 600;
   padding: 0 2px;
 }
 
@@ -875,6 +907,7 @@ html.theme-light .wallet-link:hover {
   border-radius: 4px;
   color: #e4e4e7;
   font-size: 11px;
+  font-weight: 500;
   text-align: center;
   transition: all 0.2s ease;
 }

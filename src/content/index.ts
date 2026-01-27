@@ -2256,6 +2256,12 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
           </div>
         </div>
       </div>
+      <div class="floating-settings-display">
+        <span class="setting-item"><span class="setting-label">滑点:</span> <span class="setting-value" id="display-slippage">10%</span></span>
+        <span class="setting-item"><span class="setting-label">Buy:</span> <span class="setting-value" id="display-buy-gas">1 Gwei</span></span>
+        <span class="setting-item"><span class="setting-label">Sell:</span> <span class="setting-value" id="display-sell-gas">1 Gwei</span></span>
+        <span class="setting-item"><span class="setting-label">CH:</span> <span class="setting-value" id="display-channel">pancake</span></span>
+      </div>
       <div class="floating-settings-toggle">
         <button class="floating-toggle-btn" data-collapsed="${state.collapsed}">
           <span class="toggle-icon">${state.collapsed ? '▼' : '▲'}</span>
@@ -2520,6 +2526,34 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     });
   });
 
+  // 更新设置显示行的函数
+  const updateSettingsDisplay = () => {
+    const slippageInput = floatingWindow.querySelector('[data-setting="slippage"]') as HTMLInputElement;
+    const buyGasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
+    const sellGasInput = floatingWindow.querySelector('[data-setting="sell-gas"]') as HTMLInputElement;
+    const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
+
+    if (slippageInput) {
+      const displaySlippage = floatingWindow.querySelector('#display-slippage');
+      if (displaySlippage) displaySlippage.textContent = `${slippageInput.value}%`;
+    }
+    if (buyGasInput) {
+      const displayBuyGas = floatingWindow.querySelector('#display-buy-gas');
+      if (displayBuyGas) displayBuyGas.textContent = `${buyGasInput.value}G`;
+    }
+    if (sellGasInput) {
+      const displaySellGas = floatingWindow.querySelector('#display-sell-gas');
+      if (displaySellGas) displaySellGas.textContent = `${sellGasInput.value}G`;
+    }
+    if (channelSelector) {
+      const displayChannel = floatingWindow.querySelector('#display-channel');
+      if (displayChannel) {
+        const channelMap = { 'pancake': 'PCS', 'four': '4M', 'xmode': 'XM', 'flap': 'FLP' };
+        displayChannel.textContent = channelMap[channelSelector.value] || channelSelector.value;
+      }
+    }
+  };
+
   // 设置选项按钮事件
   floatingWindow.querySelectorAll('.floating-option-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -2531,10 +2565,26 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         const input = floatingWindow.querySelector(`[data-setting="${settingTarget}"]`) as HTMLInputElement;
         if (input) {
           input.value = value;
+          updateSettingsDisplay();
         }
       }
     });
   });
+
+  // 监听input变化
+  floatingWindow.querySelectorAll('input[data-setting]').forEach(input => {
+    input.addEventListener('change', updateSettingsDisplay);
+    input.addEventListener('input', updateSettingsDisplay);
+  });
+
+  // 监听channel选择变化
+  const channelSelector = document.getElementById('channel-selector');
+  if (channelSelector) {
+    channelSelector.addEventListener('change', updateSettingsDisplay);
+  }
+
+  // 初始化显示
+  updateSettingsDisplay();
 
   // 确保窗口位置在视口内的函数
   const ensureWindowInViewport = () => {
