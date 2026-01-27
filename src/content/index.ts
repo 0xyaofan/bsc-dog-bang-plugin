@@ -1469,6 +1469,15 @@ async function handleSell(tokenAddress) {
         }
       });
 
+      // 特别处理：100% 卖出成功后直接清零余额，无需等待查询
+      if (parseFloat(percent) === 100) {
+        const tokenBalanceEl = document.getElementById('token-balance');
+        if (tokenBalanceEl) {
+          tokenBalanceEl.textContent = '0.00';
+          logger.debug('[SidePanel] 100% 卖出，余额已清零');
+        }
+      }
+
       // 卖出成功后立即刷新余额
       loadWalletStatus();
       loadTokenInfo(tokenAddress);
@@ -2578,6 +2587,15 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 卖出成功');
             isSuccess = true;
+
+            // 特别处理：100% 卖出成功后直接清零余额，无需等待查询
+            if (parseFloat(amount) === 100) {
+              const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+              if (tokenBalanceEl) {
+                tokenBalanceEl.textContent = '0.00';
+                logger.debug('[Floating Window] 100% 卖出，余额已清零');
+              }
+            }
 
             // 卖出成功后立即刷新余额
             updateFloatingBalances().catch(err => {
