@@ -765,23 +765,25 @@ html.theme-light .wallet-link:hover {
 
 /* 设置显示行 */
 .floating-settings-display {
-  padding: 8px 12px;
+  padding: 6px 8px;
   background: rgba(15, 15, 30, 0.5);
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 12px;
   font-size: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .setting-item {
   display: flex;
   align-items: center;
-  gap: 3px;
-  flex: 1;
-  min-width: 70px;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: auto;
 }
 
 .setting-label {

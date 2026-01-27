@@ -2539,11 +2539,11 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     }
     if (buyGasInput) {
       const displayBuyGas = floatingWindow.querySelector('#display-buy-gas');
-      if (displayBuyGas) displayBuyGas.textContent = `${buyGasInput.value}G`;
+      if (displayBuyGas) displayBuyGas.textContent = `${buyGasInput.value}Gwei`;
     }
     if (sellGasInput) {
       const displaySellGas = floatingWindow.querySelector('#display-sell-gas');
-      if (displaySellGas) displaySellGas.textContent = `${sellGasInput.value}G`;
+      if (displaySellGas) displaySellGas.textContent = `${sellGasInput.value}Gwei`;
     }
     if (channelSelector) {
       const displayChannel = floatingWindow.querySelector('#display-channel');
