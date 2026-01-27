@@ -2501,9 +2501,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         btn.removeAttribute('disabled');
       } catch (error) {
         timer.stop(`✗ ${formatDuration(timer.getElapsed())}`);
-        // 详细的错误日志，帮助调试
         logger.error('[Floating Window] 交易失败:', error);
-        logger.error('[Floating Window] 错误详情:', {
+        // Debug 级别的详细日志
+        logger.debug('[Floating Window] 错误详情:', {
           message: error?.message,
           tokenAddress: currentTokenAddress,
           channel,
