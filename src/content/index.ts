@@ -2464,6 +2464,16 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       // 更新全局代币地址
       currentTokenAddress = latestTokenAddress;
 
+      // Check token balance before starting timer for sell action
+      if (action === 'sell') {
+        const tokenBalanceEl = document.getElementById('floating-token-balance');
+        const tokenBalance = tokenBalanceEl?.textContent?.trim();
+        if (tokenBalance === '0.00' || tokenBalance === '--' || !tokenBalance) {
+          showStatus('代币余额为0，无法卖出', 'error');
+          return;
+        }
+      }
+
       // 禁用按钮并启动计时器
       btn.setAttribute('disabled', 'true');
       const originalText = btn.textContent || '';
