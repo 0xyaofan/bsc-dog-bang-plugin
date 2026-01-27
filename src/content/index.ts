@@ -1365,8 +1365,9 @@ async function handleSell(tokenAddress) {
 
   // 检查代币余额是否为0
   const tokenBalanceEl = document.getElementById('token-balance');
-  const tokenBalance = tokenBalanceEl?.textContent?.trim();
-  if (tokenBalance === '0.00' || tokenBalance === '--' || !tokenBalance) {
+  const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
+  const tokenBalanceNum = parseFloat(tokenBalanceText);
+  if (isNaN(tokenBalanceNum) || tokenBalanceNum < 0.001) {
     showStatus('代币余额为0，无法卖出', 'error');
     return;
   }
@@ -2466,9 +2467,12 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
 
       // Check token balance before starting timer for sell action
       if (action === 'sell') {
-        const tokenBalanceEl = document.getElementById('floating-token-balance');
-        const tokenBalance = tokenBalanceEl?.textContent?.trim();
-        if (tokenBalance === '0.00' || tokenBalance === '--' || !tokenBalance) {
+        const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+        const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
+        const tokenBalance = parseFloat(tokenBalanceText);
+        
+        // If balance is 0, less than 0.001, or couldn't be parsed, return early
+        if (isNaN(tokenBalance) || tokenBalance < 0.001) {
           showStatus('代币余额为0，无法卖出', 'error');
           return;
         }
