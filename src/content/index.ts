@@ -1469,19 +1469,23 @@ async function handleSell(tokenAddress) {
         }
       });
 
-      // 特别处理：100% 卖出成功后直接清零余额，无需等待查询
-      if (parseFloat(percent) === 100) {
-        const tokenBalanceEl = document.getElementById('token-balance');
-        if (tokenBalanceEl) {
-          tokenBalanceEl.textContent = '0.00';
-          logger.debug('[SidePanel] 100% 卖出，余额已清零');
-        }
-      }
-
       // 卖出成功后立即刷新余额
+      const is100PercentSell = parseFloat(percent) === 100;
       loadWalletStatus();
       loadTokenInfo(tokenAddress);
       loadTokenRoute(tokenAddress, { force: true });
+
+      // 特别处理：100% 卖出成功后直接清零余额
+      // 使用 setTimeout 确保在刷新完成后设置
+      if (is100PercentSell) {
+        setTimeout(() => {
+          const tokenBalanceEl = document.getElementById('token-balance');
+          if (tokenBalanceEl) {
+            tokenBalanceEl.textContent = '0.00';
+            logger.debug('[SidePanel] 100% 卖出，余额已清零');
+          }
+        }, 100); // 等待刷新函数执行
+      }
 
       timer.step('处理成功响应和通知');
 
@@ -2588,18 +2592,20 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             logger.debug('[Floating Window] 卖出成功');
             isSuccess = true;
 
-            // 特别处理：100% 卖出成功后直接清零余额，无需等待查询
-            if (parseFloat(amount) === 100) {
-              const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
-              if (tokenBalanceEl) {
-                tokenBalanceEl.textContent = '0.00';
-                logger.debug('[Floating Window] 100% 卖出，余额已清零');
-              }
-            }
-
             // 卖出成功后立即刷新余额
+            const is100PercentSell = parseFloat(amount) === 100;
             updateFloatingBalances().catch(err => {
               logger.debug('[Floating Window] 刷新余额失败:', err);
+            }).finally(() => {
+              // 特别处理：100% 卖出成功后直接清零余额
+              // 在刷新完成后设置，确保不会被查询结果覆盖
+              if (is100PercentSell) {
+                const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+                if (tokenBalanceEl) {
+                  tokenBalanceEl.textContent = '0.00';
+                  logger.debug('[Floating Window] 100% 卖出，余额已清零');
+                }
+              }
             });
           } else {
             throw new Error(response?.error || '卖出失败');
