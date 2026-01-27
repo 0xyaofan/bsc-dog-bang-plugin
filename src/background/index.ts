@@ -281,8 +281,13 @@ function ensureTradeTokenContext(tokenAddress: string) {
   if (!normalized) {
     throw new Error('未提供有效的代币地址');
   }
+  // 修复：检测到代币切换时，直接更新上下文而不是抛出错误
+  // 这允许用户在切换代币后立即交易，无需等待页面刷新
   if (currentTokenContext.tokenAddress && currentTokenContext.tokenAddress !== normalized) {
-    throw new Error('检测到代币已切换，请刷新页面后重试');
+    logger.debug('[Token Context] 检测到代币切换，自动更新上下文:', {
+      from: currentTokenContext.tokenAddress,
+      to: normalized
+    });
   }
   updateTokenContext({ tokenAddress: normalized, source: 'trade' });
   return normalized;
