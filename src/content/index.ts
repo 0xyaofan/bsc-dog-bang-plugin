@@ -705,6 +705,9 @@ let currentTokenAddress = null;
 // 当前代币信息（从 background 获取，仅用于 UI 显示）
 let currentTokenInfo = null;
 
+// SidePanel 交易锁，防止并发交易
+let isSidePanelTrading = false;
+
 const pendingTransactions = new Map<string, { type: 'buy' | 'sell'; token: string }>();
 const sellAutoApproveCache = new Set<string>();
 
@@ -1247,6 +1250,13 @@ async function handleBuy(tokenAddress) {
     return;
   }
 
+  // 检查全局交易锁，防止并发交易
+  if (isSidePanelTrading) {
+    logger.debug('[SidePanel] 交易进行中，忽略重复点击');
+    showStatus('交易进行中，请稍候', 'warning');
+    return;
+  }
+
   // 创建性能计时器
   const timer = new PerformanceTimer('buy');
 
@@ -1270,6 +1280,9 @@ async function handleBuy(tokenAddress) {
   if (!btn) {
     return;
   }
+
+  // 设置全局交易锁
+  isSidePanelTrading = true;
   btn.disabled = true;
   const buttonTimer = startButtonTimer(btn, '买入中');
 
@@ -1312,11 +1325,10 @@ async function handleBuy(tokenAddress) {
         }
       });
 
-      setTimeout(() => {
-        loadWalletStatus();
-        loadTokenInfo(tokenAddress);
-        loadTokenRoute(tokenAddress, { force: true });
-      }, CONTENT_CONFIG.POST_TRADE_REFRESH_DELAY_MS);
+      // 买入成功后立即刷新余额
+      loadWalletStatus();
+      loadTokenInfo(tokenAddress);
+      loadTokenRoute(tokenAddress, { force: true });
 
       timer.step('处理成功响应和通知');
 
@@ -1351,6 +1363,8 @@ async function handleBuy(tokenAddress) {
     showStatus(appendDurationSuffix(baseMessage, durationText), 'error');
   } finally {
     btn.disabled = false;
+    // 释放全局交易锁
+    isSidePanelTrading = false;
   }
 }
 
@@ -1360,6 +1374,13 @@ async function handleSell(tokenAddress) {
   const walletAddressEl = document.getElementById('wallet-address');
   if (!walletAddressEl || !walletAddressEl.classList.contains('wallet-unlocked')) {
     showStatus('请先解锁钱包', 'error');
+    return;
+  }
+
+  // 检查全局交易锁，防止并发交易
+  if (isSidePanelTrading) {
+    logger.debug('[SidePanel] 交易进行中，忽略重复点击');
+    showStatus('交易进行中，请稍候', 'warning');
     return;
   }
 
@@ -1393,6 +1414,9 @@ async function handleSell(tokenAddress) {
   if (!btn) {
     return;
   }
+
+  // 设置全局交易锁
+  isSidePanelTrading = true;
   btn.disabled = true;
   const buttonTimer = startButtonTimer(btn, '卖出中');
 
@@ -1445,11 +1469,10 @@ async function handleSell(tokenAddress) {
         }
       });
 
-      setTimeout(() => {
-        loadWalletStatus();
-        loadTokenInfo(tokenAddress);
-        loadTokenRoute(tokenAddress, { force: true });
-      }, CONTENT_CONFIG.POST_TRADE_REFRESH_DELAY_MS);
+      // 卖出成功后立即刷新余额
+      loadWalletStatus();
+      loadTokenInfo(tokenAddress);
+      loadTokenRoute(tokenAddress, { force: true });
 
       timer.step('处理成功响应和通知');
 
@@ -1488,6 +1511,8 @@ async function handleSell(tokenAddress) {
     updateSellEstimateDisplay(null);
   } finally {
     btn.disabled = false;
+    // 释放全局交易锁
+    isSidePanelTrading = false;
   }
 }
 
