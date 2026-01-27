@@ -13,6 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+## [1.1.6] - 2025-01-27
+
+### Added
+- **卖出交易性能优化** - 提升卖出交易速度和响应性
+  - Background handler 并发执行 quote balance 查询和卖出交易
+  - Router Channel (Pancake) 并发执行 prepareTokenSell 和 findBestRoute
+  - Quote Portal Channel (Flap) 并发执行 prepareTokenSell 和 getQuote
+  - 预期性能提升 30-50%
+
+### Fixed
+- **代币切换后立即交易失败问题**
+  - 修复用户切换到新代币后，前 2-3 次点击买入立即失败的问题
+  - 错误信息："检测到代币已切换，请刷新页面后重试"
+  - 修改 ensureTradeTokenContext 函数，检测到代币切换时直接更新上下文而不是抛出错误
+  - 允许用户在切换代币后立即交易，无需等待或重试
+- **"迁移中"状态交易锁定问题**
+  - 移除"迁移中"状态的交易锁定
+  - "迁移中"是短暂的过渡状态（通常只有几秒），不应阻止用户交易
+  - 提升用户体验，减少不必要的交易限制
+
+### Changed
+- **调试日志优化**
+  - 将详细错误上下文日志从 logger.error 降级为 logger.debug
+  - 保持关键错误日志为 logger.error 级别
+  - 减少生产环境控制台噪音，避免影响交易性能
+
 ## [1.1.5] - 2025-01-26
 
 ### Added
@@ -320,6 +346,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.6` - Sell performance & token switch fix (2025-01-27)
 - `1.1.5` - Trading performance optimization (2025-01-26)
 - `1.1.4` - Light/Dark theme system & UI optimization (2025-01-22)
 - `1.1.3` - Platform support & UI optimization (2025-01-17)
@@ -331,6 +358,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.5 to 1.1.6
+
+1. Download version 1.1.6 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. 卖出交易性能优化自动生效
+5. 代币切换后可立即交易，无需等待或重试
+6. "迁移中"状态不再阻止交易
 
 ### From 1.1.4 to 1.1.5
 
@@ -405,7 +441,8 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.6
 [1.1.5]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.5
 [1.1.4]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.4
 [1.1.3]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.3
