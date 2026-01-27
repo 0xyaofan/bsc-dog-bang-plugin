@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chrome Web Store publication
 
 ### Added
+- **3-hop 路由支持** - 支持复杂的多跳交易路径
+  - 自动发现代币的 quote token（募集币种）
+  - 构建 WBNB → Bridge → QuoteToken → Token 的 3-hop 路径
+  - 当标准 2-hop 路径失败时自动回退到 3-hop 路径
+  - 支持与非主流代币配对的代币交易（如 UDOG-USAT）
+  - 智能路径评估，选择最优路由
 - **扩展桥接代币支持** - 支持更多非标准流动性池代币
   - 新增 USAT (0xdb7a6d5a127ea5c0a3576677112f13d731232a27) 作为桥接代币
   - 支持与 USAT 配对的代币交易路由

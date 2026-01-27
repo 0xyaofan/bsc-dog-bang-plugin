@@ -809,6 +809,171 @@ async function getDynamicBridgePaths(publicClient, tokenAddress: string, options
   return paths;
 }
 
+// ========== Quote Token 发现和 3-hop 路由支持 ==========
+
+// Pair ABI - 用于查询 Pair 的 token0 和 token1
+const PAIR_ABI = [
+  {
+    inputs: [],
+    name: 'token0',
+    outputs: [{ internalType: 'address', name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'token1',
+    outputs: [{ internalType: 'address', name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function'
+  }
+] as const;
+
+/**
+ * 发现代币的 quote token（募集币种）
+ * 通过查询代币的 Pair 合约来获取其配对的代币
+ */
+async function discoverTokenQuoteToken(
+  publicClient,
+  factoryAddress: string,
+  factoryAbi: any,
+  tokenAddress: string
+): Promise<string | null> {
+  if (!publicClient || !factoryAddress || !factoryAbi || !tokenAddress) {
+    return null;
+  }
+
+  try {
+    const checksumToken = toChecksumAddress(tokenAddress, 'discoverQuote');
+    if (!checksumToken) {
+      return null;
+    }
+
+    // 尝试常见的配对代币
+    const commonPairTokens = [
+      '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
+      '0x55d398326f99059fF775485246999027B3197955', // USDT
+      '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', // USDC
+      '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56', // BUSD
+    ];
+
+    for (const pairToken of commonPairTokens) {
+      const checksumPairToken = toChecksumAddress(pairToken, 'pairToken');
+      if (!checksumPairToken || checksumPairToken === checksumToken) {
+        continue;
+      }
+
+      // 检查是否存在 Pair
+      const pairAddress = await publicClient.readContract({
+        address: toChecksumAddress(factoryAddress, 'factory'),
+        abi: factoryAbi,
+        functionName: 'getPair',
+        args: [checksumToken, checksumPairToken]
+      });
+
+      if (pairAddress && pairAddress !== ZERO_ADDRESS) {
+        // 找到了 Pair，查询其 token0 和 token1
+        const [token0, token1] = await Promise.all([
+          publicClient.readContract({
+            address: pairAddress,
+            abi: PAIR_ABI,
+            functionName: 'token0'
+          }),
+          publicClient.readContract({
+            address: pairAddress,
+            abi: PAIR_ABI,
+            functionName: 'token1'
+          })
+        ]);
+
+        // 返回不是目标代币的那个（即 quote token）
+        const quoteToken = token0.toLowerCase() === checksumToken.toLowerCase() ? token1 : token0;
+        logger.debug(`[QuoteDiscovery] 发现代币 ${checksumToken.slice(0, 10)} 的 quote token: ${quoteToken.slice(0, 10)}`);
+        return quoteToken;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    logger.debug(`[QuoteDiscovery] 发现 quote token 失败: ${error?.message || error}`);
+    return null;
+  }
+}
+
+/**
+ * 构建 3-hop 路径
+ * WBNB → Bridge → QuoteToken → Token
+ */
+async function build3HopPaths(
+  publicClient,
+  factoryAddress: string,
+  factoryAbi: any,
+  nativeWrapper: string,
+  tokenAddress: string,
+  quoteToken: string,
+  bridgeTokens: string[]
+): Promise<{ buy: string[][], sell: string[][] }> {
+  const buyPaths: string[][] = [];
+  const sellPaths: string[][] = [];
+
+  if (!publicClient || !factoryAddress || !factoryAbi || !quoteToken) {
+    return { buy: buyPaths, sell: sellPaths };
+  }
+
+  const checksumNative = toChecksumAddress(nativeWrapper, '3hopNative');
+  const checksumToken = toChecksumAddress(tokenAddress, '3hopToken');
+  const checksumQuote = toChecksumAddress(quoteToken, '3hopQuote');
+
+  if (!checksumNative || !checksumToken || !checksumQuote) {
+    return { buy: buyPaths, sell: sellPaths };
+  }
+
+  // 检查 QuoteToken 与 Token 的 Pair 是否存在
+  const quoteTokenPairExists = await hasPair(
+    publicClient,
+    factoryAddress,
+    factoryAbi,
+    checksumQuote,
+    checksumToken
+  );
+
+  if (!quoteTokenPairExists) {
+    logger.debug(`[3HopPath] QuoteToken-Token Pair 不存在`);
+    return { buy: buyPaths, sell: sellPaths };
+  }
+
+  // 尝试每个桥接代币
+  for (const bridge of bridgeTokens) {
+    const checksumBridge = toChecksumAddress(bridge, '3hopBridge');
+    if (!checksumBridge || checksumBridge === checksumNative || checksumBridge === checksumQuote || checksumBridge === checksumToken) {
+      continue;
+    }
+
+    try {
+      // 检查 WBNB → Bridge 和 Bridge → QuoteToken 的 Pair 是否都存在
+      const [nativeBridgeExists, bridgeQuoteExists] = await Promise.all([
+        hasPair(publicClient, factoryAddress, factoryAbi, checksumNative, checksumBridge),
+        hasPair(publicClient, factoryAddress, factoryAbi, checksumBridge, checksumQuote)
+      ]);
+
+      if (nativeBridgeExists && bridgeQuoteExists) {
+        // 构建 3-hop 路径
+        const buyPath = [checksumNative, checksumBridge, checksumQuote, checksumToken];
+        const sellPath = [checksumToken, checksumQuote, checksumBridge, checksumNative];
+
+        buyPaths.push(buyPath);
+        sellPaths.push(sellPath);
+
+        logger.debug(`[3HopPath] 找到有效路径: ${buyPath.map(a => a.slice(0, 6)).join(' → ')}`);
+      }
+    } catch (error) {
+      logger.debug(`[3HopPath] 检查桥接代币 ${checksumBridge.slice(0, 10)} 失败: ${error?.message || error}`);
+    }
+  }
+
+  return { buy: buyPaths, sell: sellPaths };
+}
+
 type DynamicGasOptions = {
   enabled?: boolean;
   key: string;
@@ -1213,6 +1378,64 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       if (result && result.amountOut > bestAmountOut) {
         bestAmountOut = result.amountOut;
         bestPath = result.path;
+      }
+    }
+
+    if (!bestPath) {
+      // 回退机制：尝试发现代币的 quote token 并构建 3-hop 路径
+      logger.debug(`${channelLabel} 标准路径失败，尝试发现 quote token...`);
+
+      try {
+        const quoteToken = await discoverTokenQuoteToken(
+          publicClient,
+          factoryAddress,
+          factoryAbi,
+          tokenAddress
+        );
+
+        if (quoteToken) {
+          logger.debug(`${channelLabel} 发现 quote token: ${quoteToken.slice(0, 10)}`);
+
+          // 构建 3-hop 路径
+          const allBridgeTokens = [
+            ...(stableTokens || []),
+            ...(helperTokenPool || []),
+            ...(dynamicBridgeTokenPool || [])
+          ];
+
+          const threeHopPaths = await build3HopPaths(
+            publicClient,
+            factoryAddress,
+            factoryAbi,
+            nativeWrapper,
+            tokenAddress,
+            quoteToken,
+            allBridgeTokens
+          );
+
+          if (threeHopPaths[direction].length > 0) {
+            logger.debug(`${channelLabel} 找到 ${threeHopPaths[direction].length} 个 3-hop 路径`);
+
+            // 评估 3-hop 路径
+            const threeHopResults = await fetchPathAmounts(
+              publicClient,
+              amountIn,
+              threeHopPaths[direction],
+              contractAddress,
+              abi,
+              channelLabel
+            );
+
+            for (const result of threeHopResults) {
+              if (result && result.amountOut > bestAmountOut) {
+                bestAmountOut = result.amountOut;
+                bestPath = result.path;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        logger.debug(`${channelLabel} 3-hop 路径回退失败: ${error?.message || error}`);
       }
     }
 
