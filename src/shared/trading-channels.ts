@@ -48,6 +48,39 @@ const DYNAMIC_GAS_CACHE_TTL = 5 * 60 * 1000;
 const V3_FEE_TIERS = [100, 250, 500, 2500, 10000];
 const v3PoolCache = new Map<string, { fee: number; pool: string } | null>();
 
+// ========== 授权缓存（性能优化：避免重复查询链上授权状态）==========
+type AllowanceCacheEntry = {
+  amount: bigint;
+  updatedAt: number;
+};
+const allowanceCache = new Map<string, AllowanceCacheEntry>();
+const ALLOWANCE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24小时
+
+function getCachedAllowance(tokenAddress: string, spenderAddress: string): bigint | null {
+  const cacheKey = `${tokenAddress.toLowerCase()}:${spenderAddress.toLowerCase()}`;
+  const cached = allowanceCache.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+  if (Date.now() - cached.updatedAt > ALLOWANCE_CACHE_TTL) {
+    allowanceCache.delete(cacheKey);
+    return null;
+  }
+  return cached.amount;
+}
+
+function setCachedAllowance(tokenAddress: string, spenderAddress: string, amount: bigint) {
+  const cacheKey = `${tokenAddress.toLowerCase()}:${spenderAddress.toLowerCase()}`;
+  allowanceCache.set(cacheKey, { amount, updatedAt: Date.now() });
+  logger.debug('[AllowanceCache] 缓存授权状态:', { tokenAddress: tokenAddress.slice(0, 10), spender: spenderAddress.slice(0, 10), amount: amount.toString() });
+}
+
+function clearAllowanceCache(tokenAddress: string, spenderAddress: string) {
+  const cacheKey = `${tokenAddress.toLowerCase()}:${spenderAddress.toLowerCase()}`;
+  allowanceCache.delete(cacheKey);
+  logger.debug('[AllowanceCache] 清除授权缓存:', { tokenAddress: tokenAddress.slice(0, 10), spender: spenderAddress.slice(0, 10) });
+}
+
 // 代币元数据永久缓存：symbol 和 decimals 是 ERC20 标准中的 view 函数，永不改变
 type TokenMetadata = {
   symbol?: string;
@@ -300,6 +333,9 @@ async function ensureTokenApproval({
       : await sendApprove();
     await publicClient.waitForTransactionReceipt({ hash: approveHash });
     logger.debug('[ensureTokenApproval] 授权完成');
+
+    // 授权成功后更新缓存
+    setCachedAllowance(tokenAddress, spenderAddress, totalSupply);
   }
 }
 
@@ -1593,9 +1629,90 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         hasAccurateEstimate = false; // 标记为低精度预估
       }
 
-      const [initialState, routePlan] = await Promise.all([
+      // 性能优化：优先使用 tokenInfo 中的授权信息（来自现有缓存）
+      // 如果 tokenInfo 包含授权信息，直接使用，避免链上查询
+      let v2AllowanceFromCache: bigint | null = null;
+      let v3AllowanceFromCache: bigint | null = null;
+
+      if (tokenInfo && tokenInfo.allowances) {
+        // tokenInfo 包含授权信息，直接使用
+        if (tokenInfo.allowances.pancake) {
+          v2AllowanceFromCache = BigInt(tokenInfo.allowances.pancake);
+          logger.debug(`${channelLabel} 使用 tokenInfo 中的 V2 授权: ${v2AllowanceFromCache}`);
+        }
+        // V3 使用相同的 pancake 授权（因为都是 PancakeSwap）
+        if (tokenInfo.allowances.pancake) {
+          v3AllowanceFromCache = BigInt(tokenInfo.allowances.pancake);
+          logger.debug(`${channelLabel} 使用 tokenInfo 中的 V3 授权: ${v3AllowanceFromCache}`);
+        }
+      }
+
+      // 性能优化：并行查询 V2 和 V3 授权，避免等待路由结果
+      // 这样无论最终使用哪个路由，都不需要再查询授权
+      // 优先使用 tokenInfo 中的授权，如果没有才查询链上
+      const v2AllowancePromise = smartRouterAddress
+        ? (async () => {
+            // 优先使用 tokenInfo 中的授权
+            if (v2AllowanceFromCache !== null) {
+              return v2AllowanceFromCache;
+            }
+            // 其次使用我们自己的缓存
+            const cached = getCachedAllowance(tokenAddress, contractAddress);
+            if (cached !== null) {
+              logger.debug(`${channelLabel} 使用 V2 授权缓存: ${cached}`);
+              return cached;
+            }
+            // 最后查询链上
+            try {
+              const allowance = await publicClient.readContract({
+                address: tokenAddress,
+                abi: ERC20_ABI,
+                functionName: 'allowance',
+                args: [account.address, contractAddress]
+              });
+              setCachedAllowance(tokenAddress, contractAddress, allowance);
+              return allowance;
+            } catch (err) {
+              logger.warn(`${channelLabel} V2 授权查询失败: ${err?.message || err}`);
+              return 0n;
+            }
+          })()
+        : Promise.resolve(null);
+
+      const v3AllowancePromise = smartRouterAddress
+        ? (async () => {
+            // 优先使用 tokenInfo 中的授权
+            if (v3AllowanceFromCache !== null) {
+              return v3AllowanceFromCache;
+            }
+            // 其次使用我们自己的缓存
+            const cached = getCachedAllowance(tokenAddress, smartRouterAddress);
+            if (cached !== null) {
+              logger.debug(`${channelLabel} 使用 V3 授权缓存: ${cached}`);
+              return cached;
+            }
+            // 最后查询链上
+            try {
+              const allowance = await publicClient.readContract({
+                address: tokenAddress,
+                abi: ERC20_ABI,
+                functionName: 'allowance',
+                args: [account.address, smartRouterAddress]
+              });
+              setCachedAllowance(tokenAddress, smartRouterAddress, allowance);
+              return allowance;
+            } catch (err) {
+              logger.warn(`${channelLabel} V3 授权查询失败: ${err?.message || err}`);
+              return 0n;
+            }
+          })()
+        : Promise.resolve(null);
+
+      const [initialState, routePlan, v2AllowanceValue, v3AllowanceValue] = await Promise.all([
         preparePromise,
-        findBestRoute('sell', publicClient, tokenAddress, estimatedAmount)
+        findBestRoute('sell', publicClient, tokenAddress, estimatedAmount),
+        v2AllowancePromise,
+        v3AllowancePromise
       ]);
 
       const { totalSupply, amountToSell } = initialState;
@@ -1621,28 +1738,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估路由`);
       }
 
-      // 性能优化：提前查询 V3 授权，避免后续重查
-      // 如果支持 V3 且路由可能是 V3，提前查询 V3 授权
-      let v3AllowanceValue: bigint | null = null;
-      if (smartRouterAddress && finalRoutePlan.kind === 'v3') {
-        try {
-          v3AllowanceValue = await publicClient.readContract({
-            address: tokenAddress,
-            abi: ERC20_ABI,
-            functionName: 'allowance',
-            args: [account.address, smartRouterAddress]
-          });
-          logger.debug(`${channelLabel} V3 授权查询成功: ${v3AllowanceValue}`);
-        } catch (error) {
-          logger.warn(`${channelLabel} 获取 V3 授权失败: ${error?.message || error}`);
-          v3AllowanceValue = 0n;
-        }
-      }
-
+      // 使用预查询的授权值（已在并发查询中获取）
       const spenderAddress = finalRoutePlan.kind === 'v2' ? contractAddress : smartRouterAddress;
-      // 使用预查询的 V3 授权值，避免重复查询
-      if (finalRoutePlan.kind === 'v3' && v3AllowanceValue !== null) {
+      if (finalRoutePlan.kind === 'v2' && v2AllowanceValue !== null) {
+        allowanceValue = v2AllowanceValue;
+        logger.debug(`${channelLabel} 使用预查询的 V2 授权: ${allowanceValue}`);
+      } else if (finalRoutePlan.kind === 'v3' && v3AllowanceValue !== null) {
         allowanceValue = v3AllowanceValue;
+        logger.debug(`${channelLabel} 使用预查询的 V3 授权: ${allowanceValue}`);
       }
 
       await ensureTokenApproval({
@@ -2118,4 +2221,4 @@ function getChannel(channelId) {
   return channel;
 }
 
-export { getChannel, ChannelRouter };
+export { getChannel, ChannelRouter, clearAllowanceCache };

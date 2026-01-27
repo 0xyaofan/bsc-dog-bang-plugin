@@ -49,7 +49,7 @@ import {
   withCache
 } from '../shared/viem-helper.js';
 import { encodeAbiParameters, type Address } from 'viem';
-import { getChannel, setPancakePreferredMode } from '../shared/trading-channels.js';
+import { getChannel, setPancakePreferredMode, clearAllowanceCache } from '../shared/trading-channels.js';
 import { TxWatcher } from '../shared/tx-watcher.js';
 import { dedupePromise } from '../shared/promise-dedupe.js';
 import {
@@ -3512,6 +3512,9 @@ async function handleRevokeTokenApproval({ tokenAddress, channel = 'pancake' }) 
         return txHash;
       }, 'revoke');
       invalidateWalletDerivedCaches(walletAccount.address, tokenAddress, { allowances: true });
+
+      // 清除授权缓存
+      clearAllowanceCache(tokenAddress, spenderAddress);
 
       logger.debug('[Revoke] 撤销授权成功');
       return {

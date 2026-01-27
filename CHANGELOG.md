@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+### Added
+- **扩展桥接代币支持** - 支持更多非标准流动性池代币
+  - 新增 USAT (0xdb7a6d5a127ea5c0a3576677112f13d731232a27) 作为桥接代币
+  - 支持与 USAT 配对的代币交易路由
+  - 自动发现和使用非标准桥接代币路径
+  - 解决代币与非主流币种配对时路由失败的问题
+
 ## [1.1.6] - 2025-01-27
 
 ### Added
@@ -20,7 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Background handler 并发执行 quote balance 查询和卖出交易
   - Router Channel (Pancake) 并发执行 prepareTokenSell 和 findBestRoute
   - Quote Portal Channel (Flap) 并发执行 prepareTokenSell 和 getQuote
-  - 预期性能提升 30-50%
+  - **新增：并行查询 V2 和 V3 授权**
+    - 在查询路由的同时并行查询两个授权
+    - 避免等待路由结果后再查询授权
+    - 消除 V3 授权重查的 20-50ms 延迟
+  - **新增：授权状态缓存机制**
+    - 整合现有的代币授权缓存系统
+    - 优先使用 tokenInfo 中的授权信息（来自 background 缓存）
+    - 其次使用 trading-channels 层的授权缓存
+    - 最后才查询链上授权状态
+    - 首次卖出时如果已授权，直接使用缓存，无需链上查询
+    - 第二次及后续卖出时直接使用缓存，无需链上查询
+    - 消除已授权场景下的 40-100ms 授权查询延迟
+    - 授权成功后自动更新缓存
+    - 撤销授权后自动清除缓存
+    - 前端获取代币信息时同时获取授权状态
+  - 预期性能提升 30-50%（首次卖出），50-70%（已授权场景）
+- **买入/卖出后快速余额更新机制**
+  - 买入/卖出成功后启动快速轮询（每1秒查询一次）
+  - 持续10秒或直到检测到余额变化后自动停止
+  - 同时支持 SidePanel 和浮动窗口
+  - 大幅提升余额更新速度，从10-15秒降至1-3秒
 
 ### Fixed
 - **代币切换后立即交易失败问题**
@@ -32,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 移除"迁移中"状态的交易锁定
   - "迁移中"是短暂的过渡状态（通常只有几秒），不应阻止用户交易
   - 提升用户体验，减少不必要的交易限制
+- **买入后立即卖出失败问题**
+  - 修复买入成功后立即卖出时提示"代币余额为0，无法卖出"的问题
+  - 检测待确认的买入交易，允许在余额更新前立即卖出
+  - 同时修复浮动窗口和 SidePanel 的卖出逻辑
+  - 提升交易连续性和用户体验
 
 ### Changed
 - **调试日志优化**

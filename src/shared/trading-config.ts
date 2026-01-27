@@ -211,6 +211,7 @@ export const CONTRACTS = {
   BUSD: '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56',
   USD1: '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d',
   UNITED_STABLES_U: '0xcE24439F2D9C6a2289F741120FE202248B666666',
+  USAT: '0xdb7a6d5a127ea5c0a3576677112f13d731232a27',
 
   // Four.meme 合约（XMode使用相同合约）
   FOUR_TOKEN_MANAGER_V2: '0x5c952063c7fc8610FFDB798152D69F0B9550762b',
@@ -266,6 +267,11 @@ registerQuoteTokenPreset(CONTRACTS.USDC, {
   swapMode: 'v3',
   path: [CONTRACTS.WBNB, CONTRACTS.USDC],
   fee: 100
+});
+
+registerQuoteTokenPreset(CONTRACTS.USAT, {
+  swapMode: 'v2',
+  path: [CONTRACTS.WBNB, CONTRACTS.USAT]
 });
 
 registerQuoteTokenPreset(CONTRACTS.CAKE, {
@@ -451,14 +457,14 @@ export const CHANNEL_DEFINITIONS = {
     options: {
       nativeWrapper: CONTRACTS.WBNB,
       stableTokens: [CONTRACTS.USDT, CONTRACTS.USDC, CONTRACTS.BUSD],
-      helperTokens: [CONTRACTS.ASTER, CONTRACTS.USD1, CONTRACTS.UNITED_STABLES_U].filter(
+      helperTokens: [CONTRACTS.ASTER, CONTRACTS.USD1, CONTRACTS.UNITED_STABLES_U, CONTRACTS.USAT].filter(
         (token): token is string => Boolean(token)
       ),
       buyFunction: 'swapExactETHForTokens',
       sellFunction: 'swapExactTokensForETHSupportingFeeOnTransferTokens',
       factoryAddress: CONTRACTS.PANCAKE_FACTORY,
       factoryAbi: PANCAKE_FACTORY_ABI,
-      dynamicBridgeTokens: [CONTRACTS.USD1, CONTRACTS.UNITED_STABLES_U].filter(
+      dynamicBridgeTokens: [CONTRACTS.USD1, CONTRACTS.UNITED_STABLES_U, CONTRACTS.USAT].filter(
         (token): token is string => Boolean(token)
       ),
       smartRouterAddress: CONTRACTS.PANCAKE_SMART_ROUTER,

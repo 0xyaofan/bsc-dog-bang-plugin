@@ -711,6 +711,16 @@ let isSidePanelTrading = false;
 const pendingTransactions = new Map<string, { type: 'buy' | 'sell'; token: string }>();
 const sellAutoApproveCache = new Set<string>();
 
+// 快速轮询相关变量
+let fastPollingTimer: number | null = null;
+let fastPollingCount = 0;
+const FAST_POLLING_INTERVAL = 1000; // 1秒
+const FAST_POLLING_MAX_COUNT = 10; // 最多轮询10次
+
+// 浮动窗口快速轮询相关变量
+let floatingFastPollingTimer: number | null = null;
+let floatingFastPollingCount = 0;
+
 // Extension context 状态
 let extensionContextValid = true;
 
@@ -877,6 +887,58 @@ function stopPolling() {
   logger.debug('[Dog Bang] 停止状态监听');
 }
 
+// ========== 快速轮询机制（买入/卖出后）==========
+/**
+ * 启动快速轮询，用于买入/卖出后快速更新余额
+ * 每1秒查询一次，持续10秒或直到检测到余额变化
+ */
+function startFastPolling(tokenAddress: string, previousBalance: string) {
+  // 停止之前的快速轮询
+  stopFastPolling();
+
+  fastPollingCount = 0;
+  logger.debug('[Dog Bang] 启动快速轮询，检测余额变化');
+
+  fastPollingTimer = setInterval(async () => {
+    fastPollingCount++;
+
+    try {
+      // 查询最新余额
+      await loadTokenInfo(tokenAddress);
+
+      // 检查余额是否变化
+      const currentBalance = currentTokenInfo?.balance || '0';
+      if (currentBalance !== previousBalance) {
+        logger.debug('[Dog Bang] 检测到余额变化，停止快速轮询', {
+          previous: previousBalance,
+          current: currentBalance
+        });
+        stopFastPolling();
+        return;
+      }
+
+      // 达到最大轮询次数，停止
+      if (fastPollingCount >= FAST_POLLING_MAX_COUNT) {
+        logger.debug('[Dog Bang] 快速轮询达到最大次数，停止');
+        stopFastPolling();
+      }
+    } catch (error) {
+      logger.debug('[Dog Bang] 快速轮询查询余额失败:', error);
+    }
+  }, FAST_POLLING_INTERVAL);
+}
+
+/**
+ * 停止快速轮询
+ */
+function stopFastPolling() {
+  if (fastPollingTimer) {
+    clearInterval(fastPollingTimer);
+    fastPollingTimer = null;
+    fastPollingCount = 0;
+  }
+}
+
 // ========== 代币信息加载（从 background 获取）==========
 // 优化1: 移除前端缓存，全部从 background 获取
 async function loadTokenInfo(tokenAddress) {
@@ -887,18 +949,19 @@ async function loadTokenInfo(tokenAddress) {
       action: 'get_token_info',
       data: {
         tokenAddress,
-        needApproval: false
+        needApproval: true  // 获取授权信息，用于卖出时的性能优化
       }
     });
 
     if (response && response.success) {
-      // 保存当前代币信息用于 UI 显示
+      // 保存当前代币信息用于 UI 显示（包括授权信息）
       currentTokenInfo = {
         address: tokenAddress,
         symbol: response.data.symbol,
         decimals: response.data.decimals,
         totalSupply: response.data.totalSupply,
-        balance: response.data.balance
+        balance: response.data.balance,
+        allowances: response.data.allowances  // 保存授权信息
       };
 
       logger.debug('[Dog Bang] 代币信息已更新:', {
@@ -1326,9 +1389,13 @@ async function handleBuy(tokenAddress) {
       });
 
       // 买入成功后立即刷新余额
+      const previousBalance = currentTokenInfo?.balance || '0';
       loadWalletStatus();
       loadTokenInfo(tokenAddress);
       loadTokenRoute(tokenAddress, { force: true });
+
+      // 启动快速轮询，快速检测余额变化
+      startFastPolling(tokenAddress, previousBalance);
 
       timer.step('处理成功响应和通知');
 
@@ -1385,12 +1452,19 @@ async function handleSell(tokenAddress) {
   }
 
   // 检查代币余额是否为0
-  const tokenBalanceEl = document.getElementById('token-balance');
-  const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
-  const tokenBalanceNum = parseFloat(tokenBalanceText);
-  if (isNaN(tokenBalanceNum) || tokenBalanceNum < 0.001) {
-    showStatus('代币余额为0，无法卖出', 'error');
-    return;
+  // 如果有待确认的买入交易，跳过余额检查（允许立即卖出）
+  const hasPendingBuy = Array.from(pendingTransactions.values()).some(
+    tx => tx.type === 'buy' && tx.token === tokenAddress
+  );
+
+  if (!hasPendingBuy) {
+    const tokenBalanceEl = document.getElementById('token-balance');
+    const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
+    const tokenBalanceNum = parseFloat(tokenBalanceText);
+    if (isNaN(tokenBalanceNum) || tokenBalanceNum < 0.001) {
+      showStatus('代币余额为0，无法卖出', 'error');
+      return;
+    }
   }
 
   // 创建性能计时器
@@ -1471,9 +1545,15 @@ async function handleSell(tokenAddress) {
 
       // 卖出成功后立即刷新余额
       const is100PercentSell = parseFloat(percent) === 100;
+      const previousBalance = currentTokenInfo?.balance || '0';
       loadWalletStatus();
       loadTokenInfo(tokenAddress);
       loadTokenRoute(tokenAddress, { force: true });
+
+      // 启动快速轮询，快速检测余额变化（100%卖出除外，因为会直接清零）
+      if (!is100PercentSell) {
+        startFastPolling(tokenAddress, previousBalance);
+      }
 
       // 特别处理：100% 卖出成功后直接清零余额
       // 使用 setTimeout 确保在刷新完成后设置
@@ -2511,15 +2591,22 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       currentTokenAddress = latestTokenAddress;
 
       // Check token balance before starting timer for sell action
+      // 如果有待确认的买入交易，跳过余额检查（允许立即卖出）
       if (action === 'sell') {
-        const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
-        const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
-        const tokenBalance = parseFloat(tokenBalanceText);
+        const hasPendingBuy = Array.from(pendingTransactions.values()).some(
+          tx => tx.type === 'buy' && tx.token === currentTokenAddress
+        );
 
-        // If balance is 0, less than 0.001, or couldn't be parsed, return early
-        if (isNaN(tokenBalance) || tokenBalance < 0.001) {
-          showStatus('代币余额为0，无法卖出', 'error');
-          return;
+        if (!hasPendingBuy) {
+          const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+          const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
+          const tokenBalance = parseFloat(tokenBalanceText);
+
+          // If balance is 0, less than 0.001, or couldn't be parsed, return early
+          if (isNaN(tokenBalance) || tokenBalance < 0.001) {
+            showStatus('代币余额为0，无法卖出', 'error');
+            return;
+          }
         }
       }
 
@@ -2564,9 +2651,14 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             isSuccess = true;
 
             // 买入成功后立即刷新余额
+            const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+            const previousBalance = tokenBalanceEl?.textContent?.trim() || '0';
             updateFloatingBalances().catch(err => {
               logger.debug('[Floating Window] 刷新余额失败:', err);
             });
+
+            // 启动快速轮询，快速检测余额变化
+            startFloatingFastPolling(previousBalance);
           } else {
             throw new Error(response?.error || '买入失败');
           }
@@ -2594,6 +2686,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
 
             // 卖出成功后立即刷新余额
             const is100PercentSell = parseFloat(amount) === 100;
+            const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+            const previousBalance = tokenBalanceEl?.textContent?.trim() || '0';
+
             updateFloatingBalances().catch(err => {
               logger.debug('[Floating Window] 刷新余额失败:', err);
             }).finally(() => {
@@ -2607,6 +2702,11 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
                 }
               }
             });
+
+            // 启动快速轮询，快速检测余额变化（100%卖出除外，因为会直接清零）
+            if (!is100PercentSell) {
+              startFloatingFastPolling(previousBalance);
+            }
           } else {
             throw new Error(response?.error || '卖出失败');
           }
@@ -2776,6 +2876,53 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     }
   };
 
+  // 浮动窗口快速轮询函数
+  const startFloatingFastPolling = (previousBalance: string) => {
+    // 停止之前的快速轮询
+    stopFloatingFastPolling();
+
+    floatingFastPollingCount = 0;
+    logger.debug('[Floating Window] 启动快速轮询，检测余额变化');
+
+    floatingFastPollingTimer = setInterval(async () => {
+      floatingFastPollingCount++;
+
+      try {
+        // 查询最新余额
+        await updateFloatingBalances();
+
+        // 检查余额是否变化
+        const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+        const currentBalance = tokenBalanceEl?.textContent?.trim() || '0';
+
+        if (currentBalance !== previousBalance) {
+          logger.debug('[Floating Window] 检测到余额变化，停止快速轮询', {
+            previous: previousBalance,
+            current: currentBalance
+          });
+          stopFloatingFastPolling();
+          return;
+        }
+
+        // 达到最大轮询次数，停止
+        if (floatingFastPollingCount >= FAST_POLLING_MAX_COUNT) {
+          logger.debug('[Floating Window] 快速轮询达到最大次数，停止');
+          stopFloatingFastPolling();
+        }
+      } catch (error) {
+        logger.debug('[Floating Window] 快速轮询查询余额失败:', error);
+      }
+    }, FAST_POLLING_INTERVAL);
+  };
+
+  const stopFloatingFastPolling = () => {
+    if (floatingFastPollingTimer) {
+      clearInterval(floatingFastPollingTimer);
+      floatingFastPollingTimer = null;
+      floatingFastPollingCount = 0;
+    }
+  };
+
   // 初始加载余额
   updateFloatingBalances();
 
@@ -2790,6 +2937,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           resizeObserver.disconnect();
           window.removeEventListener('resize', ensureWindowInViewport);
           clearInterval(balanceInterval);
+          stopFloatingFastPolling();
           observer.disconnect();
         }
       });
