@@ -1578,14 +1578,19 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         tokenInfo
       });
 
-      // 使用缓存的余额或预估值来并发查询路由
+      // 优化预估金额逻辑：
+      // 1. 如果有 tokenInfo 缓存，使用缓存余额计算预估金额（精度高）
+      // 2. 如果没有缓存，使用 1 token 作为预估值（精度低，但可以并发查询）
       let estimatedAmount: bigint;
+      let hasAccurateEstimate = false;
       if (tokenInfo && tokenInfo.balance) {
         const balance = BigInt(tokenInfo.balance);
         estimatedAmount = percent === 100 ? balance : balance * BigInt(percent) / 100n;
+        hasAccurateEstimate = true; // 标记为高精度预估
       } else {
         // 如果没有缓存，使用一个合理的预估值（1 token）
         estimatedAmount = parseEther('1');
+        hasAccurateEstimate = false; // 标记为低精度预估
       }
 
       const [initialState, routePlan] = await Promise.all([
@@ -1596,33 +1601,48 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       const { totalSupply, amountToSell } = initialState;
       let allowanceValue = initialState.allowance;
 
-      // 如果实际金额与预估金额差异较大，重新查询路由
+      // 优化重查逻辑：
+      // 1. 如果预估精度高（有 tokenInfo），使用更严格的阈值（10%）
+      // 2. 如果预估精度低（无 tokenInfo），使用更宽松的阈值（5%），因为肯定会有差异
       const amountDiff = amountToSell > estimatedAmount
         ? amountToSell - estimatedAmount
         : estimatedAmount - amountToSell;
-      const diffPercent = Number(amountDiff * 10000n / estimatedAmount) / 100;
+      const diffPercent = estimatedAmount > 0n
+        ? Number(amountDiff * 10000n / estimatedAmount) / 100
+        : 100;
 
+      // 根据预估精度选择阈值
+      const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
       let finalRoutePlan = routePlan;
-      if (diffPercent > 5) {
-        logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，重新查询路由`);
+      if (diffPercent > reQueryThreshold) {
+        logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%（阈值: ${reQueryThreshold}%），重新查询路由`);
         finalRoutePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell);
+      } else if (diffPercent > 1) {
+        logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估路由`);
       }
-      const spenderAddress = finalRoutePlan.kind === 'v2' ? contractAddress : smartRouterAddress;
-      if (finalRoutePlan.kind === 'v3') {
-        if (!smartRouterAddress) {
-          throw new Error('Pancake V3 Router 未配置');
-        }
+
+      // 性能优化：提前查询 V3 授权，避免后续重查
+      // 如果支持 V3 且路由可能是 V3，提前查询 V3 授权
+      let v3AllowanceValue: bigint | null = null;
+      if (smartRouterAddress && finalRoutePlan.kind === 'v3') {
         try {
-          allowanceValue = await publicClient.readContract({
+          v3AllowanceValue = await publicClient.readContract({
             address: tokenAddress,
             abi: ERC20_ABI,
             functionName: 'allowance',
             args: [account.address, smartRouterAddress]
           });
+          logger.debug(`${channelLabel} V3 授权查询成功: ${v3AllowanceValue}`);
         } catch (error) {
           logger.warn(`${channelLabel} 获取 V3 授权失败: ${error?.message || error}`);
-          allowanceValue = 0n;
+          v3AllowanceValue = 0n;
         }
+      }
+
+      const spenderAddress = finalRoutePlan.kind === 'v2' ? contractAddress : smartRouterAddress;
+      // 使用预查询的 V3 授权值，避免重复查询
+      if (finalRoutePlan.kind === 'v3' && v3AllowanceValue !== null) {
+        allowanceValue = v3AllowanceValue;
       }
 
       await ensureTokenApproval({

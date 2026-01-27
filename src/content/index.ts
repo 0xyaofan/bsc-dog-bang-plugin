@@ -2436,6 +2436,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   });
 
   // 交易按钮事件
+  let isTrading = false; // 全局交易锁，防止并发交易
   floatingWindow.querySelectorAll('.floating-quick-btn').forEach(btnElement => {
     const btn = btnElement as HTMLButtonElement;
     btn.addEventListener('click', async (e) => {
@@ -2446,6 +2447,12 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       // 检查按钮是否已禁用，防止重复点击
       if (btn.disabled) {
         logger.debug('[Floating Window] 按钮已禁用，忽略重复点击');
+        return;
+      }
+
+      // 检查全局交易锁，防止并发交易
+      if (isTrading) {
+        logger.debug('[Floating Window] 交易进行中，忽略重复点击');
         return;
       }
 
@@ -2470,13 +2477,16 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
         const tokenBalanceText = tokenBalanceEl?.textContent?.trim() || '0.00';
         const tokenBalance = parseFloat(tokenBalanceText);
-        
+
         // If balance is 0, less than 0.001, or couldn't be parsed, return early
         if (isNaN(tokenBalance) || tokenBalance < 0.001) {
           showStatus('代币余额为0，无法卖出', 'error');
           return;
         }
       }
+
+      // 设置全局交易锁
+      isTrading = true;
 
       // 禁用按钮并启动计时器
       btn.setAttribute('disabled', 'true');
@@ -2514,6 +2524,11 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 买入成功');
             isSuccess = true;
+
+            // 买入成功后立即刷新余额
+            updateFloatingBalances().catch(err => {
+              logger.debug('[Floating Window] 刷新余额失败:', err);
+            });
           } else {
             throw new Error(response?.error || '买入失败');
           }
@@ -2538,6 +2553,11 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             timer.stop(`✓ ${formatDuration(timer.getElapsed())}`);
             logger.debug('[Floating Window] 卖出成功');
             isSuccess = true;
+
+            // 卖出成功后立即刷新余额
+            updateFloatingBalances().catch(err => {
+              logger.debug('[Floating Window] 刷新余额失败:', err);
+            });
           } else {
             throw new Error(response?.error || '卖出失败');
           }
@@ -2563,6 +2583,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           btn.textContent = originalText;
           btn.removeAttribute('disabled');
         }, 500);
+      } finally {
+        // 释放全局交易锁
+        isTrading = false;
       }
     });
   });
