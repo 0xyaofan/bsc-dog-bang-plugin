@@ -2175,6 +2175,13 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   // 避免使用旧代币的手动通道设置导致新代币交易失败
   userChannelOverride = false;
 
+  // Ensure token route is loaded for the floating window to display correct channel
+  if (!currentTokenRoute || currentTokenRoute.tokenAddress !== tokenAddress) {
+    loadTokenRoute(tokenAddress).catch(err => {
+      logger.debug('[Floating Window] Failed to load token route:', err);
+    });
+  }
+
   const tradingPresets = userSettings?.trading ?? DEFAULT_USER_SETTINGS.trading;
   const buyPresets = tradingPresets.buyPresets ?? DEFAULT_USER_SETTINGS.trading.buyPresets;
   const sellPresets = tradingPresets.sellPresets ?? DEFAULT_USER_SETTINGS.trading.sellPresets;
