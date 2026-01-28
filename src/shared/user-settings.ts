@@ -58,10 +58,10 @@ export type UserSettings = {
   aggregator: AggregatorSettings;
 };
 
-const DEFAULT_BUY_PRESETS = ['0.005', '0.01', '0.02', '0.05', '0.1', '0.2', '0.5', '1'];
-const DEFAULT_SELL_PRESETS = ['5', '10', '25', '33', '50', '66', '75', '100'];
-const DEFAULT_SLIPPAGE = ['10', '50'];
-const DEFAULT_GAS_PRICE = ['0.05', '1'];
+const DEFAULT_BUY_PRESETS = ['0.001', '0.02', '0.05', '0.1', '0.2', '0.5', '1', '2'];
+const DEFAULT_SELL_PRESETS = ['1', '5', '10', '25', '35', '50', '75', '100'];
+const DEFAULT_SLIPPAGE = ['6', '50'];
+const DEFAULT_GAS_PRICE = ['0.06', '1'];
 const DEFAULT_BUY_INPUT = DEFAULT_BUY_PRESETS[0];
 const DEFAULT_SELL_INPUT = DEFAULT_SELL_PRESETS[DEFAULT_SELL_PRESETS.length - 1];
 const DEFAULT_SLIPPAGE_INPUT = DEFAULT_SLIPPAGE[0];
