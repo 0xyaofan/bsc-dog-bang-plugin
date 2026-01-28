@@ -2008,9 +2008,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     let v2Result: { path: string[]; amountOut: bigint } | null = null;
     let v3Result: V3RoutePlan | null = null;
 
-    // 如果有强制模式，只尝试指定的路由
+    // 如果有强制模式，先尝试指定的路由
     if (forcedMode === 'v2') {
-      logger.info(`${channelLabel} ⚠️ 检测到强制 V2 模式，跳过 V3`);
+      logger.info(`${channelLabel} ⚠️ 检测到强制 V2 模式`);
       try {
         v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
         if (v2Result?.path && v2Result.amountOut > 0n) {
@@ -2018,10 +2018,12 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         }
       } catch (error) {
         v2Error = error;
-        logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
+        logger.warn(`${channelLabel} ⚠️ 强制 V2 模式失败，清除强制模式并尝试 V3: ${error?.message || error}`);
+        // 清除强制模式
+        setPancakePreferredMode(tokenAddress, null);
       }
     } else if (forcedMode === 'v3') {
-      logger.info(`${channelLabel} ⚠️ 检测到强制 V3 模式，跳过 V2`);
+      logger.info(`${channelLabel} ⚠️ 检测到强制 V3 模式`);
       if (hasSmartRouterSupport) {
         try {
           let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
@@ -2033,25 +2035,36 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           }
         } catch (error) {
           v3Error = error;
-          logger.debug(`${channelLabel} V3 路径失败: ${error?.message || error}`);
+          logger.warn(`${channelLabel} ⚠️ 强制 V3 模式失败，清除强制模式并尝试 V2: ${error?.message || error}`);
+          // 清除强制模式
+          setPancakePreferredMode(tokenAddress, null);
         }
       }
-    } else {
-      logger.info(`${channelLabel} 🔍 比较 V2 和 V3 路由，选择最优...`);
-      // 没有强制模式：同时尝试 V2 和 V3，选择输出金额最大的
-      // 尝试 V2
-      try {
-        v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
-        if (v2Result?.path && v2Result.amountOut > 0n) {
-          logger.info(`${channelLabel} V2 路径成功，输出: ${v2Result.amountOut.toString()}`);
-        }
-      } catch (error) {
-        v2Error = error;
-        logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
+    }
+
+    // 如果强制模式失败或没有强制模式，比较 V2 和 V3
+    if (!forcedMode || (forcedMode === 'v2' && v2Error) || (forcedMode === 'v3' && v3Error)) {
+      if (forcedMode) {
+        logger.info(`${channelLabel} 🔄 强制模式失败，现在比较 V2 和 V3 路由...`);
+      } else {
+        logger.info(`${channelLabel} 🔍 比较 V2 和 V3 路由，选择最优...`);
       }
 
-      // 尝试 V3
-      if (hasSmartRouterSupport) {
+      // 尝试 V2（如果还没尝试过）
+      if (!v2Result && !v2Error) {
+        try {
+          v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+          if (v2Result?.path && v2Result.amountOut > 0n) {
+            logger.info(`${channelLabel} V2 路径成功，输出: ${v2Result.amountOut.toString()}`);
+          }
+        } catch (error) {
+          v2Error = error;
+          logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
+        }
+      }
+
+      // 尝试 V3（如果还没尝试过）
+      if (!v3Result && !v3Error && hasSmartRouterSupport) {
         try {
           let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
           if (!v3Route) {
