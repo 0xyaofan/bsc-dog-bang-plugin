@@ -860,7 +860,9 @@ async function discoverTokenQuoteToken(
       '0x2170Ed0880ac9A755fd29B2688956BD959F933F8', // ETH
       '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', // BTCB
       // 添加更多可能的 quote token
-      '0xdb7a6d5a127ea5c0a3576677112f13d731232a27', // USAT (直接添加)
+      '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d', // USD1
+      '0xdb7a6d5a127ea5c0a3576677112f13d731232a27', // USAT
+      '0xce24439f2d9c6a2289f741120fe202248b666666', // UNITED_STABLES_U
     ];
 
     logger.debug(`[QuoteDiscovery] 开始检测代币 ${checksumToken.slice(0, 10)} 的 quote token...`);
