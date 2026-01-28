@@ -2525,6 +2525,9 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         y: currentY
       };
       saveFloatingWindowState(state);
+      
+      // 恢复透明度到正常状态，避免拖拽后保持半透明
+      floatingWindow.style.opacity = '';
     }
   });
 
