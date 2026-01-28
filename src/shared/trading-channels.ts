@@ -1820,65 +1820,120 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     });
 
     const evaluateDirectRoute = async () => {
-      const poolInfo = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, startChecksum, targetChecksum);
-      if (!poolInfo) {
-        return null;
-      }
-      try {
-        const result = await publicClient.readContract({
-          address: v3QuoterAddress,
-          abi: v3QuoterAbi,
-          functionName: 'quoteExactInputSingle',
-          args: [{
-            tokenIn: startChecksum,
-            tokenOut: targetChecksum,
-            amountIn,
-            fee: poolInfo.fee,
-            sqrtPriceLimitX96: 0n
-          }]
-        });
-        const amountOut = extractFirstBigInt(result);
-        if (amountOut > 0n) {
-          return {
-            tokens: [startChecksum, targetChecksum],
-            fees: [poolInfo.fee],
-            amountOut
-          } as V3RoutePlan;
-        }
-      } catch (error) {
-        logger.debug(`${channelLabel} V3 直接报价失败: ${error?.message || error}`);
-      }
-      return null;
-    };
+      const directStartTime = Date.now();
+      logger.debug(`${channelLabel} 开始评估 V3 直接路由...`);
 
-    const evaluateMultiHopRoutes = async () => {
-      let best: V3RoutePlan | null = null;
-      for (const bridge of bridgeCandidates) {
-        const firstPool = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, startChecksum, bridge);
-        if (!firstPool) continue;
-        const secondPool = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, bridge, targetChecksum);
-        if (!secondPool) continue;
-        try {
-          const tokens = [startChecksum, bridge, targetChecksum];
-          const fees = [firstPool.fee, secondPool.fee];
-          const encoded = encodeV3Path(tokens, fees);
+      try {
+        // 超时包装器：直接路由评估最多 3 秒
+        const timeoutPromise = new Promise<null>((_, reject) => {
+          setTimeout(() => reject(new Error('timeout')), 3000);
+        });
+
+        const evaluationPromise = (async () => {
+          const poolInfo = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, startChecksum, targetChecksum);
+          if (!poolInfo) {
+            logger.debug(`${channelLabel} V3 直接池不存在，耗时: ${Date.now() - directStartTime}ms`);
+            return null;
+          }
+
           const result = await publicClient.readContract({
             address: v3QuoterAddress,
             abi: v3QuoterAbi,
-            functionName: 'quoteExactInput',
-            args: [encoded, amountIn]
+            functionName: 'quoteExactInputSingle',
+            args: [{
+              tokenIn: startChecksum,
+              tokenOut: targetChecksum,
+              amountIn,
+              fee: poolInfo.fee,
+              sqrtPriceLimitX96: 0n
+            }]
           });
           const amountOut = extractFirstBigInt(result);
-          if (amountOut > 0n && (!best || amountOut > best.amountOut)) {
-            best = {
-              tokens,
-              fees,
-              encodedPath: encoded,
+          if (amountOut > 0n) {
+            logger.debug(`${channelLabel} V3 直接路由成功: ${amountOut.toString()}, 耗时: ${Date.now() - directStartTime}ms`);
+            return {
+              tokens: [startChecksum, targetChecksum],
+              fees: [poolInfo.fee],
               amountOut
-            };
+            } as V3RoutePlan;
           }
+          logger.debug(`${channelLabel} V3 直接路由输出为 0，耗时: ${Date.now() - directStartTime}ms`);
+          return null;
+        })();
+
+        return await Promise.race([evaluationPromise, timeoutPromise]);
+      } catch (error) {
+        if (error?.message === 'timeout') {
+          logger.debug(`${channelLabel} V3 直接路由超时，耗时: ${Date.now() - directStartTime}ms`);
+        } else {
+          logger.debug(`${channelLabel} V3 直接报价失败: ${error?.message || error}, 耗时: ${Date.now() - directStartTime}ms`);
+        }
+        return null;
+      }
+    };
+
+    // 🚀 性能优化：并行评估所有多跳路由，添加超时机制
+    const evaluateMultiHopRoutes = async () => {
+      const multiHopStartTime = Date.now();
+      logger.debug(`${channelLabel} 开始评估 ${bridgeCandidates.size} 个 V3 多跳路由...`);
+
+      // 为每个桥接代币创建评估任务
+      const evaluationTasks = Array.from(bridgeCandidates).map(async (bridge) => {
+        const bridgeStartTime = Date.now();
+        try {
+          // 超时包装器：单个桥接代币评估最多 2 秒
+          const timeoutPromise = new Promise<null>((_, reject) => {
+            setTimeout(() => reject(new Error('timeout')), 2000);
+          });
+
+          const evaluationPromise = (async () => {
+            const firstPool = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, startChecksum, bridge);
+            if (!firstPool) return null;
+            const secondPool = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, bridge, targetChecksum);
+            if (!secondPool) return null;
+
+            const tokens = [startChecksum, bridge, targetChecksum];
+            const fees = [firstPool.fee, secondPool.fee];
+            const encoded = encodeV3Path(tokens, fees);
+            const result = await publicClient.readContract({
+              address: v3QuoterAddress,
+              abi: v3QuoterAbi,
+              functionName: 'quoteExactInput',
+              args: [encoded, amountIn]
+            });
+            const amountOut = extractFirstBigInt(result);
+            if (amountOut > 0n) {
+              logger.debug(`${channelLabel} V3 多跳路由成功 (${bridge.slice(0, 6)}): ${amountOut.toString()}, 耗时: ${Date.now() - bridgeStartTime}ms`);
+              return {
+                tokens,
+                fees,
+                encodedPath: encoded,
+                amountOut
+              };
+            }
+            return null;
+          })();
+
+          return await Promise.race([evaluationPromise, timeoutPromise]);
         } catch (error) {
-          logger.debug(`${channelLabel} V3 多跳报价失败(${bridge.slice(0, 6)}): ${error?.message || error}`);
+          if (error?.message === 'timeout') {
+            logger.debug(`${channelLabel} V3 多跳路由超时 (${bridge.slice(0, 6)}), 耗时: ${Date.now() - bridgeStartTime}ms`);
+          } else {
+            logger.debug(`${channelLabel} V3 多跳报价失败(${bridge.slice(0, 6)}): ${error?.message || error}`);
+          }
+          return null;
+        }
+      });
+
+      // 并行执行所有评估任务
+      const results = await Promise.all(evaluationTasks);
+      logger.debug(`${channelLabel} V3 多跳路由评估完成，总耗时: ${Date.now() - multiHopStartTime}ms`);
+
+      // 选择最优路由
+      let best: V3RoutePlan | null = null;
+      for (const result of results) {
+        if (result && (!best || result.amountOut > best.amountOut)) {
+          best = result;
         }
       }
       return best;
