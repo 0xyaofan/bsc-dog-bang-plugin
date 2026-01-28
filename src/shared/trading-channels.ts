@@ -102,6 +102,67 @@ type TokenTradeHint = {
 
 const tokenTradeHints = new Map<string, TokenTradeHint>();
 
+// 持久化缓存配置
+const CACHE_STORAGE_KEY = 'tokenTradeHintsCache';
+const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 天
+const CACHE_MAX_ENTRIES = 100; // 最多缓存 100 个代币
+
+// 从持久化存储加载缓存
+async function loadTokenTradeHintsFromStorage() {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage) {
+      return;
+    }
+    const result = await chrome.storage.local.get(CACHE_STORAGE_KEY);
+    const cached = result[CACHE_STORAGE_KEY];
+    if (cached && typeof cached === 'object') {
+      const now = Date.now();
+      let loadedCount = 0;
+      for (const [key, hint] of Object.entries(cached)) {
+        // 过滤过期的缓存（7 天）
+        if (hint && typeof hint === 'object' && hint.updatedAt && (now - hint.updatedAt < CACHE_MAX_AGE_MS)) {
+          tokenTradeHints.set(key, hint as TokenTradeHint);
+          loadedCount++;
+        }
+      }
+      logger.debug(`[Cache] 从存储加载 ${loadedCount} 个代币路由缓存`);
+    }
+  } catch (error) {
+    logger.warn('[Cache] 加载路由缓存失败:', error);
+  }
+}
+
+// 保存缓存到持久化存储
+async function saveTokenTradeHintsToStorage() {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage) {
+      return;
+    }
+    const now = Date.now();
+    const cacheObject: Record<string, TokenTradeHint> = {};
+
+    // 转换 Map 为普通对象，并清理过期数据
+    const entries = Array.from(tokenTradeHints.entries())
+      .filter(([_, hint]) => now - hint.updatedAt < CACHE_MAX_AGE_MS)
+      .sort((a, b) => b[1].updatedAt - a[1].updatedAt) // 按更新时间降序
+      .slice(0, CACHE_MAX_ENTRIES); // 只保留最新的 100 个
+
+    for (const [key, hint] of entries) {
+      cacheObject[key] = hint;
+    }
+
+    await chrome.storage.local.set({ [CACHE_STORAGE_KEY]: cacheObject });
+    logger.debug(`[Cache] 保存 ${entries.length} 个代币路由缓存到存储`);
+  } catch (error) {
+    logger.warn('[Cache] 保存路由缓存失败:', error);
+  }
+}
+
+// 初始化时加载缓存
+loadTokenTradeHintsFromStorage().catch((error) => {
+  logger.warn('[Cache] 初始化加载缓存失败:', error);
+});
+
 // ========== 通用工具函数 ==========
 function toChecksumAddress(address?: string | null, context = 'address'): `0x${string}` | null {
   if (!address) return null;
@@ -150,6 +211,11 @@ function updateTokenTradeHint(tokenAddress: string, channelId: string, direction
   }
 
   tokenTradeHints.set(key, next);
+
+  // 异步保存到持久化存储（不阻塞主流程）
+  saveTokenTradeHintsToStorage().catch((error) => {
+    logger.debug('[Cache] 保存缓存失败:', error);
+  });
 }
 
 export function getTokenTradeHint(tokenAddress: string) {
@@ -168,6 +234,10 @@ export function setPancakePreferredMode(tokenAddress: string, mode: 'v2' | 'v3' 
       const next = { ...existing };
       delete next.forcedMode;
       tokenTradeHints.set(key, next);
+      // 异步保存到持久化存储
+      saveTokenTradeHintsToStorage().catch((error) => {
+        logger.debug('[Cache] 保存缓存失败:', error);
+      });
     }
     return;
   }
@@ -180,6 +250,11 @@ export function setPancakePreferredMode(tokenAddress: string, mode: 'v2' | 'v3' 
   base.forcedMode = mode;
   base.updatedAt = Date.now();
   tokenTradeHints.set(key, base);
+
+  // 异步保存到持久化存储
+  saveTokenTradeHintsToStorage().catch((error) => {
+    logger.debug('[Cache] 保存缓存失败:', error);
+  });
 }
 
 function extractFirstBigInt(result: any) {
