@@ -278,13 +278,13 @@ html.theme-light #wallet-address:hover {
 }
 
 .quick-amounts {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-top: 6px;
 }
 
 .btn-quick {
-  flex: 1;
   padding: 5px;
   background: var(--sp-bg-site-item, rgba(45, 53, 97, 0.4));
   border: 1px solid var(--sp-border-color, #2d3561);

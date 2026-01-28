@@ -37,8 +37,8 @@ type TokenContext = {
 const STORAGE_KEY = 'dogBangLastTokenContext';
 const EMPTY_HINT = '请打开代币交易页面。';
 
-const BUY_PRESET_COUNT = 4;
-const SELL_PRESET_COUNT = 4;
+const BUY_PRESET_COUNT = 8;
+const SELL_PRESET_COUNT = 8;
 const SLIPPAGE_PRESET_COUNT = 2;
 const GAS_PRESET_COUNT = 2;
 

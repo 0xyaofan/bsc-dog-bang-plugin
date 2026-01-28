@@ -294,11 +294,12 @@ function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => map[char]);
 }
 
-function renderQuickButtons(values: string[], action: 'buy' | 'sell', suffix = '') {
+function renderQuickButtons(values: string[], action: 'buy' | 'sell', suffix = '', btnClass = 'btn-quick') {
+  // Render buttons in a flat list; CSS grid controls wrapping into rows of 4
   return values.map((rawValue) => {
     const value = rawValue ?? '';
     const display = `${value}${suffix}`;
-    return `<button class="btn-quick" data-action="${action}" data-amount="${escapeHtml(value)}">${escapeHtml(display)}</button>`;
+    return `<button class="${btnClass}" data-action="${action}" data-amount="${escapeHtml(value)}">${escapeHtml(display)}</button>`;
   }).join('');
 }
 
@@ -2342,15 +2343,9 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   floatingWindow.style.left = '0';
   floatingWindow.style.top = '0';
 
-  // 生成买入按钮 HTML
-  const buyButtonsHtml = buyPresets.map(value =>
-    `<button class="floating-quick-btn" data-action="buy" data-amount="${escapeHtml(value)}">${escapeHtml(value)}</button>`
-  ).join('');
-
-  // 生成卖出按钮 HTML
-  const sellButtonsHtml = sellPresets.map(value =>
-    `<button class="floating-quick-btn" data-action="sell" data-amount="${escapeHtml(value)}">${escapeHtml(value)}%</button>`
-  ).join('');
+  // 生成买入/卖出按钮 HTML（支持多于4个，CSS grid 会换行为两行）
+  const buyButtonsHtml = renderQuickButtons(buyPresets, 'buy', '', 'floating-quick-btn');
+  const sellButtonsHtml = renderQuickButtons(sellPresets, 'sell', '%', 'floating-quick-btn');
 
   // 生成滑点按钮 HTML
   const slippageButtonsHtml = slippagePresets.map(value =>
