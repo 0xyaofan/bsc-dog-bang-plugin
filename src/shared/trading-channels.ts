@@ -2129,10 +2129,17 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
   return {
     async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor }) {
+      const buyStartTime = Date.now();
+      logger.info(`${channelLabel} ⏱️ 开始买入交易`);
       logger.debug(`${channelLabel} 买入:`, { tokenAddress, amount, slippage });
 
       const amountIn = parseEther(amount);
+
+      // 步骤1: 查询最佳路由
+      const routeStartTime = Date.now();
       const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn);
+      logger.info(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
+
       const slippageBp = Math.floor(slippage * 100);
       const deadline = Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS;
 
@@ -2140,6 +2147,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         const { path, amountOut } = routePlan;
         updateTokenTradeHint(tokenAddress, channelId, 'buy', { routerAddress: contractAddress, path, mode: 'v2' });
         const amountOutMin = amountOut * BigInt(10000 - slippageBp) / 10000n;
+
+        // 步骤2: 准备并发送 V2 交易
+        const txStartTime = Date.now();
+        logger.info(`${channelLabel} ⏱️ 开始发送 V2 交易...`);
 
         const sendSwap = (nonce?: number) =>
           sendContractTransaction({
@@ -2166,6 +2177,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           ? await nonceExecutor('buy', (nonce) => sendSwap(nonce))
           : await sendSwap();
 
+        logger.info(`${channelLabel} ⏱️ V2 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
+        logger.info(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
         logger.debug(`${channelLabel} 交易发送:`, hash);
         return hash;
       }
@@ -2224,6 +2237,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       updateTokenTradeHint(tokenAddress, channelId, 'buy', { routerAddress: smartRouterAddress, path: pathHint, fees: v3Route.fees, mode: 'v3' });
       const amountOutMin = routePlan.amountOut * BigInt(10000 - slippageBp) / 10000n;
       const isSingleHop = v3Route.tokens.length === 2;
+
+      // 步骤2: 准备并发送 V3 交易
+      const txStartTime = Date.now();
+      logger.info(`${channelLabel} ⏱️ 开始发送 V3 交易...`);
 
       const sendV3Swap = (nonce?: number) => {
         if (isSingleHop) {
@@ -2289,6 +2306,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         ? await nonceExecutor('buy', (nonce) => sendV3Swap(nonce))
         : await sendV3Swap();
 
+      logger.info(`${channelLabel} ⏱️ V3 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
+      logger.info(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
       logger.debug(`${channelLabel} 交易发送(V3):`, hash);
       return hash;
       } else {
