@@ -1989,6 +1989,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     const hint = getTokenTradeHint(tokenAddress);
     const routerMatchesV3 = smartRouterAddress && hint?.routerAddress?.toLowerCase() === smartRouterAddress.toLowerCase();
     const forcedMode = hint?.forcedMode;
+
+    // 记录路由提示信息，帮助调试
+    if (hint) {
+      logger.debug(`${channelLabel} 路由提示: forcedMode=${forcedMode}, lastMode=${hint.lastMode}, routerAddress=${hint.routerAddress?.slice(0, 10)}`);
+    } else {
+      logger.debug(`${channelLabel} 无路由提示，将比较 V2 和 V3`);
+    }
+
     const preferV3 =
       forcedMode === 'v3' ||
       (hint?.lastMode === 'v3' && hasSmartRouterSupport) ||
@@ -2002,6 +2010,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     // 如果有强制模式，只尝试指定的路由
     if (forcedMode === 'v2') {
+      logger.info(`${channelLabel} ⚠️ 检测到强制 V2 模式，跳过 V3`);
       try {
         v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
         if (v2Result?.path && v2Result.amountOut > 0n) {
@@ -2012,6 +2021,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
       }
     } else if (forcedMode === 'v3') {
+      logger.info(`${channelLabel} ⚠️ 检测到强制 V3 模式，跳过 V2`);
       if (hasSmartRouterSupport) {
         try {
           let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
@@ -2027,12 +2037,13 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         }
       }
     } else {
+      logger.info(`${channelLabel} 🔍 比较 V2 和 V3 路由，选择最优...`);
       // 没有强制模式：同时尝试 V2 和 V3，选择输出金额最大的
       // 尝试 V2
       try {
         v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
         if (v2Result?.path && v2Result.amountOut > 0n) {
-          logger.debug(`${channelLabel} V2 路径成功，输出: ${v2Result.amountOut.toString()}`);
+          logger.info(`${channelLabel} V2 路径成功，输出: ${v2Result.amountOut.toString()}`);
         }
       } catch (error) {
         v2Error = error;
@@ -2048,7 +2059,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           }
           if (v3Route) {
             v3Result = v3Route;
-            logger.debug(`${channelLabel} V3 路径成功，输出: ${v3Route.amountOut.toString()}`);
+            logger.info(`${channelLabel} V3 路径成功，输出: ${v3Route.amountOut.toString()}`);
           }
         } catch (error) {
           v3Error = error;
