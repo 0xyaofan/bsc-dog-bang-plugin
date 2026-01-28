@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 支持与 USAT 配对的代币交易路由
   - 自动发现和使用非标准桥��代币路径
   - 解决代币与非主流币种配对时路由失败的问题
+- **非 BNB 筹集币种性能优化** - 大幅提升非 BNB 筹集币种首次交易速度
+  - 添加 USD1 (0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d) 到 quote token 发现列表
+  - 添加 UNITED_STABLES_U (0xcE24439F2D9C6a2289F741120FE202248B666666) 到发现列表
+  - 避免触发昂贵的 3-hop 路径回退机制
+  - 使用 USD1 作为筹集币种的代币首次交易速度提升 80-90%
+  - 从 10-20 秒降至 1-2 秒
 
 ## [1.1.6] - 2025-01-27
 
