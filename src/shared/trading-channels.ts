@@ -1886,29 +1886,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     const multiHopRoute = await evaluateMultiHopRoutes();
 
     if (!directRoute && !multiHopRoute) {
-      // 检测是否存在混合 V3/V2 路径
-      try {
-        const mixedRouteInfo = await detectMixedV2V3Route(
-          publicClient,
-          factoryAddress,
-          factoryAbi,
-          v3FactoryAddress,
-          v3FactoryAbi,
-          startChecksum,
-          targetChecksum,
-          Array.from(bridgeCandidates)
-        );
-
-        if (mixedRouteInfo) {
-          logger.warn(`${channelLabel} 检测到需要混合 V2/V3 路由: ${mixedRouteInfo.description}`);
-          logger.warn(`${channelLabel} 当前系统暂不支持混合路由，请使用 PancakeSwap 官网或其他聚合器`);
-          // 将混合路由信息存储起来，用于错误提示
-          (globalThis as any).__mixedRouteDetected = mixedRouteInfo;
-        }
-      } catch (error) {
-        logger.debug(`${channelLabel} 混合路径检测失败: ${error?.message || error}`);
-      }
-
+      // V3 路由失败，但不在这里检测混合路由
+      // 混合路由检测应该在 V2 也失败后才进行，避免不必要的 RPC 调用
       return null;
     }
     if (directRoute && multiHopRoute) {
@@ -2051,16 +2030,32 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       }
     }
 
-    // 检查是否检测到混合路由
-    const mixedRouteInfo = (globalThis as any).__mixedRouteDetected;
-    if (mixedRouteInfo) {
-      logger.info(`${channelLabel} 检测到混合 V2/V3 路由: ${mixedRouteInfo.description}`);
-      // 返回混合路由信息，amountOut 设为 0n（实际金额在执行时计算）
-      return {
-        kind: 'mixed',
-        mixedRouteInfo,
-        amountOut: 0n
-      };
+    // V2 和 V3 都失败后，才检测混合路由
+    if (v2Error && v3Error && hasSmartRouterSupport) {
+      try {
+        logger.debug(`${channelLabel} V2 和 V3 都失败，开始检测混合路由...`);
+        const mixedRouteInfo = await detectMixedV2V3Route(
+          publicClient,
+          factoryAddress,
+          factoryAbi,
+          v3FactoryAddress,
+          v3FactoryAbi,
+          nativeWrapper,
+          tokenAddress,
+          [...(stableTokens || []), ...(helperTokenPool || []), ...(dynamicBridgeTokenPool || [])]
+        );
+
+        if (mixedRouteInfo) {
+          logger.info(`${channelLabel} 检测到混合 V2/V3 路由: ${mixedRouteInfo.description}`);
+          return {
+            kind: 'mixed',
+            mixedRouteInfo,
+            amountOut: 0n
+          };
+        }
+      } catch (error) {
+        logger.debug(`${channelLabel} 混合路由检测失败: ${error?.message || error}`);
+      }
     }
 
     throw preferV3

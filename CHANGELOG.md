@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 支持 UDOG-USAT 等需要混合路由的代币交易
   - 买入功能完全支持，卖出功能暂不支持
   - 添加 `swapExactTokensForTokens` 函数到 Router ABI，支持 token-to-token 交换
+
+### Performance
+- **混合路由检测性能优化** - 大幅提升首次交易速度
+  - 只在 V2 和 V3 都失败后才检测混合路由，避免不必要的 RPC 调用
+  - 移除 V3 路由失败时的混合路由检测，减少 10-40 次 RPC 请求
+  - 优化后，普通代币首次交易速度恢复到优化前水平（< 2 秒）
+  - 只有真正需要混合路由的代币才会触发检测
 - **3-hop 路由支持** - 支持复杂的多跳交易路径
   - 自动发现代币的 quote token（募集币种）
   - 构建 WBNB → Bridge → QuoteToken → Token 的 3-hop 路径
