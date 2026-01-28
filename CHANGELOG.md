@@ -14,11 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chrome Web Store publication
 
 ### Added
-- **混合 V2/V3 路由检测** - 智能识别需要混合路由的代币
+- **混合 V2/V3 路由自动执行** - 自动执行需要混合路由的代币交易
   - 自动检测需要同时使用 V2 和 V3 池的交易路径
   - 识别 V3 → V2 和 V2 → V3 的混合路径
-  - 提供清晰的错误提示和解决方案
-  - 指导用户使用 PancakeSwap 官网或其他聚合器
+  - **两步交易自动执行**
+    - 第一步：执行 V3 swap（WBNB → 桥接代币）
+    - 等待第一步交易确认
+    - 查询实际获得的桥接代币数量
+    - 自动授权桥接代币给 V2 Router
+    - 第二步：执行 V2 swap（桥接代币 → 目标代币）
+  - 支持 UDOG-USAT 等需要混合路由的代币交易
+  - 买入功能完全支持，卖出功能暂不支持
+  - 添加 `swapExactTokensForTokens` 函数到 Router ABI，支持 token-to-token 交换
 - **3-hop 路由支持** - 支持复杂的多跳交易路径
   - 自动发现代币的 quote token（募集币种）
   - 构建 WBNB → Bridge → QuoteToken → Token 的 3-hop 路径

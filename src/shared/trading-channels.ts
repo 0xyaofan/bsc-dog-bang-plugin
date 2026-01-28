@@ -1002,7 +1002,7 @@ async function detectMixedV2V3Route(
   startToken: string,
   targetToken: string,
   bridgeTokens: string[]
-): Promise<{ description: string; v3Segment?: string; v2Segment?: string } | null> {
+): Promise<{ description: string; v3Segment?: string; v2Segment?: string; v3First: boolean; bridgeToken: string } | null> {
   if (!publicClient || !v2FactoryAddress || !v3FactoryAddress) {
     return null;
   }
@@ -1026,7 +1026,9 @@ async function detectMixedV2V3Route(
           return {
             description: `${startToken.slice(0, 6)} → ${checksumBridge.slice(0, 6)} (V3) → ${targetToken.slice(0, 6)} (V2)`,
             v3Segment: `${startToken} → ${checksumBridge}`,
-            v2Segment: `${checksumBridge} → ${targetToken}`
+            v2Segment: `${checksumBridge} → ${targetToken}`,
+            v3First: true,
+            bridgeToken: checksumBridge
           };
         }
       }
@@ -1041,7 +1043,9 @@ async function detectMixedV2V3Route(
           return {
             description: `${startToken.slice(0, 6)} → ${checksumBridge.slice(0, 6)} (V2) → ${targetToken.slice(0, 6)} (V3)`,
             v2Segment: `${startToken} → ${checksumBridge}`,
-            v3Segment: `${checksumBridge} → ${targetToken}`
+            v3Segment: `${checksumBridge} → ${targetToken}`,
+            v3First: false,
+            bridgeToken: checksumBridge
           };
         }
       }
@@ -1051,6 +1055,232 @@ async function detectMixedV2V3Route(
   } catch (error) {
     logger.debug(`[MixedRouteDetection] 检测失败: ${error?.message || error}`);
     return null;
+  }
+}
+
+/**
+ * 执行混合 V2/V3 路由交易（两步交易）
+ * 第一步：V3 swap
+ * 第二步：V2 swap
+ */
+async function executeMixedV2V3Trade(params: {
+  publicClient: any;
+  walletClient: any;
+  account: any;
+  chain: any;
+  mixedRouteInfo: {
+    description: string;
+    v3Segment?: string;
+    v2Segment?: string;
+    v3First: boolean;
+    bridgeToken: string;
+  };
+  direction: 'buy' | 'sell';
+  amountIn: bigint;
+  slippage: number;
+  gasPrice?: number | bigint;
+  v2RouterAddress: string;
+  v2RouterAbi: any;
+  v3RouterAddress: string;
+  v3RouterAbi: any;
+  v3FactoryAddress: string;
+  v3FactoryAbi: any;
+  v3QuoterAddress: string;
+  v3QuoterAbi: any;
+  nativeWrapper: string;
+  targetToken: string;
+  nonceExecutor?: any;
+  channelLabel: string;
+}) {
+  const {
+    publicClient,
+    walletClient,
+    account,
+    chain,
+    mixedRouteInfo,
+    direction,
+    amountIn,
+    slippage,
+    gasPrice,
+    v2RouterAddress,
+    v2RouterAbi,
+    v3RouterAddress,
+    v3RouterAbi,
+    v3FactoryAddress,
+    v3FactoryAbi,
+    v3QuoterAddress,
+    v3QuoterAbi,
+    nativeWrapper,
+    targetToken,
+    nonceExecutor,
+    channelLabel
+  } = params;
+
+  logger.info(`${channelLabel} 开始执行混合 V2/V3 路由交易: ${mixedRouteInfo.description}`);
+
+  try {
+    if (mixedRouteInfo.v3First) {
+      // 第一步：V3 swap (WBNB → Bridge Token)
+      logger.info(`${channelLabel} 第一步：V3 swap ${nativeWrapper.slice(0, 6)} → ${mixedRouteInfo.bridgeToken.slice(0, 6)}`);
+
+      // 获取 V3 池信息
+      const v3Pool = await getV3Pool(
+        publicClient,
+        v3FactoryAddress,
+        v3FactoryAbi,
+        nativeWrapper,
+        mixedRouteInfo.bridgeToken
+      );
+
+      if (!v3Pool) {
+        throw new Error('V3 池不存在');
+      }
+
+      // 获取预期输出
+      const quoteResult = await publicClient.readContract({
+        address: v3QuoterAddress,
+        abi: v3QuoterAbi,
+        functionName: 'quoteExactInputSingle',
+        args: [{
+          tokenIn: nativeWrapper,
+          tokenOut: mixedRouteInfo.bridgeToken,
+          amountIn,
+          fee: v3Pool.fee,
+          sqrtPriceLimitX96: 0n
+        }]
+      });
+
+      const bridgeAmountOut = extractFirstBigInt(quoteResult);
+      const bridgeAmountOutMin = bridgeAmountOut * BigInt(10000 - slippage * 100) / 10000n;
+
+      logger.debug(`${channelLabel} V3 预期输出: ${bridgeAmountOut.toString()}, 最小: ${bridgeAmountOutMin.toString()}`);
+
+      // 执行 V3 swap
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS);
+
+      const v3SwapData = encodeFunctionData({
+        abi: v3RouterAbi,
+        functionName: 'exactInputSingle',
+        args: [{
+          tokenIn: nativeWrapper,
+          tokenOut: mixedRouteInfo.bridgeToken,
+          fee: v3Pool.fee,
+          recipient: account.address,
+          amountIn,
+          amountOutMinimum: bridgeAmountOutMin,
+          sqrtPriceLimitX96: 0n
+        }]
+      });
+
+      const v3TxHash = await sendContractTransaction({
+        walletClient,
+        account,
+        chain,
+        to: v3RouterAddress,
+        abi: v3RouterAbi,
+        functionName: 'exactInputSingle',
+        args: [{
+          tokenIn: nativeWrapper,
+          tokenOut: mixedRouteInfo.bridgeToken,
+          fee: v3Pool.fee,
+          recipient: account.address,
+          amountIn,
+          amountOutMinimum: bridgeAmountOutMin,
+          sqrtPriceLimitX96: 0n
+        }],
+        value: amountIn,
+        gasPrice,
+        fallbackGasLimit: 500000n,
+        publicClient
+      });
+
+      logger.info(`${channelLabel} V3 交易已发送: ${v3TxHash}`);
+
+      // 等待第一步交易确认
+      logger.info(`${channelLabel} 等待 V3 交易确认...`);
+      const v3Receipt = await publicClient.waitForTransactionReceipt({
+        hash: v3TxHash,
+        confirmations: 1
+      });
+
+      if (v3Receipt.status !== 'success') {
+        throw new Error('V3 交易失败');
+      }
+
+      logger.info(`${channelLabel} ✅ V3 交易确认成功`);
+
+      // 查询实际获得的桥接代币数量
+      const bridgeBalance = await publicClient.readContract({
+        address: mixedRouteInfo.bridgeToken,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [account.address]
+      });
+
+      logger.info(`${channelLabel} 获得桥接代币: ${bridgeBalance.toString()}`);
+
+      // 第二步：V2 swap (Bridge Token → Target Token)
+      logger.info(`${channelLabel} 第二步：V2 swap ${mixedRouteInfo.bridgeToken.slice(0, 6)} → ${targetToken.slice(0, 6)}`);
+
+      // 检查并授权桥接代币
+      const currentAllowance = await publicClient.readContract({
+        address: mixedRouteInfo.bridgeToken,
+        abi: ERC20_ABI,
+        functionName: 'allowance',
+        args: [account.address, v2RouterAddress]
+      });
+
+      const totalSupply = await publicClient.readContract({
+        address: mixedRouteInfo.bridgeToken,
+        abi: ERC20_ABI,
+        functionName: 'totalSupply'
+      });
+
+      await ensureTokenApproval({
+        publicClient,
+        walletClient,
+        account,
+        chain,
+        tokenAddress: mixedRouteInfo.bridgeToken,
+        spenderAddress: v2RouterAddress,
+        amount: bridgeBalance,
+        currentAllowance,
+        totalSupply,
+        gasPrice,
+        nonceExecutor
+      });
+
+      // 执行 V2 swap
+      const v2Path = [mixedRouteInfo.bridgeToken, targetToken];
+      const v2AmountOutMin = 0n; // 已经在 V3 中考虑了滑点
+
+      const v2Deadline = BigInt(Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS);
+
+      const v2TxHash = await sendContractTransaction({
+        walletClient,
+        account,
+        chain,
+        to: v2RouterAddress,
+        abi: v2RouterAbi,
+        functionName: 'swapExactTokensForTokens',
+        args: [bridgeBalance, v2AmountOutMin, v2Path, account.address, v2Deadline],
+        value: 0n,
+        gasPrice,
+        fallbackGasLimit: 300000n,
+        publicClient
+      });
+
+      logger.info(`${channelLabel} V2 交易已发送: ${v2TxHash}`);
+      logger.info(`${channelLabel} ✅ 混合路由交易完成`);
+
+      return v2TxHash;
+    } else {
+      // V2 first, then V3
+      throw new Error('暂不支持 V2 → V3 的混合路由');
+    }
+  } catch (error) {
+    logger.error(`${channelLabel} 混合路由交易失败: ${error?.message || error}`);
+    throw error;
   }
 }
 
@@ -1772,6 +2002,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
   ): Promise<
     | { kind: 'v2'; path: string[]; amountOut: bigint }
     | { kind: 'v3'; route: V3RoutePlan; amountOut: bigint }
+    | { kind: 'mixed'; mixedRouteInfo: { description: string; v3Segment?: string; v2Segment?: string; v3First: boolean; bridgeToken: string }; amountOut: bigint }
   > => {
     let lastError: any = null;
     const hint = getTokenTradeHint(tokenAddress);
@@ -1823,10 +2054,13 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     // 检查是否检测到混合路由
     const mixedRouteInfo = (globalThis as any).__mixedRouteDetected;
     if (mixedRouteInfo) {
-      throw new Error(
-        `${channelLabel} 此代币需要混合 V2/V3 路由（${mixedRouteInfo.description}），` +
-        `当前系统暂不支持。请使用 PancakeSwap 官网 (https://pancakeswap.finance) 或其他聚合器进行交易。`
-      );
+      logger.info(`${channelLabel} 检测到混合 V2/V3 路由: ${mixedRouteInfo.description}`);
+      // 返回混合路由信息，amountOut 设为 0n（实际金额在执行时计算）
+      return {
+        kind: 'mixed',
+        mixedRouteInfo,
+        amountOut: 0n
+      };
     }
 
     throw preferV3
@@ -1877,11 +2111,56 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         return hash;
       }
 
+      // 处理混合 V2/V3 路由
+      if (routePlan.kind === 'mixed') {
+        if (!smartRouterAddress || !smartRouterAbi) {
+          throw new Error('Pancake V3 Router 未配置，无法执行混合路由');
+        }
+        if (!v3FactoryAddress || !v3FactoryAbi) {
+          throw new Error('Pancake V3 Factory 未配置，无法执行混合路由');
+        }
+        if (!v3QuoterAddress || !v3QuoterAbi) {
+          throw new Error('Pancake V3 Quoter 未配置，无法执行混合路由');
+        }
+
+        logger.info(`${channelLabel} 执行混合 V2/V3 路由交易: ${routePlan.mixedRouteInfo.description}`);
+
+        const hash = await executeMixedV2V3Trade({
+          publicClient,
+          walletClient,
+          account,
+          chain,
+          mixedRouteInfo: routePlan.mixedRouteInfo,
+          direction: 'buy',
+          amountIn,
+          slippage,
+          gasPrice,
+          v2RouterAddress: contractAddress,
+          v2RouterAbi: abi,
+          v3RouterAddress: smartRouterAddress,
+          v3RouterAbi: smartRouterAbi,
+          v3FactoryAddress,
+          v3FactoryAbi,
+          v3QuoterAddress,
+          v3QuoterAbi,
+          nativeWrapper,
+          targetToken: tokenAddress,
+          nonceExecutor,
+          channelLabel
+        });
+
+        logger.info(`${channelLabel} 混合路由交易完成:`, hash);
+        return hash;
+      }
+
+
       if (!smartRouterAddress || !smartRouterAbi) {
         throw new Error('Pancake V3 Router 未配置');
       }
 
-      const v3Route = routePlan.route;
+      // 此时 routePlan 应该是 v3 类型
+      if (routePlan.kind === 'v3') {
+        const v3Route = routePlan.route;
       const pathHint = v3Route.tokens;
       updateTokenTradeHint(tokenAddress, channelId, 'buy', { routerAddress: smartRouterAddress, path: pathHint, fees: v3Route.fees, mode: 'v3' });
       const amountOutMin = routePlan.amountOut * BigInt(10000 - slippageBp) / 10000n;
@@ -1953,6 +2232,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       logger.debug(`${channelLabel} 交易发送(V3):`, hash);
       return hash;
+      } else {
+        throw new Error(`意外的路由类型: ${(routePlan as any).kind}`);
+      }
     },
 
     async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor }) {
@@ -2152,11 +2434,18 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         return hash;
       }
 
+      // 处理混合 V2/V3 路由（卖出暂不支持）
+      if (finalRoutePlan.kind === 'mixed') {
+        throw new Error(`${channelLabel} 卖出暂不支持混合 V2/V3 路由，请使用 PancakeSwap 官网进行交易`);
+      }
+
       if (!smartRouterAddress || !smartRouterAbi) {
         throw new Error('Pancake V3 Router 未配置');
       }
 
-      const v3Route = finalRoutePlan.route;
+      // 此时 finalRoutePlan 应该是 v3 类型
+      if (finalRoutePlan.kind === 'v3') {
+        const v3Route = finalRoutePlan.route;
       updateTokenTradeHint(tokenAddress, channelId, 'sell', { routerAddress: smartRouterAddress, path: v3Route.tokens, fees: v3Route.fees, mode: 'v3' });
       const amountOutMin = amountOutMinBase > 0n ? amountOutMinBase : 1n;
       const isSingleHop = v3Route.tokens.length === 2;
@@ -2218,6 +2507,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       logger.debug(`${channelLabel} 交易发送(V3):`, hash);
       return hash;
+      } else {
+        throw new Error(`意外的路由类型: ${(finalRoutePlan as any).kind}`);
+      }
     },
 
     async quoteSell({ publicClient, tokenAddress, amount }) {
