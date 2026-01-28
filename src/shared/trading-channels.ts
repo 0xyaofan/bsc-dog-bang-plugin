@@ -1994,29 +1994,25 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       (hint?.lastMode === 'v3' && hasSmartRouterSupport) ||
       routerMatchesV3;
     const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
-    const attempts: Array<'v2' | 'v3'> =
-      forcedMode === 'v3'
-        ? ['v3', 'v2']
-        : forcedMode === 'v2'
-          ? ['v2', 'v3']
-          : preferV3
-            ? ['v3', 'v2']
-            : ['v2', 'v3'];
+
     let v2Error: any = null;
     let v3Error: any = null;
+    let v2Result: { path: string[]; amountOut: bigint } | null = null;
+    let v3Result: V3RoutePlan | null = null;
 
-    for (const attempt of attempts) {
-      if (attempt === 'v2') {
-        try {
-          const v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
-          if (v2Result?.path && v2Result.amountOut > 0n) {
-            return { kind: 'v2', path: v2Result.path, amountOut: v2Result.amountOut };
-          }
-        } catch (error) {
-          v2Error = error;
-          logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
+    // 如果有强制模式，只尝试指定的路由
+    if (forcedMode === 'v2') {
+      try {
+        v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+        if (v2Result?.path && v2Result.amountOut > 0n) {
+          return { kind: 'v2', path: v2Result.path, amountOut: v2Result.amountOut };
         }
-      } else if (attempt === 'v3' && hasSmartRouterSupport) {
+      } catch (error) {
+        v2Error = error;
+        logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
+      }
+    } else if (forcedMode === 'v3') {
+      if (hasSmartRouterSupport) {
         try {
           let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
           if (!v3Route) {
@@ -2029,6 +2025,54 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           v3Error = error;
           logger.debug(`${channelLabel} V3 路径失败: ${error?.message || error}`);
         }
+      }
+    } else {
+      // 没有强制模式：同时尝试 V2 和 V3，选择输出金额最大的
+      // 尝试 V2
+      try {
+        v2Result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+        if (v2Result?.path && v2Result.amountOut > 0n) {
+          logger.debug(`${channelLabel} V2 路径成功，输出: ${v2Result.amountOut.toString()}`);
+        }
+      } catch (error) {
+        v2Error = error;
+        logger.debug(`${channelLabel} V2 路径失败: ${error?.message || error}`);
+      }
+
+      // 尝试 V3
+      if (hasSmartRouterSupport) {
+        try {
+          let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
+          if (!v3Route) {
+            v3Route = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
+          }
+          if (v3Route) {
+            v3Result = v3Route;
+            logger.debug(`${channelLabel} V3 路径成功，输出: ${v3Route.amountOut.toString()}`);
+          }
+        } catch (error) {
+          v3Error = error;
+          logger.debug(`${channelLabel} V3 路径失败: ${error?.message || error}`);
+        }
+      }
+
+      // 比较 V2 和 V3 的输出，选择最优的
+      if (v2Result && v3Result) {
+        if (v2Result.amountOut > v3Result.amountOut) {
+          const improvement = ((v2Result.amountOut - v3Result.amountOut) * 10000n / v3Result.amountOut);
+          logger.info(`${channelLabel} ✅ V2 输出更优 (比 V3 多 ${improvement.toString()}bps)，选择 V2`);
+          return { kind: 'v2', path: v2Result.path, amountOut: v2Result.amountOut };
+        } else {
+          const improvement = ((v3Result.amountOut - v2Result.amountOut) * 10000n / v2Result.amountOut);
+          logger.info(`${channelLabel} ✅ V3 输出更优 (比 V2 多 ${improvement.toString()}bps)，选择 V3`);
+          return { kind: 'v3', route: v3Result, amountOut: v3Result.amountOut };
+        }
+      } else if (v2Result) {
+        logger.info(`${channelLabel} ✅ 只有 V2 路径可用`);
+        return { kind: 'v2', path: v2Result.path, amountOut: v2Result.amountOut };
+      } else if (v3Result) {
+        logger.info(`${channelLabel} ✅ 只有 V3 路径可用`);
+        return { kind: 'v3', route: v3Result, amountOut: v3Result.amountOut };
       }
     }
 

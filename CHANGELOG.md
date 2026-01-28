@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+### Fixed
+- **🚨 严重修复：路由选择缺陷导致交易亏损** - 修复 V2/V3 路由选择逻辑
+  - **问题**：系统采用"先到先得"策略，只要找到第一个可用路由就立即使用
+  - **后果**：当 V3 池流动性极低时，会选择 V3 而忽略流动性更好的 V2 池
+  - **实际案例**：用户交易代币 0xe1e93e92c0c2aff2dc4d7d4a8b250d973cad4444 时，V3 输出仅为 V2 的 1/10
+  - **修复**：改为"比较最优"策略
+    - 同时尝试 V2 和 V3 路由
+    - 比较两者的输出金额（amountOut）
+    - 选择输出金额最大的路由
+    - 记录改进百分比（bps）到日志
+  - **影响**：所有 PancakeSwap 交易都将自动选择最优路由
+  - **安全性**：避免因路由选择不当导致的资金损失
+
 ### Added
 - **混合 V2/V3 路由自动执行** - 自动执行需要混合路由的代币交易
   - 自动检测需要同时使用 V2 和 V3 池的交易路径
