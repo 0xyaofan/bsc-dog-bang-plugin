@@ -1623,11 +1623,11 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       ...dynamicPaths[direction],
       ...staticAlternativePaths
     ]);
-    const shouldEvaluateAlternativesOnSuccess =
-      alternativePaths.length > 0 && (
-        TX_CONFIG.PATH_OPTIMIZATION.TRY_ALTERNATIVE_PATHS ||
-        dynamicPaths[direction].length > 0
-      );
+
+    // 🚀 性能优化：直接路径成功后不再尝试其他路径
+    // 原因：尝试所有路径会浪费大量时间（每个路径需要 RPC 调用）
+    // 只有在直接路径失败时才尝试其他路径
+    const shouldEvaluateAlternativesOnSuccess = false;
 
     if (TX_CONFIG.PATH_OPTIMIZATION.SMART_PATH_ENABLED) {
       try {
