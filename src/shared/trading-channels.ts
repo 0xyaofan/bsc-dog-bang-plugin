@@ -98,6 +98,11 @@ type TokenTradeHint = {
   lastSellFees?: number[];
   updatedAt: number;
   forcedMode?: 'v2' | 'v3';
+  // 失败缓存：记录哪些路由模式失败了
+  v2BuyFailed?: boolean;
+  v2SellFailed?: boolean;
+  v3BuyFailed?: boolean;
+  v3SellFailed?: boolean;
 };
 
 const tokenTradeHints = new Map<string, TokenTradeHint>();
@@ -200,7 +205,12 @@ function updateTokenTradeHint(tokenAddress: string, channelId: string, direction
     lastSellFees: existing?.lastSellFees,
     updatedAt: Date.now(),
     lastMode: info.mode ?? existing?.lastMode,
-    forcedMode: existing?.forcedMode
+    forcedMode: existing?.forcedMode,
+    // 保留失败状态
+    v2BuyFailed: existing?.v2BuyFailed,
+    v2SellFailed: existing?.v2SellFailed,
+    v3BuyFailed: existing?.v3BuyFailed,
+    v3SellFailed: existing?.v3SellFailed
   };
   if (direction === 'buy' && info.path) {
     next.lastBuyPath = info.path;
@@ -213,6 +223,41 @@ function updateTokenTradeHint(tokenAddress: string, channelId: string, direction
   tokenTradeHints.set(key, next);
 
   // 异步保存到持久化存储（不阻塞主流程）
+  saveTokenTradeHintsToStorage().catch((error) => {
+    logger.debug('[Cache] 保存缓存失败:', error);
+  });
+}
+
+// 更新路由失败状态
+function updateRouteFailureStatus(
+  tokenAddress: string,
+  direction: 'buy' | 'sell',
+  status: { v2Failed: boolean; v3Failed: boolean }
+) {
+  const key = normalizeTokenKey(tokenAddress);
+  if (!key) {
+    return;
+  }
+  const existing = tokenTradeHints.get(key);
+  const next: TokenTradeHint = existing
+    ? { ...existing }
+    : {
+        channelId: 'pancake',
+        updatedAt: Date.now()
+      };
+
+  if (direction === 'buy') {
+    next.v2BuyFailed = status.v2Failed;
+    next.v3BuyFailed = status.v3Failed;
+  } else {
+    next.v2SellFailed = status.v2Failed;
+    next.v3SellFailed = status.v3Failed;
+  }
+  next.updatedAt = Date.now();
+
+  tokenTradeHints.set(key, next);
+
+  // 异步保存到持久化存储
   saveTokenTradeHintsToStorage().catch((error) => {
     logger.debug('[Cache] 保存缓存失败:', error);
   });
@@ -2140,24 +2185,38 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
 
-    logger.info(`${channelLabel} 🔍 并行查询 V2 和 V3 路由，选择最优...`);
+    // 🚀 性能优化：检查失败缓存，跳过已知会失败的查询
+    const v2FailedKey = direction === 'buy' ? 'v2BuyFailed' : 'v2SellFailed';
+    const v3FailedKey = direction === 'buy' ? 'v3BuyFailed' : 'v3SellFailed';
+    const v2KnownFailed = hint?.[v2FailedKey] === true;
+    const v3KnownFailed = hint?.[v3FailedKey] === true;
+
+    // 如果 V2 已知失败且 V3 有缓存路径，跳过 V2 查询
+    const skipV2 = v2KnownFailed && (hint?.lastMode === 'v3' || routerMatchesV3);
+    if (skipV2) {
+      logger.info(`${channelLabel} ⚡ V2 已知失败，跳过 V2 查询，直接使用 V3`);
+    }
+
+    logger.info(`${channelLabel} 🔍 ${skipV2 ? '仅查询 V3' : '并行查询 V2 和 V3'} 路由，选择最优...`);
     const queryStartTime = Date.now();
 
-    // 🚀 性能优化：并行执行 V2 和 V3 查询
+    // 🚀 性能优化：并行执行 V2 和 V3 查询（如果 V2 已知失败则跳过）
     const [v2Result, v3Result] = await Promise.allSettled([
-      // V2 查询
-      (async () => {
-        const v2Start = Date.now();
-        logger.debug(`${channelLabel} 开始 V2 查询...`);
-        try {
-          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
-          logger.debug(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
-          return result;
-        } catch (error) {
-          logger.debug(`${channelLabel} V2 查询失败，耗时: ${Date.now() - v2Start}ms`);
-          throw error;
-        }
-      })(),
+      // V2 查询（如果已知失败则跳过）
+      skipV2
+        ? Promise.reject(new Error('V2 known to fail, skipped'))
+        : (async () => {
+            const v2Start = Date.now();
+            logger.debug(`${channelLabel} 开始 V2 查询...`);
+            try {
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+              logger.debug(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
+              return result;
+            } catch (error) {
+              logger.debug(`${channelLabel} V2 查询失败，耗时: ${Date.now() - v2Start}ms`);
+              throw error;
+            }
+          })(),
       // V3 查询
       hasSmartRouterSupport
         ? (async () => {
@@ -2205,6 +2264,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     // 比较 V2 和 V3 的输出，选择最优的
     if (v2Data && v3Data) {
+      // 两者都成功，清除失败标记
+      updateRouteFailureStatus(tokenAddress, direction, { v2Failed: false, v3Failed: false });
+
       if (v2Data.amountOut > v3Data.amountOut) {
         const improvement = ((v2Data.amountOut - v3Data.amountOut) * 10000n / v3Data.amountOut);
         logger.info(`${channelLabel} ✅ V2 输出更优 (比 V3 多 ${improvement.toString()}bps)，选择 V2`);
@@ -2217,10 +2279,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
       }
     } else if (v2Data) {
+      // V2 成功，V3 失败
+      updateRouteFailureStatus(tokenAddress, direction, { v2Failed: false, v3Failed: true });
       logger.info(`${channelLabel} ✅ 只有 V2 路径可用`);
       logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
     } else if (v3Data) {
+      // V3 成功，V2 失败
+      updateRouteFailureStatus(tokenAddress, direction, { v2Failed: true, v3Failed: false });
       logger.info(`${channelLabel} ✅ 只有 V3 路径可用`);
       logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
