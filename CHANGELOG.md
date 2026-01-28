@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chrome Web Store publication
 
 ### Added
+- **混合 V2/V3 路由检测** - 智能识别需要混合路由的代币
+  - 自动检测需要同时使用 V2 和 V3 池的交易路径
+  - 识别 V3 → V2 和 V2 → V3 的混合路径
+  - 提供清晰的错误提示和解决方案
+  - 指导用户使用 PancakeSwap 官网或其他聚合器
 - **3-hop 路由支持** - 支持复杂的多跳交易路径
   - 自动发现代币的 quote token（募集币种）
   - 构建 WBNB → Bridge → QuoteToken → Token 的 3-hop 路径
@@ -23,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **扩展桥接代币支持** - 支持更多非标准流动性池代币
   - 新增 USAT (0xdb7a6d5a127ea5c0a3576677112f13d731232a27) 作为桥接代币
   - 支持与 USAT 配对的代币交易路由
-  - 自动发现和使用非标准桥接代币路径
+  - 自动发现和使用非标准桥��代币路径
   - 解决代币与非主流币种配对时路由失败的问题
 
 ## [1.1.6] - 2025-01-27

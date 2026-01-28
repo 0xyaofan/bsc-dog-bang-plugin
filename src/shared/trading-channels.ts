@@ -849,13 +849,21 @@ async function discoverTokenQuoteToken(
       return null;
     }
 
-    // 尝试常见的配对代币
+    // 扩展的配对代币列表，包括更多可能的 quote token
     const commonPairTokens = [
       '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
       '0x55d398326f99059fF775485246999027B3197955', // USDT
       '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', // USDC
       '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56', // BUSD
+      '0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3', // DAI
+      '0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82', // CAKE
+      '0x2170Ed0880ac9A755fd29B2688956BD959F933F8', // ETH
+      '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', // BTCB
+      // 添加更多可能的 quote token
+      '0xdb7a6d5a127ea5c0a3576677112f13d731232a27', // USAT (直接添加)
     ];
+
+    logger.debug(`[QuoteDiscovery] 开始检测代币 ${checksumToken.slice(0, 10)} 的 quote token...`);
 
     for (const pairToken of commonPairTokens) {
       const checksumPairToken = toChecksumAddress(pairToken, 'pairToken');
@@ -863,39 +871,44 @@ async function discoverTokenQuoteToken(
         continue;
       }
 
-      // 检查是否存在 Pair
-      const pairAddress = await publicClient.readContract({
-        address: toChecksumAddress(factoryAddress, 'factory'),
-        abi: factoryAbi,
-        functionName: 'getPair',
-        args: [checksumToken, checksumPairToken]
-      });
+      try {
+        // 检查是否存在 Pair
+        const pairAddress = await publicClient.readContract({
+          address: toChecksumAddress(factoryAddress, 'factory'),
+          abi: factoryAbi,
+          functionName: 'getPair',
+          args: [checksumToken, checksumPairToken]
+        });
 
-      if (pairAddress && pairAddress !== ZERO_ADDRESS) {
-        // 找到了 Pair，查询其 token0 和 token1
-        const [token0, token1] = await Promise.all([
-          publicClient.readContract({
-            address: pairAddress,
-            abi: PAIR_ABI,
-            functionName: 'token0'
-          }),
-          publicClient.readContract({
-            address: pairAddress,
-            abi: PAIR_ABI,
-            functionName: 'token1'
-          })
-        ]);
+        if (pairAddress && pairAddress !== ZERO_ADDRESS) {
+          // 找到了 Pair，查询其 token0 和 token1
+          const [token0, token1] = await Promise.all([
+            publicClient.readContract({
+              address: pairAddress,
+              abi: PAIR_ABI,
+              functionName: 'token0'
+            }),
+            publicClient.readContract({
+              address: pairAddress,
+              abi: PAIR_ABI,
+              functionName: 'token1'
+            })
+          ]);
 
-        // 返回不是目标代币的那个（即 quote token）
-        const quoteToken = token0.toLowerCase() === checksumToken.toLowerCase() ? token1 : token0;
-        logger.debug(`[QuoteDiscovery] 发现代币 ${checksumToken.slice(0, 10)} 的 quote token: ${quoteToken.slice(0, 10)}`);
-        return quoteToken;
+          // 返回不是目标代币的那个（即 quote token）
+          const quoteToken = token0.toLowerCase() === checksumToken.toLowerCase() ? token1 : token0;
+          logger.info(`[QuoteDiscovery] ✅ 发现代币 ${checksumToken.slice(0, 10)} 的 quote token: ${quoteToken.slice(0, 10)} (Pair: ${pairAddress.slice(0, 10)})`);
+          return quoteToken;
+        }
+      } catch (error) {
+        logger.debug(`[QuoteDiscovery] 检查配对 ${checksumPairToken.slice(0, 10)} 失败: ${error?.message || error}`);
       }
     }
 
+    logger.warn(`[QuoteDiscovery] ❌ 未找到代币 ${checksumToken.slice(0, 10)} 的 quote token`);
     return null;
   } catch (error) {
-    logger.debug(`[QuoteDiscovery] 发现 quote token 失败: ${error?.message || error}`);
+    logger.error(`[QuoteDiscovery] 发现 quote token 失败: ${error?.message || error}`);
     return null;
   }
 }
@@ -938,9 +951,11 @@ async function build3HopPaths(
   );
 
   if (!quoteTokenPairExists) {
-    logger.debug(`[3HopPath] QuoteToken-Token Pair 不存在`);
+    logger.warn(`[3HopPath] QuoteToken-Token Pair 不存在: ${checksumQuote.slice(0, 10)} - ${checksumToken.slice(0, 10)}`);
     return { buy: buyPaths, sell: sellPaths };
   }
+
+  logger.debug(`[3HopPath] ✅ QuoteToken-Token Pair 存在，开始检查桥接代币...`);
 
   // 尝试每个桥接代币
   for (const bridge of bridgeTokens) {
@@ -964,7 +979,7 @@ async function build3HopPaths(
         buyPaths.push(buyPath);
         sellPaths.push(sellPath);
 
-        logger.debug(`[3HopPath] 找到有效路径: ${buyPath.map(a => a.slice(0, 6)).join(' → ')}`);
+        logger.info(`[3HopPath] ✅ 找到有效路径: ${buyPath.map(a => a.slice(0, 6)).join(' → ')}`);
       }
     } catch (error) {
       logger.debug(`[3HopPath] 检查桥接代币 ${checksumBridge.slice(0, 10)} 失败: ${error?.message || error}`);
@@ -972,6 +987,71 @@ async function build3HopPaths(
   }
 
   return { buy: buyPaths, sell: sellPaths };
+}
+
+/**
+ * 检测混合 V2/V3 路由
+ * 检查是否存在需要同时使用 V2 和 V3 池的路径
+ */
+async function detectMixedV2V3Route(
+  publicClient,
+  v2FactoryAddress: string,
+  v2FactoryAbi: any,
+  v3FactoryAddress: string,
+  v3FactoryAbi: any,
+  startToken: string,
+  targetToken: string,
+  bridgeTokens: string[]
+): Promise<{ description: string; v3Segment?: string; v2Segment?: string } | null> {
+  if (!publicClient || !v2FactoryAddress || !v3FactoryAddress) {
+    return null;
+  }
+
+  try {
+    // 检查每个桥接代币
+    for (const bridge of bridgeTokens) {
+      const checksumBridge = toChecksumAddress(bridge, 'mixedBridge');
+      if (!checksumBridge || checksumBridge === startToken || checksumBridge === targetToken) {
+        continue;
+      }
+
+      // 检查 V3: startToken → bridge
+      const v3Pool = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, startToken, checksumBridge);
+
+      if (v3Pool) {
+        // 检查 V2: bridge → targetToken
+        const v2Pair = await hasPair(publicClient, v2FactoryAddress, v2FactoryAbi, checksumBridge, targetToken);
+
+        if (v2Pair) {
+          return {
+            description: `${startToken.slice(0, 6)} → ${checksumBridge.slice(0, 6)} (V3) → ${targetToken.slice(0, 6)} (V2)`,
+            v3Segment: `${startToken} → ${checksumBridge}`,
+            v2Segment: `${checksumBridge} → ${targetToken}`
+          };
+        }
+      }
+
+      // 反向检查：V2: startToken → bridge, V3: bridge → targetToken
+      const v2Pair = await hasPair(publicClient, v2FactoryAddress, v2FactoryAbi, startToken, checksumBridge);
+
+      if (v2Pair) {
+        const v3Pool2 = await getV3Pool(publicClient, v3FactoryAddress, v3FactoryAbi, checksumBridge, targetToken);
+
+        if (v3Pool2) {
+          return {
+            description: `${startToken.slice(0, 6)} → ${checksumBridge.slice(0, 6)} (V2) → ${targetToken.slice(0, 6)} (V3)`,
+            v2Segment: `${startToken} → ${checksumBridge}`,
+            v3Segment: `${checksumBridge} → ${targetToken}`
+          };
+        }
+      }
+    }
+
+    return null;
+  } catch (error) {
+    logger.debug(`[MixedRouteDetection] 检测失败: ${error?.message || error}`);
+    return null;
+  }
 }
 
 type DynamicGasOptions = {
@@ -1383,7 +1463,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     if (!bestPath) {
       // 回退机制：尝试发现代币的 quote token 并构建 3-hop 路径
-      logger.debug(`${channelLabel} 标准路径失败，尝试发现 quote token...`);
+      logger.info(`${channelLabel} 标准路径失败，尝试发现 quote token...`);
 
       try {
         const quoteToken = await discoverTokenQuoteToken(
@@ -1394,7 +1474,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         );
 
         if (quoteToken) {
-          logger.debug(`${channelLabel} 发现 quote token: ${quoteToken.slice(0, 10)}`);
+          logger.info(`${channelLabel} ✅ 发现 quote token: ${quoteToken.slice(0, 10)}`);
 
           // 构建 3-hop 路径
           const allBridgeTokens = [
@@ -1402,6 +1482,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             ...(helperTokenPool || []),
             ...(dynamicBridgeTokenPool || [])
           ];
+
+          logger.debug(`${channelLabel} 使用 ${allBridgeTokens.length} 个桥接代币构建 3-hop 路径...`);
 
           const threeHopPaths = await build3HopPaths(
             publicClient,
@@ -1414,7 +1496,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           );
 
           if (threeHopPaths[direction].length > 0) {
-            logger.debug(`${channelLabel} 找到 ${threeHopPaths[direction].length} 个 3-hop 路径`);
+            logger.info(`${channelLabel} ✅ 找到 ${threeHopPaths[direction].length} 个 3-hop 路径`);
 
             // 评估 3-hop 路径
             const threeHopResults = await fetchPathAmounts(
@@ -1430,16 +1512,33 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
               if (result && result.amountOut > bestAmountOut) {
                 bestAmountOut = result.amountOut;
                 bestPath = result.path;
+                logger.info(`${channelLabel} ✅ 找到有效 3-hop 路径: ${result.path.map(a => a.slice(0, 6)).join(' → ')}, 输出: ${result.amountOut.toString()}`);
               }
             }
+
+            if (!bestPath) {
+              logger.warn(`${channelLabel} ❌ 3-hop 路径评估失败，所有路径输出为 0`);
+            }
+          } else {
+            logger.warn(`${channelLabel} ❌ 未找到有效的 3-hop 路径`);
           }
+        } else {
+          logger.warn(`${channelLabel} ❌ 未发现 quote token`);
         }
       } catch (error) {
-        logger.debug(`${channelLabel} 3-hop 路径回退失败: ${error?.message || error}`);
+        logger.error(`${channelLabel} 3-hop 路径回退失败: ${error?.message || error}`);
       }
     }
 
     if (!bestPath) {
+      // 检查是否检测到混合路由
+      const mixedRouteInfo = (globalThis as any).__mixedRouteDetected;
+      if (mixedRouteInfo) {
+        throw new Error(
+          `${channelLabel} 此代币需要混合 V2/V3 路由（${mixedRouteInfo.description}），` +
+          `当前系统暂不支持。请使用 PancakeSwap 官网 (https://pancakeswap.finance) 或其他聚合器进行交易。`
+        );
+      }
       throw new Error(`${channelLabel} 所有路径都失败，代币可能没有流动性`);
     }
 
@@ -1557,6 +1656,29 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     const multiHopRoute = await evaluateMultiHopRoutes();
 
     if (!directRoute && !multiHopRoute) {
+      // 检测是否存在混合 V3/V2 路径
+      try {
+        const mixedRouteInfo = await detectMixedV2V3Route(
+          publicClient,
+          factoryAddress,
+          factoryAbi,
+          v3FactoryAddress,
+          v3FactoryAbi,
+          startChecksum,
+          targetChecksum,
+          Array.from(bridgeCandidates)
+        );
+
+        if (mixedRouteInfo) {
+          logger.warn(`${channelLabel} 检测到需要混合 V2/V3 路由: ${mixedRouteInfo.description}`);
+          logger.warn(`${channelLabel} 当前系统暂不支持混合路由，请使用 PancakeSwap 官网或其他聚合器`);
+          // 将混合路由信息存储起来，用于错误提示
+          (globalThis as any).__mixedRouteDetected = mixedRouteInfo;
+        }
+      } catch (error) {
+        logger.debug(`${channelLabel} 混合路径检测失败: ${error?.message || error}`);
+      }
+
       return null;
     }
     if (directRoute && multiHopRoute) {
@@ -1696,6 +1818,15 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           logger.debug(`${channelLabel} V3 路径失败: ${error?.message || error}`);
         }
       }
+    }
+
+    // 检查是否检测到混合路由
+    const mixedRouteInfo = (globalThis as any).__mixedRouteDetected;
+    if (mixedRouteInfo) {
+      throw new Error(
+        `${channelLabel} 此代币需要混合 V2/V3 路由（${mixedRouteInfo.description}），` +
+        `当前系统暂不支持。请使用 PancakeSwap 官网 (https://pancakeswap.finance) 或其他聚合器进行交易。`
+      );
     }
 
     throw preferV3
