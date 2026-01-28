@@ -1985,6 +1985,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     | { kind: 'v3'; route: V3RoutePlan; amountOut: bigint }
     | { kind: 'mixed'; mixedRouteInfo: { description: string; v3Segment?: string; v2Segment?: string; v3First: boolean; bridgeToken: string }; amountOut: bigint }
   > => {
+    const startTime = Date.now();
+    logger.info(`${channelLabel} ⏱️ 开始路由查询 (${direction})`);
+
     let lastError: any = null;
     const hint = getTokenTradeHint(tokenAddress);
     const routerMatchesV3 = smartRouterAddress && hint?.routerAddress?.toLowerCase() === smartRouterAddress.toLowerCase();
@@ -2008,22 +2011,45 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
 
     logger.info(`${channelLabel} 🔍 并行查询 V2 和 V3 路由，选择最优...`);
+    const queryStartTime = Date.now();
 
     // 🚀 性能优化：并行执行 V2 和 V3 查询
     const [v2Result, v3Result] = await Promise.allSettled([
       // V2 查询
-      findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path),
+      (async () => {
+        const v2Start = Date.now();
+        logger.debug(`${channelLabel} 开始 V2 查询...`);
+        try {
+          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+          logger.debug(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
+          return result;
+        } catch (error) {
+          logger.debug(`${channelLabel} V2 查询失败，耗时: ${Date.now() - v2Start}ms`);
+          throw error;
+        }
+      })(),
       // V3 查询
       hasSmartRouterSupport
         ? (async () => {
-            let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
-            if (!v3Route) {
-              v3Route = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
+            const v3Start = Date.now();
+            logger.debug(`${channelLabel} 开始 V3 查询...`);
+            try {
+              let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
+              if (!v3Route) {
+                v3Route = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
+              }
+              logger.debug(`${channelLabel} V3 查询完成，耗时: ${Date.now() - v3Start}ms`);
+              return v3Route;
+            } catch (error) {
+              logger.debug(`${channelLabel} V3 查询失败，耗时: ${Date.now() - v3Start}ms`);
+              throw error;
             }
-            return v3Route;
           })()
         : Promise.reject(new Error('V3 not supported'))
     ]);
+
+    const queryEndTime = Date.now();
+    logger.info(`${channelLabel} ⏱️ 并行查询完成，总耗时: ${queryEndTime - queryStartTime}ms`);
 
     // 处理 V2 结果
     let v2Data: { path: string[]; amountOut: bigint } | null = null;
@@ -2052,17 +2078,21 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       if (v2Data.amountOut > v3Data.amountOut) {
         const improvement = ((v2Data.amountOut - v3Data.amountOut) * 10000n / v3Data.amountOut);
         logger.info(`${channelLabel} ✅ V2 输出更优 (比 V3 多 ${improvement.toString()}bps)，选择 V2`);
+        logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
         return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
       } else {
         const improvement = ((v3Data.amountOut - v2Data.amountOut) * 10000n / v2Data.amountOut);
         logger.info(`${channelLabel} ✅ V3 输出更优 (比 V2 多 ${improvement.toString()}bps)，选择 V3`);
+        logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
         return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
       }
     } else if (v2Data) {
       logger.info(`${channelLabel} ✅ 只有 V2 路径可用`);
+      logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
     } else if (v3Data) {
       logger.info(`${channelLabel} ✅ 只有 V3 路径可用`);
+      logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
     }
 
