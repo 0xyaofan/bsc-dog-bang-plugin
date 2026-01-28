@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 添加 `swapExactTokensForTokens` 函数到 Router ABI，支持 token-to-token 交换
 
 ### Performance
+- **🚀 V2 路径查询优化** - 直接路径成功后不再尝试其他路径
+  - **问题**：V2 查询耗时 1000ms，尝试了 24 个失败的多跳路径
+  - **原因**：即使直接路径已经成功，系统仍然尝试所有其他路径
+  - **修复**：直接路径成功后立即返回，不再尝试其他路径
+  - **性能提升**：
+    - V2 查询时间：从 1000ms 降至 100-200ms
+    - 总查询时间：从 1000ms 降至 500-600ms
+    - 性能提升：约 50%
+  - **影响**：大幅提升首次交易速度，减少不必要的 RPC 调用
 - **🚀 并行路由查询优化** - 提升 50% 首次交易速度
   - 使用 Promise.allSettled 并行执行 V2 和 V3 查询
   - **之前**：顺序执行，总时间 = V2时间 + V3时间 (约 1000-2000ms)
