@@ -103,9 +103,17 @@ type TokenTradeHint = {
   v2SellFailed?: boolean;
   v3BuyFailed?: boolean;
   v3SellFailed?: boolean;
+  // 预加载状态
+  buyRouteStatus?: 'idle' | 'loading' | 'success' | 'failed';
+  sellRouteStatus?: 'idle' | 'loading' | 'success' | 'failed';
+  buyRouteLoadedAt?: number;  // 买入路由加载时间
+  sellRouteLoadedAt?: number; // 卖出路由加载时间
 };
 
 const tokenTradeHints = new Map<string, TokenTradeHint>();
+
+// 路由缓存有效期：1 小时
+const ROUTE_CACHE_TTL_MS = 60 * 60 * 1000;
 
 // 持久化缓存配置
 const CACHE_STORAGE_KEY = 'tokenTradeHintsCache';
@@ -295,6 +303,77 @@ export function setPancakePreferredMode(tokenAddress: string, mode: 'v2' | 'v3' 
   base.forcedMode = mode;
   base.updatedAt = Date.now();
   tokenTradeHints.set(key, base);
+
+  // 异步保存到持久化存储
+  saveTokenTradeHintsToStorage().catch((error) => {
+    logger.debug('[Cache] 保存缓存失败:', error);
+  });
+}
+
+// 预加载路由（用于页面加载时提前查询）
+// 注意：这个函数目前只是一个占位符，实际的预加载逻辑需要在 background 中实现
+// 因为需要访问 publicClient 和其他上下文
+export async function preloadTokenRoute(
+  tokenAddress: string,
+  direction: 'buy' | 'sell'
+): Promise<{ needsPreload: boolean; cacheAge?: number }> {
+  const key = normalizeTokenKey(tokenAddress);
+  if (!key) {
+    return { needsPreload: false };
+  }
+
+  const hint = getTokenTradeHint(tokenAddress);
+
+  // 检查缓存是否有效（1 小时内）
+  if (isRouteCacheValid(hint, direction)) {
+    const cacheAge = Math.floor((Date.now() - (direction === 'buy' ? hint!.buyRouteLoadedAt! : hint!.sellRouteLoadedAt!)) / 1000);
+    logger.debug(`[Preload] 代币 ${tokenAddress.slice(0, 10)} ${direction} 路由缓存有效（${cacheAge}秒前），无需预加载`);
+    return { needsPreload: false, cacheAge };
+  }
+
+  logger.info(`[Preload] 代币 ${tokenAddress.slice(0, 10)} ${direction} 路由缓存已过期或不存在，需要预加载`);
+  return { needsPreload: true };
+}
+
+// 检查路由缓存是否有效（1 小时内）
+function isRouteCacheValid(hint: TokenTradeHint | null, direction: 'buy' | 'sell'): boolean {
+  if (!hint) return false;
+  const loadedAt = direction === 'buy' ? hint.buyRouteLoadedAt : hint.sellRouteLoadedAt;
+  if (!loadedAt) return false;
+  return Date.now() - loadedAt < ROUTE_CACHE_TTL_MS;
+}
+
+// 更新路由加载状态
+function updateRouteLoadingStatus(
+  tokenAddress: string,
+  direction: 'buy' | 'sell',
+  status: 'idle' | 'loading' | 'success' | 'failed'
+) {
+  const key = normalizeTokenKey(tokenAddress);
+  if (!key) return;
+
+  const existing = tokenTradeHints.get(key);
+  const next: TokenTradeHint = existing
+    ? { ...existing }
+    : {
+        channelId: 'pancake',
+        updatedAt: Date.now()
+      };
+
+  if (direction === 'buy') {
+    next.buyRouteStatus = status;
+    if (status === 'success') {
+      next.buyRouteLoadedAt = Date.now();
+    }
+  } else {
+    next.sellRouteStatus = status;
+    if (status === 'success') {
+      next.sellRouteLoadedAt = Date.now();
+    }
+  }
+  next.updatedAt = Date.now();
+
+  tokenTradeHints.set(key, next);
 
   // 异步保存到持久化存储
   saveTokenTradeHintsToStorage().catch((error) => {
@@ -2165,6 +2244,42 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     let lastError: any = null;
     const hint = getTokenTradeHint(tokenAddress);
+
+    // 🚀 性能优化：检查缓存是否有效（1 小时内）且路由可用
+    if (isRouteCacheValid(hint, direction)) {
+      const cacheAge = Math.floor((Date.now() - (direction === 'buy' ? hint!.buyRouteLoadedAt! : hint!.sellRouteLoadedAt!)) / 1000);
+      logger.info(`${channelLabel} ⚡ 路由缓存有效（${cacheAge}秒前加载），尝试复用`);
+
+      // 尝试复用 V2 缓存路由
+      const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
+      if (preferredV2Path && preferredV2Path.length > 0) {
+        try {
+          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+          if (result && result.amountOut > 0n) {
+            logger.info(`${channelLabel} ✅ 使用缓存 V2 路由，耗时: ${Date.now() - startTime}ms`);
+            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+          }
+        } catch (error) {
+          logger.debug(`${channelLabel} 缓存的 V2 路由失效: ${error?.message || error}`);
+        }
+      }
+
+      // 尝试复用 V3 缓存路由
+      if (hint?.lastMode === 'v3') {
+        try {
+          const v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
+          if (v3Route && v3Route.amountOut > 0n) {
+            logger.info(`${channelLabel} ✅ 使用缓存 V3 路由，耗时: ${Date.now() - startTime}ms`);
+            return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
+          }
+        } catch (error) {
+          logger.debug(`${channelLabel} 缓存的 V3 路由失效: ${error?.message || error}`);
+        }
+      }
+
+      logger.debug(`${channelLabel} 缓存路由无法使用，将重新查询`);
+    }
+
     const routerMatchesV3 = smartRouterAddress && hint?.routerAddress?.toLowerCase() === smartRouterAddress.toLowerCase();
     const forcedMode = hint?.forcedMode;
 
@@ -2266,6 +2381,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     if (v2Data && v3Data) {
       // 两者都成功，清除失败标记
       updateRouteFailureStatus(tokenAddress, direction, { v2Failed: false, v3Failed: false });
+      // 更新路由加载时间
+      updateRouteLoadingStatus(tokenAddress, direction, 'success');
 
       if (v2Data.amountOut > v3Data.amountOut) {
         const improvement = ((v2Data.amountOut - v3Data.amountOut) * 10000n / v3Data.amountOut);
@@ -2281,12 +2398,16 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     } else if (v2Data) {
       // V2 成功，V3 失败
       updateRouteFailureStatus(tokenAddress, direction, { v2Failed: false, v3Failed: true });
+      // 更新路由加载时间
+      updateRouteLoadingStatus(tokenAddress, direction, 'success');
       logger.info(`${channelLabel} ✅ 只有 V2 路径可用`);
       logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
     } else if (v3Data) {
       // V3 成功，V2 失败
       updateRouteFailureStatus(tokenAddress, direction, { v2Failed: true, v3Failed: false });
+      // 更新路由加载时间
+      updateRouteLoadingStatus(tokenAddress, direction, 'success');
       logger.info(`${channelLabel} ✅ 只有 V3 路径可用`);
       logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
