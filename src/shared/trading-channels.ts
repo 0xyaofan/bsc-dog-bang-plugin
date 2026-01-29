@@ -311,15 +311,15 @@ export function setPancakePreferredMode(tokenAddress: string, mode: 'v2' | 'v3' 
 }
 
 // 预加载路由（用于页面加载时提前查询）
-// 注意：这个函数目前只是一个占位符，实际的预加载逻辑需要在 background 中实现
-// 因为需要访问 publicClient 和其他上下文
-export async function preloadTokenRoute(
+// 由 background 在切换代币页面时调用
+// 注意：这个函数只检查缓存状态，实际查询在第一次交易时进行
+export function checkRouteCache(
   tokenAddress: string,
-  direction: 'buy' | 'sell'
-): Promise<{ needsPreload: boolean; cacheAge?: number }> {
+  direction: 'buy' | 'sell' = 'buy'
+): { needsQuery: boolean; cacheAge?: number; status?: string } {
   const key = normalizeTokenKey(tokenAddress);
   if (!key) {
-    return { needsPreload: false };
+    return { needsQuery: true };
   }
 
   const hint = getTokenTradeHint(tokenAddress);
@@ -327,12 +327,11 @@ export async function preloadTokenRoute(
   // 检查缓存是否有效（1 小时内）
   if (isRouteCacheValid(hint, direction)) {
     const cacheAge = Math.floor((Date.now() - (direction === 'buy' ? hint!.buyRouteLoadedAt! : hint!.sellRouteLoadedAt!)) / 1000);
-    logger.debug(`[Preload] 代币 ${tokenAddress.slice(0, 10)} ${direction} 路由缓存有效（${cacheAge}秒前），无需预加载`);
-    return { needsPreload: false, cacheAge };
+    const status = direction === 'buy' ? hint?.buyRouteStatus : hint?.sellRouteStatus;
+    return { needsQuery: false, cacheAge, status };
   }
 
-  logger.info(`[Preload] 代币 ${tokenAddress.slice(0, 10)} ${direction} 路由缓存已过期或不存在，需要预加载`);
-  return { needsPreload: true };
+  return { needsQuery: true };
 }
 
 // 检查路由缓存是否有效（1 小时内）
