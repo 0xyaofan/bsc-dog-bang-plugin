@@ -3527,6 +3527,96 @@ if (shouldMountEmbeddedPanel) {
   } else {
     startWithSettings();
   }
-} else if (!isSidePanelContext) {
-  logger.debug('[Dog Bang] 嵌入式交易面板已禁用，仅同步 Side Panel 上下文');
 }
+
+// ========== 路由缓存主动刷新机制 ==========
+// 混合策略：页面可见性检测 + 定时检查
+
+let routeCacheRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+// 主动刷新路由缓存（如果即将过期或已过期）
+async function refreshRouteCacheIfNeeded() {
+  // 只在页面可见时刷新
+  if (document.visibilityState !== 'visible') {
+    return;
+  }
+
+  const tokenAddress = currentTokenAddress;
+  if (!tokenAddress) {
+    return;
+  }
+
+  try {
+    // 动态导入 trading-channels 模块
+    const { checkRouteCache, isRouteCacheExpiringSoon } = await import('../shared/trading-channels.js');
+
+    // 检查买入路由
+    const buyCache = checkRouteCache(tokenAddress, 'buy');
+    const buyExpiringSoon = isRouteCacheExpiringSoon(tokenAddress, 'buy');
+
+    if (buyCache.needsQuery || buyExpiringSoon) {
+      logger.info('[Route Cache] 买入路由缓存过期或即将过期，主动刷新');
+      // 触发预加载（通过 background）
+      safeSendMessage({
+        action: 'prefetch_token_balance',
+        data: { tokenAddress }
+      }).catch(() => {});
+    }
+
+    // 检查卖出路由
+    const sellCache = checkRouteCache(tokenAddress, 'sell');
+    const sellExpiringSoon = isRouteCacheExpiringSoon(tokenAddress, 'sell');
+
+    if (sellCache.needsQuery || sellExpiringSoon) {
+      logger.info('[Route Cache] 卖出路由缓存过期或即将过期，主动刷新');
+      // 触发卖出路由预加载（通过估算卖出金额）
+      safeSendMessage({
+        action: 'estimate_sell_amount',
+        data: {
+          tokenAddress,
+          amount: '1000000000000000000', // 1 token
+          channel: currentTokenRoute?.preferredChannel || 'pancake'
+        }
+      }).catch(() => {});
+    }
+  } catch (error) {
+    logger.debug('[Route Cache] 刷新缓存失败:', error);
+  }
+}
+
+// 启动定时检查（每5分钟）
+function startRouteCacheRefreshTimer() {
+  if (routeCacheRefreshTimer) {
+    return; // 已经启动
+  }
+
+  // 立即检查一次
+  refreshRouteCacheIfNeeded();
+
+  // 每5分钟检查一次
+  routeCacheRefreshTimer = setInterval(() => {
+    refreshRouteCacheIfNeeded();
+  }, 5 * 60 * 1000); // 5分钟
+
+  logger.debug('[Route Cache] 启动定时刷新机制（每5分钟）');
+}
+
+// 停止定时检查
+function stopRouteCacheRefreshTimer() {
+  if (routeCacheRefreshTimer) {
+    clearInterval(routeCacheRefreshTimer);
+    routeCacheRefreshTimer = null;
+    logger.debug('[Route Cache] 停止定时刷新机制');
+  }
+}
+
+// 页面可见性变化时的处理
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    logger.debug('[Route Cache] 页面激活，检查缓存是否需要刷新');
+    refreshRouteCacheIfNeeded();
+  }
+});
+
+// 启动定时刷新机制
+startRouteCacheRefreshTimer();
