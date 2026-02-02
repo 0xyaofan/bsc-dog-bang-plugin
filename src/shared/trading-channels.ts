@@ -334,12 +334,58 @@ export function checkRouteCache(
   return { needsQuery: true };
 }
 
+// 检查缓存是否即将过期（还有5分钟）
+export function isRouteCacheExpiringSoon(
+  tokenAddress: string,
+  direction: 'buy' | 'sell'
+): boolean {
+  const hint = getTokenTradeHint(tokenAddress);
+  if (!hint) return false;
+
+  const loadedAt = direction === 'buy' ? hint.buyRouteLoadedAt : hint.sellRouteLoadedAt;
+  if (!loadedAt) return false;
+
+  const age = Date.now() - loadedAt;
+  const expiringThreshold = ROUTE_CACHE_TTL_MS - (5 * 60 * 1000); // 还有5分钟过期
+
+  // 缓存年龄在 55分钟 到 60分钟 之间
+  return age > expiringThreshold && age < ROUTE_CACHE_TTL_MS;
+}
+
 // 检查路由缓存是否有效（1 小时内）
 function isRouteCacheValid(hint: TokenTradeHint | null, direction: 'buy' | 'sell'): boolean {
   if (!hint) return false;
   const loadedAt = direction === 'buy' ? hint.buyRouteLoadedAt : hint.sellRouteLoadedAt;
   if (!loadedAt) return false;
   return Date.now() - loadedAt < ROUTE_CACHE_TTL_MS;
+}
+
+// 等待路由预加载完成（如果正在加载中）
+async function waitForRouteLoading(
+  tokenAddress: string,
+  direction: 'buy' | 'sell',
+  maxWaitMs: number = 10000  // 最多等待10秒（从5秒增加到10秒）
+): Promise<boolean> {
+  const startTime = Date.now();
+  const checkInterval = 100; // 每100ms检查一次
+
+  while (Date.now() - startTime < maxWaitMs) {
+    const hint = getTokenTradeHint(tokenAddress);
+    const status = direction === 'buy' ? hint?.buyRouteStatus : hint?.sellRouteStatus;
+
+    if (status === 'success') {
+      // 预加载成功
+      return true;
+    } else if (status === 'failed' || !status || status === 'idle') {
+      // 预加载失败或未开始
+      return false;
+    }
+    // status === 'loading'，继续等待
+    await new Promise(resolve => setTimeout(resolve, checkInterval));
+  }
+
+  // 超时
+  return false;
 }
 
 // 更新路由加载状态
@@ -1562,6 +1608,7 @@ type BuyActionParams = {
   slippage: number;
   gasPrice?: number | bigint;
   nonceExecutor: NonceExecutor;
+  quoteToken?: string;
 };
 
 type SellActionParams = {
@@ -1581,6 +1628,7 @@ type SellQuoteParams = {
   publicClient: any;
   tokenAddress: string;
   amount: bigint;
+  tokenInfo?: any;
 };
 
 type TradingChannel = {
@@ -1783,7 +1831,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     publicClient,
     tokenAddress: string,
     amountIn: bigint,
-    preferredPath?: string[]
+    preferredPath?: string[],
+    quoteToken?: string
   ) => {
     if (preferredPath && preferredPath.length >= 2) {
       try {
@@ -1801,6 +1850,42 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         }
       } catch (error) {
         logger.debug(`${channelLabel} 缓存路径失效，重新搜索: ${error?.message || error}`);
+      }
+    }
+
+    // 🚀 性能优化：Four.meme 已迁移代币优先尝试 QuoteToken 路径
+    // Four.meme 已迁移代币在 Pancake V2 上创建的流动性池是：Token ↔ QuoteToken
+    // 最优路径：WBNB → QuoteToken → Token（买入）或 Token → QuoteToken → WBNB（卖出）
+    if (quoteToken) {
+      const normalizedQuote = quoteToken.toLowerCase();
+      const normalizedWrapper = nativeWrapper.toLowerCase();
+
+      // 如果 quoteToken 不是 WBNB，优先尝试 quoteToken 路径
+      if (normalizedQuote !== normalizedWrapper) {
+        const quoteTokenPath = direction === 'buy'
+          ? [nativeWrapper, quoteToken, tokenAddress]
+          : [tokenAddress, quoteToken, nativeWrapper];
+
+        try {
+          logger.debug(`${channelLabel} 尝试 QuoteToken 路径: ${quoteToken.slice(0, 6)}`);
+          const results = await fetchPathAmounts(
+            publicClient,
+            amountIn,
+            [quoteTokenPath],
+            contractAddress,
+            abi,
+            channelLabel
+          );
+
+          if (results.length > 0 && results[0].amountOut > 0n) {
+            logger.info(`${channelLabel} ✅ QuoteToken 路径成功: ${quoteToken.slice(0, 6)}, 输出: ${results[0].amountOut.toString()}`);
+            return { path: quoteTokenPath, amountOut: results[0].amountOut };
+          }
+        } catch (error) {
+          logger.debug(`${channelLabel} QuoteToken 路径失败: ${error?.message || error}`);
+        }
+      } else {
+        logger.debug(`${channelLabel} QuoteToken 是 WBNB，将使用直接路径`);
       }
     }
 
@@ -2232,7 +2317,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     direction: 'buy' | 'sell',
     publicClient,
     tokenAddress: string,
-    amountIn: bigint
+    amountIn: bigint,
+    quoteToken?: string
   ): Promise<
     | { kind: 'v2'; path: string[]; amountOut: bigint }
     | { kind: 'v3'; route: V3RoutePlan; amountOut: bigint }
@@ -2240,44 +2326,111 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
   > => {
     const startTime = Date.now();
     logger.info(`${channelLabel} ⏱️ 开始路由查询 (${direction})`);
+    if (quoteToken) {
+      logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
+    }
 
     let lastError: any = null;
     const hint = getTokenTradeHint(tokenAddress);
+
+    // 🚀 性能优化：检查是否有正在进行的预加载
+    const currentStatus = direction === 'buy' ? hint?.buyRouteStatus : hint?.sellRouteStatus;
+    if (currentStatus === 'loading') {
+      logger.info(`${channelLabel} ⏳ 检测到路由预加载中，等待完成...`);
+      const waitSuccess = await waitForRouteLoading(tokenAddress, direction, 10000);  // 等待最多10秒
+      if (waitSuccess) {
+        logger.info(`${channelLabel} ✅ 预加载完成，使用预加载的路由`);
+        // 重新获取 hint，因为预加载可能已更新
+        const updatedHint = getTokenTradeHint(tokenAddress);
+        if (isRouteCacheValid(updatedHint, direction)) {
+          // 尝试使用预加载的路由
+          const preferredV2Path = direction === 'buy' ? updatedHint?.lastBuyPath : updatedHint?.lastSellPath;
+          if (preferredV2Path && preferredV2Path.length > 0) {
+            try {
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
+              if (result && result.amountOut > 0n) {
+                logger.info(`${channelLabel} ✅ 使用预加载的 V2 路由，总耗时: ${Date.now() - startTime}ms`);
+                return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+              }
+            } catch (error) {
+              logger.debug(`${channelLabel} 预加载的路由失效: ${error?.message || error}`);
+            }
+          }
+          // 尝试 V3
+          if (updatedHint?.lastMode === 'v3') {
+            try {
+              const v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, updatedHint);
+              if (v3Route && v3Route.amountOut > 0n) {
+                logger.info(`${channelLabel} ✅ 使用预加载的 V3 路由，总耗时: ${Date.now() - startTime}ms`);
+                return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
+              }
+            } catch (error) {
+              logger.debug(`${channelLabel} 预加载的 V3 路由失效: ${error?.message || error}`);
+            }
+          }
+        }
+      } else {
+        logger.debug(`${channelLabel} 预加载超时或失败，将重新查询`);
+      }
+    }
 
     // 🚀 性能优化：检查缓存是否有效（1 小时内）且路由可用
     if (isRouteCacheValid(hint, direction)) {
       const cacheAge = Math.floor((Date.now() - (direction === 'buy' ? hint!.buyRouteLoadedAt! : hint!.sellRouteLoadedAt!)) / 1000);
       logger.info(`${channelLabel} ⚡ 路由缓存有效（${cacheAge}秒前加载），尝试复用`);
 
-      // 尝试复用 V2 缓存路由
-      const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
-      if (preferredV2Path && preferredV2Path.length > 0) {
-        try {
-          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
-          if (result && result.amountOut > 0n) {
-            logger.info(`${channelLabel} ✅ 使用缓存 V2 路由，耗时: ${Date.now() - startTime}ms`);
-            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
-          }
-        } catch (error) {
-          logger.debug(`${channelLabel} 缓存的 V2 路由失效: ${error?.message || error}`);
-        }
-      }
+      // 🔍 验证缓存的 routerAddress 是否属于 Pancake
+      // 防止代币从 Four.meme 迁移到 Pancake 后，缓存仍保留 Four.meme 的合约地址
+      const cachedRouter = hint?.routerAddress?.toLowerCase();
+      const isPancakeRouter = cachedRouter === contractAddress?.toLowerCase() ||
+                              cachedRouter === smartRouterAddress?.toLowerCase();
 
-      // 尝试复用 V3 缓存路由
-      if (hint?.lastMode === 'v3') {
-        try {
-          const v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
-          if (v3Route && v3Route.amountOut > 0n) {
-            logger.info(`${channelLabel} ✅ 使用缓存 V3 路由，耗时: ${Date.now() - startTime}ms`);
-            return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
-          }
-        } catch (error) {
-          logger.debug(`${channelLabel} 缓存的 V3 路由失效: ${error?.message || error}`);
-        }
-      }
+      if (cachedRouter && !isPancakeRouter) {
+        logger.warn(`${channelLabel} ⚠️ 缓存的 routerAddress (${cachedRouter.slice(0, 10)}) 不属于 Pancake，清除缓存`);
+        // 清除无效缓存 - 清除买入和卖出路由
+        updateRouteLoadingStatus(tokenAddress, 'buy', 'idle');
+        updateRouteLoadingStatus(tokenAddress, 'sell', 'idle');
+        // 跳过缓存复用，直接进入重新查询
+      } else {
+        // 检查失败状态
+        const v2FailedKey = direction === 'buy' ? 'v2BuyFailed' : 'v2SellFailed';
+        const v2KnownFailed = hint?.[v2FailedKey] === true;
 
-      logger.debug(`${channelLabel} 缓存路由无法使用，将重新查询`);
+        // 优先尝试 V3 缓存路由（如果 lastMode 是 v3 或 V2 已知失败）
+        if (hint?.lastMode === 'v3' || v2KnownFailed) {
+          try {
+            const v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
+            if (v3Route && v3Route.amountOut > 0n) {
+              logger.info(`${channelLabel} ✅ 使用缓存 V3 路由，耗时: ${Date.now() - startTime}ms`);
+              return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
+            }
+          } catch (error) {
+            logger.debug(`${channelLabel} 缓存的 V3 路由失效: ${error?.message || error}`);
+          }
+        }
+
+        // 尝试复用 V2 缓存路由（仅当 V2 未知失败且有路径时）
+        if (!v2KnownFailed) {
+          const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
+          if (preferredV2Path && preferredV2Path.length > 0) {
+            try {
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
+              if (result && result.amountOut > 0n) {
+                logger.info(`${channelLabel} ✅ 使用缓存 V2 路由，耗时: ${Date.now() - startTime}ms`);
+                return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+              }
+            } catch (error) {
+              logger.debug(`${channelLabel} 缓存的 V2 路由失效: ${error?.message || error}`);
+            }
+          }
+        }
+
+        logger.debug(`${channelLabel} 缓存路由无法使用，将重新查询`);
+      }
     }
+
+    // 设置为加载中状态
+    updateRouteLoadingStatus(tokenAddress, direction, 'loading');
 
     const routerMatchesV3 = smartRouterAddress && hint?.routerAddress?.toLowerCase() === smartRouterAddress.toLowerCase();
     const forcedMode = hint?.forcedMode;
@@ -2323,7 +2476,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             const v2Start = Date.now();
             logger.debug(`${channelLabel} 开始 V2 查询...`);
             try {
-              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path);
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
               logger.debug(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
               return result;
             } catch (error) {
@@ -2444,16 +2597,16 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
   };
 
   return {
-    async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor }) {
+    async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor, quoteToken }) {
       const buyStartTime = Date.now();
       logger.info(`${channelLabel} ⏱️ 开始买入交易`);
-      logger.debug(`${channelLabel} 买入:`, { tokenAddress, amount, slippage });
+      logger.debug(`${channelLabel} 买入:`, { tokenAddress, amount, slippage, quoteToken: quoteToken?.slice(0, 10) });
 
       const amountIn = parseEther(amount);
 
       // 步骤1: 查询最佳路由
       const routeStartTime = Date.now();
-      const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn);
+      const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn, quoteToken);
       logger.info(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
 
       const slippageBp = Math.floor(slippage * 100);
@@ -2634,6 +2787,12 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor }) {
       logger.debug(`${channelLabel} 卖出:`, { tokenAddress, percent, slippage });
 
+      // 从 tokenInfo 获取 quoteToken
+      const quoteToken = tokenInfo?.quoteToken;
+      if (quoteToken) {
+        logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
+      }
+
       // 性能优化：并发执行 prepareTokenSell 和 findBestRoute（使用预估金额）
       const preparePromise = prepareTokenSell({
         publicClient,
@@ -2738,12 +2897,41 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           })()
         : Promise.resolve(null);
 
-      const [initialState, routePlan, v2AllowanceValue, v3AllowanceValue] = await Promise.all([
-        preparePromise,
-        findBestRoute('sell', publicClient, tokenAddress, estimatedAmount),
-        v2AllowancePromise,
-        v3AllowancePromise
-      ]);
+      // 🚀 性能优化：检查是否有有效的卖出路由缓存
+      const hint = getTokenTradeHint(tokenAddress);
+      const hasSellCache = isRouteCacheValid(hint, 'sell');
+
+      // 如果有缓存且预估精度高，直接使用实际金额查询（会复用缓存）
+      // 如果没有缓存或预估精度低，先用预估金额并发查询
+      const shouldUseActualAmount = hasSellCache && hasAccurateEstimate;
+
+      let initialState: any;
+      let routePlan: any;
+      let v2AllowanceValue: bigint | null;
+      let v3AllowanceValue: bigint | null;
+
+      if (shouldUseActualAmount) {
+        // 先获取实际金额
+        initialState = await preparePromise;
+        const { amountToSell } = initialState;
+
+        // 然后并发查询路由和授权（使用实际金额）
+        [routePlan, v2AllowanceValue, v3AllowanceValue] = await Promise.all([
+          findBestRoute('sell', publicClient, tokenAddress, amountToSell, quoteToken),
+          v2AllowancePromise,
+          v3AllowancePromise
+        ]);
+
+        logger.debug(`${channelLabel} 使用实际金额查询路由（有缓存）: ${amountToSell.toString()}`);
+      } else {
+        // 并发查询（使用预估金额）
+        [initialState, routePlan, v2AllowanceValue, v3AllowanceValue] = await Promise.all([
+          preparePromise,
+          findBestRoute('sell', publicClient, tokenAddress, estimatedAmount, quoteToken),
+          v2AllowancePromise,
+          v3AllowancePromise
+        ]);
+      }
 
       const { totalSupply, amountToSell } = initialState;
       let allowanceValue = initialState.allowance;
@@ -2751,21 +2939,24 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       // 优化重查逻辑：
       // 1. 如果预估精度高（有 tokenInfo），使用更严格的阈值（10%）
       // 2. 如果预估精度低（无 tokenInfo），使用更宽松的阈值（5%），因为肯定会有差异
-      const amountDiff = amountToSell > estimatedAmount
-        ? amountToSell - estimatedAmount
-        : estimatedAmount - amountToSell;
-      const diffPercent = estimatedAmount > 0n
-        ? Number(amountDiff * 10000n / estimatedAmount) / 100
-        : 100;
-
-      // 根据预估精度选择阈值
-      const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
+      // 3. 如果已经使用实际金额查询，跳过重查
       let finalRoutePlan = routePlan;
-      if (diffPercent > reQueryThreshold) {
-        logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%（阈值: ${reQueryThreshold}%），重新查询路由`);
-        finalRoutePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell);
-      } else if (diffPercent > 1) {
-        logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估路由`);
+      if (!shouldUseActualAmount) {
+        const amountDiff = amountToSell > estimatedAmount
+          ? amountToSell - estimatedAmount
+          : estimatedAmount - amountToSell;
+        const diffPercent = estimatedAmount > 0n
+          ? Number(amountDiff * 10000n / estimatedAmount) / 100
+          : 100;
+
+        // 根据预估精度选择阈值
+        const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
+        if (diffPercent > reQueryThreshold) {
+          logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%（阈值: ${reQueryThreshold}%），重新查询路由`);
+          finalRoutePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell, quoteToken);
+        } else if (diffPercent > 1) {
+          logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估路由`);
+        }
       }
 
       // 使用预查询的授权值（已在并发查询中获取）
@@ -2906,12 +3097,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       }
     },
 
-    async quoteSell({ publicClient, tokenAddress, amount }) {
+    async quoteSell({ publicClient, tokenAddress, amount, tokenInfo }) {
       if (!publicClient || !tokenAddress || !amount || amount <= 0n) {
         return null;
       }
       try {
-        const routePlan = await findBestRoute('sell', publicClient, tokenAddress, amount);
+        // quoteSell 用于预估，也会触发路由查询
+        // 这里查询到的路由会被缓存，供后续真实交易使用
+        const routePlan = await findBestRoute('sell', publicClient, tokenAddress, amount, tokenInfo?.quoteToken);
         return routePlan.amountOut ?? null;
       } catch (error) {
         logger.debug(`${channelLabel} 卖出预估失败: ${error.message}`);
@@ -3153,14 +3346,17 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
         tokenInfo
       });
 
-      // 使用缓存的余额或预估值来并发查询报价
+      // 优化：使用缓存的余额或预估值来并发查询报价
       let estimatedAmount: bigint;
+      let hasAccurateEstimate = false;
       if (tokenInfo && tokenInfo.balance) {
         const balance = BigInt(tokenInfo.balance);
         estimatedAmount = percent === 100 ? balance : balance * BigInt(percent) / 100n;
+        hasAccurateEstimate = true; // 标记为高精度预估
       } else {
         // 如果没有缓存，使用一个合理的预估值（1 token）
         estimatedAmount = parseEther('1');
+        hasAccurateEstimate = false; // 标记为低精度预估
       }
 
       const quotePromise = getQuote(publicClient, tokenAddress, nativeTokenAddress, estimatedAmount);
@@ -3184,14 +3380,38 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
         nonceExecutor
       });
 
-      // 如果实际金额与预估金额差异较大，或预估失败，重新查询报价
+      // 优化重查逻辑：只有在差异较大或预估失败时才重新查询
       let estimatedNative = estimatedNativePreview;
-      if (estimatedNative === 0n || amountToSell !== estimatedAmount) {
+      if (estimatedNative === 0n) {
+        // 预估失败，必须重新查询
         try {
           estimatedNative = await getQuote(publicClient, tokenAddress, nativeTokenAddress, amountToSell);
           logger.debug(`${channelLabel} 预计获得原生币:`, formatEther(estimatedNative));
         } catch (error) {
           throw new Error(`${channelLabel} 获取报价失败: ${error.message}`);
+        }
+      } else if (amountToSell !== estimatedAmount) {
+        // 金额不同，检查差异百分比
+        const amountDiff = amountToSell > estimatedAmount
+          ? amountToSell - estimatedAmount
+          : estimatedAmount - amountToSell;
+        const diffPercent = estimatedAmount > 0n
+          ? Number(amountDiff * 10000n / estimatedAmount) / 100
+          : 100;
+
+        // 根据预估精度选择阈值
+        const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
+        if (diffPercent > reQueryThreshold) {
+          logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%（阈值: ${reQueryThreshold}%），重新查询报价`);
+          try {
+            estimatedNative = await getQuote(publicClient, tokenAddress, nativeTokenAddress, amountToSell);
+            logger.debug(`${channelLabel} 预计获得原生币:`, formatEther(estimatedNative));
+          } catch (error) {
+            throw new Error(`${channelLabel} 获取报价失败: ${error.message}`);
+          }
+        } else {
+          logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估报价`);
+          logger.debug(`${channelLabel} 预计获得原生币(缓存):`, formatEther(estimatedNative));
         }
       } else {
         logger.debug(`${channelLabel} 预计获得原生币(缓存):`, formatEther(estimatedNative));

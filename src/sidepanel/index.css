@@ -623,7 +623,7 @@ body {
 
 .config-action-button.secondary {
   background: var(--sp-bg-site-item);
-  color: var(--sp-text-primary);
+  color: var(--sp-text-secondary);
   border: 1px solid var(--sp-border-color);
 }
 

@@ -2825,7 +2825,11 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
       ]);
       timer.step(`${needCreateClient ? '创建客户端+' : ''}预热服务 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+      // 步骤2.5: 解析代币路由
+      stepStart = perf.now();
       const routeInfo = await resolveTokenRoute(normalizedTokenAddress);
+      timer.step(`解析代币路由 (${perf.measure(stepStart).toFixed(2)}ms)`);
+
       if (routeInfo.lockReason) {
         throw new Error(routeInfo.lockReason);
       }
@@ -2951,7 +2955,8 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
           amount,
           slippage: resolvedSlippage,
           gasPrice: normalizedGasPrice,
-          nonceExecutor
+          nonceExecutor,
+          quoteToken: routeInfo?.quoteToken
         });
       }
       timer.step(`执行区块链买入交易 (${perf.measure(stepStart).toFixed(2)}ms)`);
@@ -3074,7 +3079,11 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
       ]);
       timer.step(`${needCreateClient ? '创建客户端+' : ''}预热服务 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+      // 步骤2.5: 解析代币路由
+      stepStart = perf.now();
       const routeInfo = await resolveTokenRoute(normalizedTokenAddress);
+      timer.step(`解析代币路由 (${perf.measure(stepStart).toFixed(2)}ms)`);
+
       if (routeInfo.lockReason) {
         throw new Error(routeInfo.lockReason);
       }

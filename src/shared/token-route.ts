@@ -1,6 +1,7 @@
 import type { Address } from 'viem';
 import { CONTRACTS, PANCAKE_FACTORY_ABI } from './trading-config.js';
 import { getFourQuoteTokenList } from './channel-config.js';
+import { logger } from './logger.js';
 import tokenManagerHelperAbi from '../../abis/token-manager-helper-v3.json';
 import flapPortalAbi from '../../abis/flap-portal.json';
 import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
@@ -178,7 +179,9 @@ export function detectTokenPlatform(tokenAddress: string): TokenPlatform {
   if (normalized.endsWith('7777') || normalized.endsWith('8888')) {
     return 'flap';
   }
-  return 'luna';
+  // 优化：如果不匹配任何发射台模式，直接返回 'unknown'
+  // 避免尝试所有发射台平台，节省 RPC 请求和时间
+  return 'unknown';
 }
 
 const PLATFORM_FALLBACK_ORDER: TokenPlatform[] = ['four', 'xmode', 'flap', 'luna', 'unknown'];
@@ -353,19 +356,43 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
     (info as any)?.quoteToken ||
     (typeof infoArray[2] === 'string' ? infoArray[2] : undefined);
 
+  // 🐛 修复：只有在确认代币已迁移时才切换到 Pancake
+  // 问题：当 Four.meme helper 返回的数据被判定为"空"时，会自动切换到 Pancake
+  // 但对于未迁移代币，这是错误的！未迁移代币应该使用 Four.meme 合约
+  //
+  // 修复方案：
+  // 1. 检查 liquidityAdded 状态（从 infoArray[11] 获取）
+  // 2. 只有在 liquidityAdded = true 时才检查 Pancake
+  // 3. 如果 liquidityAdded = false，直接抛出错误，让上层使用 fallback
   if ((rawLaunchTime === 0n && isStructEffectivelyEmpty(info)) || (!quoteCandidate && isStructEffectivelyEmpty(info))) {
-    const pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteCandidate as Address);
-    if (pancakePair.hasLiquidity) {
-      return {
-        platform,
-        preferredChannel: 'pancake',
-        readyForPancake: true,
-        progress: 1,
-        migrating: false,
-        metadata: mergePancakeMetadata(undefined, pancakePair),
-        notes: 'Four.meme helper 返回空数据，自动切换 Pancake'
-      };
+    // 先检查 liquidityAdded 状态
+    const liquidityAddedFromArray = Boolean(infoArray[11]);
+
+    // 降低日志级别，避免噪音（只在第一次打印）
+    const cacheKey = tokenAddress.toLowerCase();
+    const existingCache = getRouteCache(cacheKey);
+    if (!existingCache) {
+      logger.warn(`[Route] Four.meme helper 返回空数据，liquidityAdded=${liquidityAddedFromArray}, token=${tokenAddress.slice(0, 10)}`);
     }
+
+    // 只有在已迁移时才检查 Pancake
+    if (liquidityAddedFromArray) {
+      const pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteCandidate as Address);
+      if (pancakePair.hasLiquidity) {
+        logger.info(`[Route] 代币已迁移，切换到 Pancake`);
+        return {
+          platform,
+          preferredChannel: 'pancake',
+          readyForPancake: true,
+          progress: 1,
+          migrating: false,
+          metadata: mergePancakeMetadata(undefined, pancakePair),
+          notes: 'Four.meme helper 返回空数据但代币已迁移，切换 Pancake'
+        };
+      }
+    }
+
+    // 未迁移或 Pancake 无流动性，抛出错误
     throw new Error('Four.meme helper 未返回有效数据');
   }
 
@@ -655,8 +682,17 @@ function shouldFallbackRoute(route: RouteFetchResult) {
   return !route.readyForPancake;
 }
 
-function buildPlatformProbeOrder(initial: TokenPlatform) {
+// 优化：根据检测到的平台，智能构建探测顺序
+function buildPlatformProbeOrder(initial: TokenPlatform): TokenPlatform[] {
   const order: TokenPlatform[] = [];
+
+  // 如果检测到 'unknown'，说明不匹配任何发射台模式
+  // 直接返回 ['unknown']，跳过所有发射台查询
+  if (initial === 'unknown') {
+    return ['unknown'];
+  }
+
+  // 如果检测到具体平台，按原有逻辑探测
   if (initial) {
     order.push(initial);
   }
