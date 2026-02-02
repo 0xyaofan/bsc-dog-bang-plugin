@@ -2,7 +2,7 @@ import type { Address } from 'viem';
 import { CONTRACTS, PANCAKE_FACTORY_ABI } from './trading-config.js';
 import { getFourQuoteTokenList } from './channel-config.js';
 import { logger } from './logger.js';
-import tokenManagerHelperAbi from '../../abis/token-manager-helper-v3.json';
+import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
 import flapPortalAbi from '../../abis/flap-portal.json';
 import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
 
@@ -169,6 +169,10 @@ export function detectTokenPlatform(tokenAddress: string): TokenPlatform {
   const normalized = normalizeAddress(tokenAddress);
   if (!/^0x[a-f0-9]{40}$/.test(normalized)) {
     return 'unknown';
+  }
+  // TaxToken: 地址以 ffff 结尾，使用相同的 TokenManager2 合约
+  if (normalized.endsWith('ffff')) {
+    return 'four';
   }
   if (normalized.endsWith('4444')) {
     return 'four';
@@ -392,8 +396,11 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
       }
     }
 
-    // 未迁移或 Pancake 无流动性，抛出错误
-    throw new Error('Four.meme helper 未返回有效数据');
+    // 未迁移或 Pancake 无流动性
+    // 抛出特殊错误，让上层直接跳到 unknown 平台（Pancake）
+    const error = new Error('Four.meme helper 未返回有效数据');
+    (error as any).skipToUnknown = true; // 标记：跳过其他发射台，直接使用 Pancake
+    throw error;
   }
 
   let liquidityAdded = Boolean(info?.liquidityAdded ?? infoArray[11]);
@@ -747,6 +754,22 @@ export async function fetchRouteWithFallback(
       // If Pancake has流动性才返回，否则尝试下一个平台
     } catch (error) {
       lastError = error;
+      // 检查是否需要跳过其他发射台，直接使用 unknown（Pancake）
+      if ((error as any)?.skipToUnknown) {
+        logger.info(`[Route] 模式匹配但获取信息失败，直接使用 Pancake`);
+        // 直接跳到 unknown 平台
+        try {
+          const unknownRoute = await fetchTokenRouteState(publicClient, tokenAddress, 'unknown');
+          if (shouldUpdateRouteCache(tokenAddress, cached, unknownRoute)) {
+            setRouteCache(tokenAddress, unknownRoute);
+            cleanupRouteCache();
+          }
+          return unknownRoute;
+        } catch (unknownError) {
+          // unknown 平台也失败了，继续抛出原始错误
+          logger.warn(`[Route] Pancake 查询也失败: ${unknownError?.message || unknownError}`);
+        }
+      }
     }
   }
 

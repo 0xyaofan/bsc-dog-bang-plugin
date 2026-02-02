@@ -10,7 +10,7 @@
 import { parseAbi, type Abi } from 'viem';
 import pancakeRouterAbi from '../../abis/pancake-router.json';
 import pancakeFactoryAbi from '../../abis/pancake-factory.json';
-import tokenManagerV2Abi from '../../abis/token-manager-v2.json';
+import tokenManagerV2Abi from '../../abis/fourmeme/TokenManager2.lite.abi.json';
 import flapPortalAbi from '../../abis/flap-portal.json';
 import lunaFunLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
 import memeSwapAggregatorAbi from '../../abis/MemeSwapContract.abi.json';

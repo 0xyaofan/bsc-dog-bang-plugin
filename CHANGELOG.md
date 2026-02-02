@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trading bot features
 - Chrome Web Store publication
 
+### Added
+- **✨ TaxToken 支持** - 支持 Four.meme 税收代币（2026年1月30日发布）
+  - **识别**：自动识别地址以 `ffff` 结尾的 TaxToken
+  - **验证**：通过 `getTokenInfo` 查询验证代币是否在 Four.meme 系统中
+    - 如果查询返回空数据，说明不是真正的 Four.meme 代币
+    - 自动跳过其他发射台平台，直接使用 Pancake 交易
+  - **交易**：TaxToken 使用与普通 Four.meme 代币相同的 TokenManager2 合约和交易接口
+  - **兼容性**：
+    - 买入：`buyTokenAMAP(token, amountIn, minAmountOut)` - 与普通代币相同
+    - 卖出：`sellToken(token, amount, minFunds)` - 与普通代币相同
+    - 无需修改交易逻辑，完全兼容现有实现
+  - **特性**：
+    - TaxToken 会在交易时自动扣除税费（1%, 3%, 5%, 10%）
+    - 税费分配给创始人、持币者、销毁、流动性
+    - 持币者可领取奖励（未来可添加 UI 支持）
+  - **性能优化**：模式匹配但获取信息失败时，直接使用 Pancake，避免尝试所有发射台平台
+  - **文档**：参考 `launchpad-docs/fourmeme/API-Contract-TaxToken.md`
+
 ### Fixed
 - **🐛 未迁移代币错误路由到 Pancake 问题** - 修复未迁移代币被错误识别并路由到 Pancake 的问题
   - **问题**：未迁移代币（筹集币种是 BNB）被路由到 Pancake 进行交易

@@ -14,7 +14,7 @@ import {
 import { getFourHelperTokenList } from './channel-config.js';
 import { parseEther, parseUnits, formatEther, encodeFunctionData, withCache } from 'viem';
 import { dedupePromise } from './promise-dedupe.js';
-import tokenManagerHelperAbi from '../../abis/token-manager-helper-v3.json';
+import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
 
 // ========== 路径缓存（优化4：减少 getAmountsOut 调用）==========
 // 注意：此缓存存储的是兑换金额（价格敏感数据），必须保持短期缓存以反映市场价格变化
