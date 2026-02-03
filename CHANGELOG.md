@@ -5,6 +5,22 @@ All notable changes to BSC Dog Bang Plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7] - 2026-02-04
+
+### Fixed
+- **🐛 浮动窗口钱包状态同步问题** - 修复浮动窗口创建时交易按钮无法点击的问题
+  - **问题**：浮动窗口创建后，即使钱包已解锁，买卖按钮点击无反应
+  - **原因**：`updateFloatingBalances` 只更新余额显示，不更新 `walletButtonsEnabled` 状态
+  - **修复**：在 `updateFloatingBalances` 中根据钱包状态同步更新交易按钮状态
+  - **效果**：浮动窗口的交易按钮状态与钱包状态实时同步
+
+### Changed
+- **⚡ 日志系统优化** - 优化日志级别，使用分级管理提升可读性
+  - **性能日志**：耗时相关日志改为 `logger.perf()`，由 `PERF_ENABLED` 独立控制
+  - **调试日志**：技术细节日志改为 `logger.debug()`，减少 info 级别日志噪音
+  - **业务日志**：保留关键业务信息为 `logger.info()`，如路由选择结果、混合路由执行等
+  - **效果**：普通用户看关键信息，调试时看详细信息，性能分析时看耗时数据
+
 ## [Unreleased]
 
 ### Planned
