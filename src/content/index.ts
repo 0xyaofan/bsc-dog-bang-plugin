@@ -555,8 +555,25 @@ function syncTokenContextFromCurrentPage(force = false) {
 
     // Update floating window when token changes
     const floatingWindow = document.getElementById('dog-bang-floating');
-    if (floatingWindow && tokenAddress !== lastSyncedTokenAddress) {
-      createFloatingTradingWindow(tokenAddress);
+    if (floatingWindow) {
+      if (tokenAddress && tokenAddress !== lastSyncedTokenAddress) {
+        // 代币地址变化，重新创建浮动窗口
+        createFloatingTradingWindow(tokenAddress);
+      } else if (!tokenAddress) {
+        // 切换到非代币页面，移除浮动窗口
+        const state = getFloatingWindowState();
+        state.opened = false;
+        saveFloatingWindowState(state);
+        floatingWindow.remove();
+        logger.debug('[Floating Window] 切换到非代币页面，移除浮动窗口');
+      }
+    } else if (tokenAddress) {
+      // 没有浮动窗口但有代币地址，检查是否需要创建
+      const state = getFloatingWindowState();
+      if (state.opened) {
+        createFloatingTradingWindow(tokenAddress);
+        logger.debug('[Floating Window] 切换到代币页面，恢复浮动窗口');
+      }
     }
 
     let preferredChannelId: string | undefined;
@@ -2503,12 +2520,13 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     });
   };
 
-  document.addEventListener('pointermove', (e) => {
+  // 使用局部事件监听器，避免全局污染
+  const handlePointerMove = (e: PointerEvent) => {
     if (!floatingWindowDragging) return;
     updatePosition(e.clientX, e.clientY);
-  });
+  };
 
-  document.addEventListener('pointerup', () => {
+  const handlePointerUp = () => {
     if (floatingWindowDragging) {
       floatingWindowDragging = false;
       floatingWindow.classList.remove('dragging');
@@ -2525,11 +2543,19 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         y: currentY
       };
       saveFloatingWindowState(state);
-      
+
       // 恢复透明度到正常状态，避免拖拽后保持半透明
       floatingWindow.style.opacity = '';
+
+      // 移除事件监听器，避免内存泄漏
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
     }
-  });
+  };
+
+  // 添加事件监听器
+  document.addEventListener('pointermove', handlePointerMove);
+  document.addEventListener('pointerup', handlePointerUp);
 
   // 折叠/展开功能
   const toggleBtn = floatingWindow.querySelector('.floating-toggle-btn');
