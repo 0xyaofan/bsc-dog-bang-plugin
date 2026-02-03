@@ -1143,7 +1143,7 @@ async function discoverTokenQuoteToken(
 
           // 返回不是目标代币的那个（即 quote token）
           const quoteToken = token0.toLowerCase() === checksumToken.toLowerCase() ? token1 : token0;
-          logger.info(`[QuoteDiscovery] ✅ 发现代币 ${checksumToken.slice(0, 10)} 的 quote token: ${quoteToken.slice(0, 10)} (Pair: ${pairAddress.slice(0, 10)})`);
+          logger.debug(`[QuoteDiscovery] ✅ 发现代币 ${checksumToken.slice(0, 10)} 的 quote token: ${quoteToken.slice(0, 10)} (Pair: ${pairAddress.slice(0, 10)})`);
           return quoteToken;
         }
       } catch (error) {
@@ -1225,7 +1225,7 @@ async function build3HopPaths(
         buyPaths.push(buyPath);
         sellPaths.push(sellPath);
 
-        logger.info(`[3HopPath] ✅ 找到有效路径: ${buyPath.map(a => a.slice(0, 6)).join(' → ')}`);
+        logger.debug(`[3HopPath] ✅ 找到有效路径: ${buyPath.map(a => a.slice(0, 6)).join(' → ')}`);
       }
     } catch (error) {
       logger.debug(`[3HopPath] 检查桥接代币 ${checksumBridge.slice(0, 10)} 失败: ${error?.message || error}`);
@@ -1440,7 +1440,7 @@ async function executeMixedV2V3Trade(params: {
         publicClient
       });
 
-      logger.info(`${channelLabel} V3 交易已发送: ${v3TxHash}`);
+      logger.debug(`${channelLabel} V3 交易已发送: ${v3TxHash}`);
 
       // 等待第一步交易确认
       logger.info(`${channelLabel} 等待 V3 交易确认...`);
@@ -1516,7 +1516,7 @@ async function executeMixedV2V3Trade(params: {
         publicClient
       });
 
-      logger.info(`${channelLabel} V2 交易已发送: ${v2TxHash}`);
+      logger.debug(`${channelLabel} V2 交易已发送: ${v2TxHash}`);
       logger.info(`${channelLabel} ✅ 混合路由交易完成`);
 
       return v2TxHash;
@@ -1880,7 +1880,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           );
 
           if (results.length > 0 && results[0].amountOut > 0n) {
-            logger.info(`${channelLabel} ✅ QuoteToken 路径成功: ${quoteToken.slice(0, 6)}, 输出: ${results[0].amountOut.toString()}`);
+            logger.debug(`${channelLabel} ✅ QuoteToken 路径成功: ${quoteToken.slice(0, 6)}, 输出: ${results[0].amountOut.toString()}`);
             return { path: quoteTokenPath, amountOut: results[0].amountOut };
           }
         } catch (error) {
@@ -1980,7 +1980,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     if (!bestPath) {
       // 回退机制：尝试发现代币的 quote token 并构建 3-hop 路径
-      logger.info(`${channelLabel} 标准路径失败，尝试发现 quote token...`);
+      logger.debug(`${channelLabel} 标准路径失败，尝试发现 quote token...`);
 
       try {
         const quoteToken = await discoverTokenQuoteToken(
@@ -1991,7 +1991,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         );
 
         if (quoteToken) {
-          logger.info(`${channelLabel} ✅ 发现 quote token: ${quoteToken.slice(0, 10)}`);
+          logger.debug(`${channelLabel} ✅ 发现 quote token: ${quoteToken.slice(0, 10)}`);
 
           // 构建 3-hop 路径
           const allBridgeTokens = [
@@ -2013,7 +2013,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           );
 
           if (threeHopPaths[direction].length > 0) {
-            logger.info(`${channelLabel} ✅ 找到 ${threeHopPaths[direction].length} 个 3-hop 路径`);
+            logger.debug(`${channelLabel} ✅ 找到 ${threeHopPaths[direction].length} 个 3-hop 路径`);
 
             // 评估 3-hop 路径
             const threeHopResults = await fetchPathAmounts(
@@ -2029,7 +2029,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
               if (result && result.amountOut > bestAmountOut) {
                 bestAmountOut = result.amountOut;
                 bestPath = result.path;
-                logger.info(`${channelLabel} ✅ 找到有效 3-hop 路径: ${result.path.map(a => a.slice(0, 6)).join(' → ')}, 输出: ${result.amountOut.toString()}`);
+                logger.debug(`${channelLabel} ✅ 找到有效 3-hop 路径: ${result.path.map(a => a.slice(0, 6)).join(' → ')}, 输出: ${result.amountOut.toString()}`);
               }
             }
 
@@ -2328,7 +2328,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     | { kind: 'mixed'; mixedRouteInfo: { description: string; v3Segment?: string; v2Segment?: string; v3First: boolean; bridgeToken: string }; amountOut: bigint }
   > => {
     const startTime = Date.now();
-    logger.info(`${channelLabel} ⏱️ 开始路由查询 (${direction})`);
+    logger.perf(`${channelLabel} ⏱️ 开始路由查询 (${direction})`);
     if (quoteToken) {
       logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
     }
@@ -2346,7 +2346,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           // 直接查询 V2 QuoteToken 路径，跳过 V3
           const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken);
           if (result && result.amountOut > 0n) {
-            logger.info(`${channelLabel} ✅ Flap V2 QuoteToken 路径成功，耗时: ${Date.now() - startTime}ms`);
+            logger.perf(`${channelLabel} ✅ Flap V2 QuoteToken 路径成功，耗时: ${Date.now() - startTime}ms`);
             // 缓存路由，标记为 V2
             updateTokenTradeHint(tokenAddress, channelId, direction, {
               routerAddress: contractAddress,
@@ -2369,10 +2369,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     // 🚀 性能优化：检查是否有正在进行的预加载
     const currentStatus = direction === 'buy' ? hint?.buyRouteStatus : hint?.sellRouteStatus;
     if (currentStatus === 'loading') {
-      logger.info(`${channelLabel} ⏳ 检测到路由预加载中，等待完成...`);
+      logger.debug(`${channelLabel} ⏳ 检测到路由预加载中，等待完成...`);
       const waitSuccess = await waitForRouteLoading(tokenAddress, direction, 10000);  // 等待最多10秒
       if (waitSuccess) {
-        logger.info(`${channelLabel} ✅ 预加载完成，使用预加载的路由`);
+        logger.debug(`${channelLabel} ✅ 预加载完成，使用预加载的路由`);
         // 重新获取 hint，因为预加载可能已更新
         const updatedHint = getTokenTradeHint(tokenAddress);
         if (isRouteCacheValid(updatedHint, direction)) {
@@ -2382,7 +2382,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             try {
               const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
               if (result && result.amountOut > 0n) {
-                logger.info(`${channelLabel} ✅ 使用预加载的 V2 路由，总耗时: ${Date.now() - startTime}ms`);
+                logger.perf(`${channelLabel} ✅ 使用预加载的 V2 路由，总耗时: ${Date.now() - startTime}ms`);
                 return { kind: 'v2', path: result.path, amountOut: result.amountOut };
               }
             } catch (error) {
@@ -2394,7 +2394,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             try {
               const v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, updatedHint);
               if (v3Route && v3Route.amountOut > 0n) {
-                logger.info(`${channelLabel} ✅ 使用预加载的 V3 路由，总耗时: ${Date.now() - startTime}ms`);
+                logger.perf(`${channelLabel} ✅ 使用预加载的 V3 路由，总耗时: ${Date.now() - startTime}ms`);
                 return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
               }
             } catch (error) {
@@ -2410,7 +2410,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     // 🚀 性能优化：检查缓存是否有效（1 小时内）且路由可用
     if (isRouteCacheValid(hint, direction)) {
       const cacheAge = Math.floor((Date.now() - (direction === 'buy' ? hint!.buyRouteLoadedAt! : hint!.sellRouteLoadedAt!)) / 1000);
-      logger.info(`${channelLabel} ⚡ 路由缓存有效（${cacheAge}秒前加载），尝试复用`);
+      logger.debug(`${channelLabel} ⚡ 路由缓存有效（${cacheAge}秒前加载），尝试复用`);
 
       // 🔍 验证缓存的 routerAddress 是否属于 Pancake
       // 防止代币从 Four.meme 迁移到 Pancake 后，缓存仍保留 Four.meme 的合约地址
@@ -2434,7 +2434,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           try {
             const v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
             if (v3Route && v3Route.amountOut > 0n) {
-              logger.info(`${channelLabel} ✅ 使用缓存 V3 路由，耗时: ${Date.now() - startTime}ms`);
+              logger.perf(`${channelLabel} ✅ 使用缓存 V3 路由，耗时: ${Date.now() - startTime}ms`);
               return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
             }
           } catch (error) {
@@ -2449,7 +2449,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             try {
               const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
               if (result && result.amountOut > 0n) {
-                logger.info(`${channelLabel} ✅ 使用缓存 V2 路由，耗时: ${Date.now() - startTime}ms`);
+                logger.perf(`${channelLabel} ✅ 使用缓存 V2 路由，耗时: ${Date.now() - startTime}ms`);
                 return { kind: 'v2', path: result.path, amountOut: result.amountOut };
               }
             } catch (error) {
@@ -2494,10 +2494,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     // 如果 V2 已知失败且 V3 有缓存路径，跳过 V2 查询
     const skipV2 = v2KnownFailed && (hint?.lastMode === 'v3' || routerMatchesV3);
     if (skipV2) {
-      logger.info(`${channelLabel} ⚡ V2 已知失败，跳过 V2 查询，直接使用 V3`);
+      logger.debug(`${channelLabel} ⚡ V2 已知失败，跳过 V2 查询，直接使用 V3`);
     }
 
-    logger.info(`${channelLabel} 🔍 ${skipV2 ? '仅查询 V3' : '并行查询 V2 和 V3'} 路由，选择最优...`);
+    logger.debug(`${channelLabel} 🔍 ${skipV2 ? '仅查询 V3' : '并行查询 V2 和 V3'} 路由，选择最优...`);
     const queryStartTime = Date.now();
 
     // 🚀 性能优化：并行执行 V2 和 V3 查询（如果 V2 已知失败则跳过）
@@ -2538,14 +2538,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     ]);
 
     const queryEndTime = Date.now();
-    logger.info(`${channelLabel} ⏱️ 并行查询完成，总耗时: ${queryEndTime - queryStartTime}ms`);
+    logger.debug(`${channelLabel} ⏱️ 并行查询完成，总耗时: ${queryEndTime - queryStartTime}ms`);
 
     // 处理 V2 结果
     let v2Data: { path: string[]; amountOut: bigint } | null = null;
     let v2Error: any = null;
     if (v2Result.status === 'fulfilled' && v2Result.value?.path && v2Result.value.amountOut > 0n) {
       v2Data = v2Result.value;
-      logger.info(`${channelLabel} V2 路径成功，输出: ${v2Data.amountOut.toString()}`);
+      logger.debug(`${channelLabel} V2 路径成功，输出: ${v2Data.amountOut.toString()}`);
     } else if (v2Result.status === 'rejected') {
       v2Error = v2Result.reason;
       logger.debug(`${channelLabel} V2 路径失败: ${v2Error?.message || v2Error}`);
@@ -2556,7 +2556,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     let v3Error: any = null;
     if (v3Result.status === 'fulfilled' && v3Result.value) {
       v3Data = v3Result.value;
-      logger.info(`${channelLabel} V3 路径成功，输出: ${v3Data.amountOut.toString()}`);
+      logger.debug(`${channelLabel} V3 路径成功，输出: ${v3Data.amountOut.toString()}`);
     } else if (v3Result.status === 'rejected') {
       v3Error = v3Result.reason;
       logger.debug(`${channelLabel} V3 路径失败: ${v3Error?.message || v3Error}`);
@@ -2572,12 +2572,12 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       if (v2Data.amountOut > v3Data.amountOut) {
         const improvement = ((v2Data.amountOut - v3Data.amountOut) * 10000n / v3Data.amountOut);
         logger.info(`${channelLabel} ✅ V2 输出更优 (比 V3 多 ${improvement.toString()}bps)，选择 V2`);
-        logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
+        logger.perf(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
         return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
       } else {
         const improvement = ((v3Data.amountOut - v2Data.amountOut) * 10000n / v2Data.amountOut);
         logger.info(`${channelLabel} ✅ V3 输出更优 (比 V2 多 ${improvement.toString()}bps)，选择 V3`);
-        logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
+        logger.perf(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
         return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
       }
     } else if (v2Data) {
@@ -2586,7 +2586,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       // 更新路由加载时间
       updateRouteLoadingStatus(tokenAddress, direction, 'success');
       logger.info(`${channelLabel} ✅ 只有 V2 路径可用`);
-      logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
+      logger.perf(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
     } else if (v3Data) {
       // V3 成功，V2 失败
@@ -2594,7 +2594,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       // 更新路由加载时间
       updateRouteLoadingStatus(tokenAddress, direction, 'success');
       logger.info(`${channelLabel} ✅ 只有 V3 路径可用`);
-      logger.info(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
+      logger.perf(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
     }
 
@@ -2632,7 +2632,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
   return {
     async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor, quoteToken, routeInfo }) {
       const buyStartTime = Date.now();
-      logger.info(`${channelLabel} ⏱️ 开始买入交易`);
+      logger.perf(`${channelLabel} ⏱️ 开始买入交易`);
       logger.debug(`${channelLabel} 买入:`, { tokenAddress, amount, slippage, quoteToken: quoteToken?.slice(0, 10) });
 
       const amountIn = parseEther(amount);
@@ -2640,7 +2640,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       // 步骤1: 查询最佳路由
       const routeStartTime = Date.now();
       const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn, quoteToken, routeInfo);
-      logger.info(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
+      logger.perf(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
 
       const slippageBp = Math.floor(slippage * 100);
       const deadline = Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS;
@@ -2652,7 +2652,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
         // 步骤2: 准备并发送 V2 交易
         const txStartTime = Date.now();
-        logger.info(`${channelLabel} ⏱️ 开始发送 V2 交易...`);
+        logger.perf(`${channelLabel} ⏱️ 开始发送 V2 交易...`);
 
         const sendSwap = (nonce?: number) =>
           sendContractTransaction({
@@ -2679,8 +2679,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           ? await nonceExecutor('buy', (nonce) => sendSwap(nonce))
           : await sendSwap();
 
-        logger.info(`${channelLabel} ⏱️ V2 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
-        logger.info(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
+        logger.perf(`${channelLabel} ⏱️ V2 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
+        logger.perf(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
         logger.debug(`${channelLabel} 交易发送:`, hash);
         return hash;
       }
@@ -2742,7 +2742,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       // 步骤2: 准备并发送 V3 交易
       const txStartTime = Date.now();
-      logger.info(`${channelLabel} ⏱️ 开始发送 V3 交易...`);
+      logger.perf(`${channelLabel} ⏱️ 开始发送 V3 交易...`);
 
       const sendV3Swap = (nonce?: number) => {
         if (isSingleHop) {
@@ -2808,8 +2808,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         ? await nonceExecutor('buy', (nonce) => sendV3Swap(nonce))
         : await sendV3Swap();
 
-      logger.info(`${channelLabel} ⏱️ V3 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
-      logger.info(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
+      logger.perf(`${channelLabel} ⏱️ V3 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
+      logger.perf(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
       logger.debug(`${channelLabel} 交易发送(V3):`, hash);
       return hash;
       } else {
