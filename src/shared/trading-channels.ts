@@ -1609,6 +1609,7 @@ type BuyActionParams = {
   gasPrice?: number | bigint;
   nonceExecutor: NonceExecutor;
   quoteToken?: string;
+  routeInfo?: any;  // 添加 routeInfo 参数
 };
 
 type SellActionParams = {
@@ -1622,6 +1623,7 @@ type SellActionParams = {
   gasPrice?: number | bigint;
   tokenInfo?: any;
   nonceExecutor: NonceExecutor;
+  routeInfo?: any;  // 添加 routeInfo 参数
 };
 
 type SellQuoteParams = {
@@ -2318,7 +2320,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     publicClient,
     tokenAddress: string,
     amountIn: bigint,
-    quoteToken?: string
+    quoteToken?: string,
+    routeInfo?: any
   ): Promise<
     | { kind: 'v2'; path: string[]; amountOut: bigint }
     | { kind: 'v3'; route: V3RoutePlan; amountOut: bigint }
@@ -2328,6 +2331,36 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     logger.info(`${channelLabel} ⏱️ 开始路由查询 (${direction})`);
     if (quoteToken) {
       logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
+    }
+
+    // 🚀 Flap 优化：已迁移的非 BNB 筹集币种，池子都在 Pancake V2 上
+    if (quoteToken && routeInfo?.platform === 'flap' && routeInfo?.readyForPancake) {
+      const normalizedQuote = quoteToken.toLowerCase();
+      const normalizedWrapper = nativeWrapper.toLowerCase();
+
+      // 如果 quoteToken 不是 WBNB，说明是非 BNB 筹集币种
+      if (normalizedQuote !== normalizedWrapper) {
+        logger.info(`${channelLabel} 🚀 Flap 已迁移非 BNB 筹集币种，直接使用 V2 QuoteToken 路径`);
+
+        try {
+          // 直接查询 V2 QuoteToken 路径，跳过 V3
+          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken);
+          if (result && result.amountOut > 0n) {
+            logger.info(`${channelLabel} ✅ Flap V2 QuoteToken 路径成功，耗时: ${Date.now() - startTime}ms`);
+            // 缓存路由，标记为 V2
+            updateTokenTradeHint(tokenAddress, channelId, direction, {
+              routerAddress: contractAddress,
+              path: result.path,
+              mode: 'v2'
+            });
+            updateRouteLoadingStatus(tokenAddress, direction, 'success');
+            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+          }
+        } catch (error) {
+          logger.warn(`${channelLabel} Flap V2 QuoteToken 路径失败，fallback 到正常流程: ${error?.message || error}`);
+          // 失败后继续正常流程
+        }
+      }
     }
 
     let lastError: any = null;
@@ -2597,7 +2630,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
   };
 
   return {
-    async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor, quoteToken }) {
+    async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor, quoteToken, routeInfo }) {
       const buyStartTime = Date.now();
       logger.info(`${channelLabel} ⏱️ 开始买入交易`);
       logger.debug(`${channelLabel} 买入:`, { tokenAddress, amount, slippage, quoteToken: quoteToken?.slice(0, 10) });
@@ -2606,7 +2639,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       // 步骤1: 查询最佳路由
       const routeStartTime = Date.now();
-      const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn, quoteToken);
+      const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn, quoteToken, routeInfo);
       logger.info(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
 
       const slippageBp = Math.floor(slippage * 100);
@@ -2784,7 +2817,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       }
     },
 
-    async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor }) {
+    async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor, routeInfo }) {
       logger.debug(`${channelLabel} 卖出:`, { tokenAddress, percent, slippage });
 
       // 从 tokenInfo 获取 quoteToken
@@ -2917,7 +2950,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
         // 然后并发查询路由和授权（使用实际金额）
         [routePlan, v2AllowanceValue, v3AllowanceValue] = await Promise.all([
-          findBestRoute('sell', publicClient, tokenAddress, amountToSell, quoteToken),
+          findBestRoute('sell', publicClient, tokenAddress, amountToSell, quoteToken, routeInfo),
           v2AllowancePromise,
           v3AllowancePromise
         ]);
@@ -2927,7 +2960,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         // 并发查询（使用预估金额）
         [initialState, routePlan, v2AllowanceValue, v3AllowanceValue] = await Promise.all([
           preparePromise,
-          findBestRoute('sell', publicClient, tokenAddress, estimatedAmount, quoteToken),
+          findBestRoute('sell', publicClient, tokenAddress, estimatedAmount, quoteToken, routeInfo),
           v2AllowancePromise,
           v3AllowancePromise
         ]);
@@ -2953,7 +2986,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
         if (diffPercent > reQueryThreshold) {
           logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%（阈值: ${reQueryThreshold}%），重新查询路由`);
-          finalRoutePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell, quoteToken);
+          finalRoutePlan = await findBestRoute('sell', publicClient, tokenAddress, amountToSell, quoteToken, routeInfo);
         } else if (diffPercent > 1) {
           logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估路由`);
         }

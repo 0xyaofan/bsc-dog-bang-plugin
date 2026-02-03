@@ -2956,7 +2956,8 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
           slippage: resolvedSlippage,
           gasPrice: normalizedGasPrice,
           nonceExecutor,
-          quoteToken: routeInfo?.quoteToken
+          quoteToken: routeInfo?.quoteToken,
+          routeInfo: routeInfo
         });
       }
       timer.step(`执行区块链买入交易 (${perf.measure(stepStart).toFixed(2)}ms)`);
@@ -3178,7 +3179,8 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
             percent: resolvedPercent,
             slippage: resolvedSlippage,
             gasPrice: normalizedGasPrice,
-            nonceExecutor
+            nonceExecutor,
+            routeInfo: routeInfo
           }),
           quoteBalancePromise || Promise.resolve(0n)
         ]);
