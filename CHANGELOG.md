@@ -21,14 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **业务日志**：保留关键业务信息为 `logger.info()`，如路由选择结果、混合路由执行等
   - **效果**：普通用户看关键信息，调试时看详细信息，性能分析时看耗时数据
 
-## [Unreleased]
-
-### Planned
-- Luna.fun trading support
-- Multi-wallet management
-- Trading bot features
-- Chrome Web Store publication
-
 ### Added
 - **✨ TaxToken 支持** - 支持 Four.meme 税收代币（2026年1月30日发布）
   - **识别**：自动识别地址以 `ffff` 结尾的 TaxToken
@@ -347,6 +339,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 避免触发昂贵的 3-hop 路径回退机制
   - 使用 USD1 作为筹集币种的代币首次交易速度提升 80-90%
   - 从 10-20 秒降至 1-2 秒
+
+
+## [Unreleased]
+
+### Planned
+- Luna.fun trading support
+- Multi-wallet management
+- Trading bot features
+- Chrome Web Store publication
+
 
 ## [1.1.6] - 2025-01-27
 
