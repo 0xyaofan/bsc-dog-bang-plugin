@@ -2586,6 +2586,13 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       e.stopPropagation();
       e.preventDefault();
 
+      // 检查钱包状态
+      if (!walletButtonsEnabled) {
+        logger.debug('[Floating Window] 钱包未解锁或未设置，无法交易');
+        showStatus('请先解锁钱包', 'warning');
+        return;
+      }
+
       // 检查按钮是否已禁用，防止重复点击
       if (btn.disabled) {
         logger.debug('[Floating Window] 按钮已禁用，忽略重复点击');
