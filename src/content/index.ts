@@ -2901,9 +2901,16 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         if (tokenBalanceEl && tokenBalance !== undefined) {
           tokenBalanceEl.textContent = tokenBalance;
         }
+
+        // 更新钱包按钮状态，确保浮动窗口的交易按钮可用
+        setTradeButtonsEnabled(true);
+      } else {
+        // 钱包未解锁或未设置，禁用交易按钮
+        setTradeButtonsEnabled(false);
       }
     } catch (error) {
       logger.debug('[Floating Window] 更新余额失败:', error);
+      setTradeButtonsEnabled(false);
     }
   };
 
