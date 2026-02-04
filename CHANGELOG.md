@@ -5,6 +5,15 @@ All notable changes to BSC Dog Bang Plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### Planned
+- Luna.fun trading support
+- Multi-wallet management
+- Trading bot features
+- Chrome Web Store publication
+
+## [Unreleased]
+
+
 ## [1.1.7] - 2026-02-04
 
 ### Fixed
@@ -35,16 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **日志系统优化** - 使用 logger.perf/debug/info 分级管理，提升可读性
-
-
-## [Unreleased]
-
-### Planned
-- Luna.fun trading support
-- Multi-wallet management
-- Trading bot features
-- Chrome Web Store publication
-
 
 ## [1.1.6] - 2025-01-27
 
