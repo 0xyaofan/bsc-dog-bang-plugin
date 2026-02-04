@@ -2526,7 +2526,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     updatePosition(e.clientX, e.clientY);
   };
 
-  const handlePointerUp = () => {
+  const cleanupDragging = () => {
     if (floatingWindowDragging) {
       floatingWindowDragging = false;
       floatingWindow.classList.remove('dragging');
@@ -2544,18 +2544,22 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
       };
       saveFloatingWindowState(state);
 
-      // 恢复透明度到正常状态，避免拖拽后保持半透明
-      floatingWindow.style.opacity = '';
-
       // 移除事件监听器，避免内存泄漏
       document.removeEventListener('pointermove', handlePointerMove);
-      document.removeEventListener('pointerup', handlePointerUp);
+      document.removeEventListener('pointerup', cleanupDragging);
+      document.removeEventListener('pointercancel', cleanupDragging);
+      window.removeEventListener('blur', cleanupDragging);
     }
   };
+
+  const handlePointerUp = cleanupDragging;
 
   // 添加事件监听器
   document.addEventListener('pointermove', handlePointerMove);
   document.addEventListener('pointerup', handlePointerUp);
+  // 添加额外的清理事件，确保在各种中断情况下都能恢复状态
+  document.addEventListener('pointercancel', cleanupDragging);
+  window.addEventListener('blur', cleanupDragging);
 
   // 折叠/展开功能
   const toggleBtn = floatingWindow.querySelector('.floating-toggle-btn');
@@ -2976,6 +2980,11 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           window.removeEventListener('resize', ensureWindowInViewport);
           clearInterval(balanceInterval);
           stopFloatingFastPolling();
+          // 清理拖动相关的事件监听器
+          document.removeEventListener('pointermove', handlePointerMove);
+          document.removeEventListener('pointerup', cleanupDragging);
+          document.removeEventListener('pointercancel', cleanupDragging);
+          window.removeEventListener('blur', cleanupDragging);
           observer.disconnect();
         }
       });
