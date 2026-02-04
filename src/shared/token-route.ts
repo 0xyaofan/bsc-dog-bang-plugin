@@ -1,4 +1,5 @@
 import type { Address } from 'viem';
+import { calculateRatio as calculateRatioSDK } from './pancake-sdk-utils.js';
 import { CONTRACTS, PANCAKE_FACTORY_ABI } from './trading-config.js';
 import { getFourQuoteTokenList } from './channel-config.js';
 import { logger } from './logger.js';
@@ -336,13 +337,13 @@ async function checkPancakePair(
   return { hasLiquidity: false };
 }
 
-function calculateRatio(current: bigint, target: bigint) {
+function calculateRatio(current: bigint, target: bigint): number {
   if (target === 0n) {
     return 0;
   }
-  const scale = 10000n;
-  const ratio = (current * scale) / target;
-  return Number(ratio) / Number(scale);
+  // 使用 PancakeSwap SDK 的 Fraction 进行精确计算，避免浮点数误差
+  const fraction = calculateRatioSDK(current, target);
+  return parseFloat(fraction.toSignificant(6));
 }
 
 async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform: TokenPlatform): Promise<RouteFetchResult> {

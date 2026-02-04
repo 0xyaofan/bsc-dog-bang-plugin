@@ -15,6 +15,7 @@ import { getFourHelperTokenList } from './channel-config.js';
 import { parseEther, parseUnits, formatEther, encodeFunctionData, withCache } from 'viem';
 import { dedupePromise } from './promise-dedupe.js';
 import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
+import { calculatePriceImpact, calculateMinAmountOut } from './pancake-sdk-utils.js';
 
 // ========== 路径缓存（优化4：减少 getAmountsOut 调用）==========
 // 注意：此缓存存储的是兑换金额（价格敏感数据），必须保持短期缓存以反映市场价格变化
@@ -1397,7 +1398,7 @@ async function executeMixedV2V3Trade(params: {
       });
 
       const bridgeAmountOut = extractFirstBigInt(quoteResult);
-      const bridgeAmountOutMin = bridgeAmountOut * BigInt(10000 - slippage * 100) / 10000n;
+      const bridgeAmountOutMin = calculateMinAmountOut(bridgeAmountOut, slippage);
 
       logger.debug(`${channelLabel} V3 预期输出: ${bridgeAmountOut.toString()}, 最小: ${bridgeAmountOutMin.toString()}`);
 
@@ -2642,13 +2643,12 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn, quoteToken, routeInfo);
       logger.perf(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
 
-      const slippageBp = Math.floor(slippage * 100);
       const deadline = Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS;
 
       if (routePlan.kind === 'v2') {
         const { path, amountOut } = routePlan;
         updateTokenTradeHint(tokenAddress, channelId, 'buy', { routerAddress: contractAddress, path, mode: 'v2' });
-        const amountOutMin = amountOut * BigInt(10000 - slippageBp) / 10000n;
+        const amountOutMin = calculateMinAmountOut(amountOut, slippage);
 
         // 步骤2: 准备并发送 V2 交易
         const txStartTime = Date.now();
@@ -2737,7 +2737,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         const v3Route = routePlan.route;
       const pathHint = v3Route.tokens;
       updateTokenTradeHint(tokenAddress, channelId, 'buy', { routerAddress: smartRouterAddress, path: pathHint, fees: v3Route.fees, mode: 'v3' });
-      const amountOutMin = routePlan.amountOut * BigInt(10000 - slippageBp) / 10000n;
+      const amountOutMin = calculateMinAmountOut(routePlan.amountOut, slippage);
       const isSingleHop = v3Route.tokens.length === 2;
 
       // 步骤2: 准备并发送 V3 交易
@@ -2978,9 +2978,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         const amountDiff = amountToSell > estimatedAmount
           ? amountToSell - estimatedAmount
           : estimatedAmount - amountToSell;
-        const diffPercent = estimatedAmount > 0n
-          ? Number(amountDiff * 10000n / estimatedAmount) / 100
-          : 100;
+
+        // 使用 PancakeSwap SDK 计算价格影响百分比
+        const priceImpact = calculatePriceImpact(estimatedAmount, amountToSell);
+        const diffPercent = parseFloat(priceImpact.toSignificant(4));
 
         // 根据预估精度选择阈值
         const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
@@ -3016,8 +3017,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         nonceExecutor
       });
 
-      const slippageBp = Math.floor(slippage * 100);
-      const amountOutMinBase = finalRoutePlan.amountOut * BigInt(10000 - slippageBp) / 10000n;
+      const amountOutMinBase = calculateMinAmountOut(finalRoutePlan.amountOut, slippage);
       if (finalRoutePlan.kind === 'v2') {
         const { path } = finalRoutePlan;
         const amountOutMin = amountOutMinBase;
@@ -3334,8 +3334,7 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
         throw new Error(`${channelLabel} 获取报价失败: ${error.message}`);
       }
 
-      const slippageBp = Math.floor(slippage * 100);
-      const minTokens = estimatedTokens * BigInt(10000 - slippageBp) / 10000n;
+      const minTokens = calculateMinAmountOut(estimatedTokens, slippage);
 
       const sendBuy = (nonce?: number) =>
         sendContractTransaction({
@@ -3450,8 +3449,7 @@ function createQuotePortalChannel(definition: QuotePortalChannelDefinition): Tra
         logger.debug(`${channelLabel} 预计获得原生币(缓存):`, formatEther(estimatedNative));
       }
 
-      const slippageBp = Math.floor(slippage * 100);
-      const minOutput = estimatedNative * BigInt(10000 - slippageBp) / 10000n;
+      const minOutput = calculateMinAmountOut(estimatedNative, slippage);
 
       updateTokenTradeHint(tokenAddress, definition.id, 'sell', { routerAddress: definition.contractAddress });
 
