@@ -2480,19 +2480,6 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   let currentX = state.position.x;
   let currentY = state.position.y;
 
-  dragHandle?.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    floatingWindowDragging = true;
-
-    // 计算初始偏移
-    floatingWindowDragOffset.x = (e as PointerEvent).clientX - currentX;
-    floatingWindowDragOffset.y = (e as PointerEvent).clientY - currentY;
-
-    // 添加拖拽样式
-    floatingWindow.classList.add('dragging');
-    dragHandle.setPointerCapture((e as PointerEvent).pointerId);
-  });
-
   const updatePosition = (clientX: number, clientY: number) => {
     if (!floatingWindowDragging) return;
 
@@ -2552,14 +2539,24 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     }
   };
 
-  const handlePointerUp = cleanupDragging;
+  dragHandle?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    floatingWindowDragging = true;
 
-  // 添加事件监听器
-  document.addEventListener('pointermove', handlePointerMove);
-  document.addEventListener('pointerup', handlePointerUp);
-  // 添加额外的清理事件，确保在各种中断情况下都能恢复状态
-  document.addEventListener('pointercancel', cleanupDragging);
-  window.addEventListener('blur', cleanupDragging);
+    // 计算初始偏移
+    floatingWindowDragOffset.x = (e as PointerEvent).clientX - currentX;
+    floatingWindowDragOffset.y = (e as PointerEvent).clientY - currentY;
+
+    // 添加拖拽样式
+    floatingWindow.classList.add('dragging');
+    dragHandle.setPointerCapture((e as PointerEvent).pointerId);
+
+    // 在开始拖动时添加事件监听器
+    document.addEventListener('pointermove', handlePointerMove);
+    document.addEventListener('pointerup', cleanupDragging);
+    document.addEventListener('pointercancel', cleanupDragging);
+    window.addEventListener('blur', cleanupDragging);
+  });
 
   // 折叠/展开功能
   const toggleBtn = floatingWindow.querySelector('.floating-toggle-btn');
@@ -2980,11 +2977,8 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           window.removeEventListener('resize', ensureWindowInViewport);
           clearInterval(balanceInterval);
           stopFloatingFastPolling();
-          // 清理拖动相关的事件监听器
-          document.removeEventListener('pointermove', handlePointerMove);
-          document.removeEventListener('pointerup', cleanupDragging);
-          document.removeEventListener('pointercancel', cleanupDragging);
-          window.removeEventListener('blur', cleanupDragging);
+          // 确保清理拖动状态和事件监听器
+          cleanupDragging();
           observer.disconnect();
         }
       });
