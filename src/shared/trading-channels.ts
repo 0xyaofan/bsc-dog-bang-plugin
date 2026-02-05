@@ -277,6 +277,25 @@ export function getTokenTradeHint(tokenAddress: string) {
   return key ? tokenTradeHints.get(key) ?? null : null;
 }
 
+export function setTokenTradeHint(tokenAddress: string, hint: Partial<TokenTradeHint>) {
+  const key = normalizeTokenKey(tokenAddress);
+  if (!key) {
+    return;
+  }
+  const existing = tokenTradeHints.get(key);
+  const next: TokenTradeHint = {
+    ...existing,
+    ...hint,
+    updatedAt: Date.now()
+  };
+  tokenTradeHints.set(key, next);
+
+  // 异步保存到持久化存储（不阻塞主流程）
+  saveTokenTradeHintsToStorage().catch((error) => {
+    logger.debug('[Cache] 保存缓存失败:', error);
+  });
+}
+
 export function setPancakePreferredMode(tokenAddress: string, mode: 'v2' | 'v3' | null) {
   const key = normalizeTokenKey(tokenAddress);
   if (!key) {

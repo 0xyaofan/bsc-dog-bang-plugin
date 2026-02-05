@@ -49,7 +49,7 @@ import {
   withCache
 } from '../shared/viem-helper.js';
 import { encodeAbiParameters, parseEther, type Address } from 'viem';
-import { getChannel, setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, getCachedAllowance } from '../shared/trading-channels.js';
+import { getChannel, setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, getCachedAllowance, setTokenTradeHint } from '../shared/trading-channels.js';
 import { TxWatcher } from '../shared/tx-watcher.js';
 import { dedupePromise } from '../shared/promise-dedupe.js';
 import {
@@ -2513,6 +2513,64 @@ async function handlePrefetchRoute({ tokenAddress }: { tokenAddress?: string } =
     }
 
     const channelId = route.preferredChannel || 'pancake';
+
+    // 🚀 优化：Four.meme/Flap 已迁移代币直接缓存路径，跳过路由查询
+    if (route.readyForPancake && (route.platform === 'four' || route.platform === 'flap')) {
+      const pancakePairAddress = (route.metadata as any)?.pancakePairAddress;
+      if (pancakePairAddress && pancakePairAddress !== '0x0000000000000000000000000000000000000000') {
+        const platformName = route.platform === 'four' ? 'Four.meme' : 'Flap';
+        logger.debug(`[Prefetch] ${platformName} 已迁移代币，直接缓存已知路径，跳过路由查询`);
+
+        // 构建并缓存路径
+        const pairQuoteToken = (route.metadata as any)?.pancakeQuoteToken || route.quoteToken;
+        const normalizedQuote = (pairQuoteToken && pairQuoteToken !== '0x0000000000000000000000000000000000000000')
+          ? pairQuoteToken
+          : CONTRACTS.WBNB;
+
+        const wbnb = CONTRACTS.WBNB.toLowerCase();
+        const quoteTokenLower = normalizedQuote.toLowerCase();
+
+        // 构建买入和卖出路径
+        let buyPath: string[];
+        let sellPath: string[];
+
+        if (quoteTokenLower === wbnb) {
+          // BNB 筹集：直接路径
+          buyPath = [CONTRACTS.WBNB, tokenAddress];
+          sellPath = [tokenAddress, CONTRACTS.WBNB];
+        } else {
+          // 非 BNB 筹集：三跳路径
+          buyPath = [CONTRACTS.WBNB, normalizedQuote, tokenAddress];
+          sellPath = [tokenAddress, normalizedQuote, CONTRACTS.WBNB];
+        }
+
+        // 直接缓存路径到 tokenTradeHints
+        setTokenTradeHint(tokenAddress, {
+          channelId: 'pancake',
+          lastBuyPath: buyPath,
+          lastSellPath: sellPath,
+          lastMode: 'v2',
+          routerAddress: CONTRACTS.PANCAKE_ROUTER,
+          buyRouteStatus: 'success',
+          sellRouteStatus: 'success',
+          buyRouteLoadedAt: Date.now(),
+          sellRouteLoadedAt: Date.now(),
+          updatedAt: Date.now()
+        });
+
+        logger.debug(`[Prefetch] ${platformName} 路径已缓存: buy=${buyPath.length}跳, sell=${sellPath.length}跳`);
+        return { success: true, cached: true };
+      }
+    }
+
+    // 🚀 优化：Four.meme/Flap 未迁移代币不需要查询 PancakeSwap
+    if (!route.readyForPancake && (route.platform === 'four' || route.platform === 'flap')) {
+      const platformName = route.platform === 'four' ? 'Four.meme' : 'Flap';
+      logger.debug(`[Prefetch] ${platformName} 未迁移代币，使用平台合约交易，跳过 PancakeSwap 路由查询`);
+      return { success: true, cached: false };
+    }
+
+    // 其他情况：执行路由查询（Unknown 代币或需要查询的情况）
     let channelHandler: any;
     try {
       channelHandler = getChannel(channelId);
