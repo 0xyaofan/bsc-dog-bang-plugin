@@ -49,6 +49,93 @@ const DYNAMIC_GAS_CACHE_TTL = 5 * 60 * 1000;
 const V3_FEE_TIERS = [100, 250, 500, 2500, 10000];
 const v3PoolCache = new Map<string, { fee: number; pool: string } | null>();
 
+// ========== 授权状态跟踪（修复问题2）==========
+type ApprovalStatus = {
+  allowance: bigint;
+  status: 'pending' | 'success' | 'failed';
+  txHash?: string;
+  updatedAt: number;
+};
+
+const approvalStatusCache = new Map<string, ApprovalStatus>();
+const APPROVAL_STATUS_TTL = 60 * 1000; // 1分钟后过期
+
+function getApprovalStatusKey(tokenAddress: string, spenderAddress: string): string {
+  return `${tokenAddress.toLowerCase()}_${spenderAddress.toLowerCase()}`;
+}
+
+export function setApprovalStatus(tokenAddress: string, spenderAddress: string, status: ApprovalStatus) {
+  const key = getApprovalStatusKey(tokenAddress, spenderAddress);
+  approvalStatusCache.set(key, status);
+  logger.debug(`[Approval Status] 设置授权状态: ${key} -> ${status.status}`);
+}
+
+export function getApprovalStatus(tokenAddress: string, spenderAddress: string): ApprovalStatus | null {
+  const key = getApprovalStatusKey(tokenAddress, spenderAddress);
+  const status = approvalStatusCache.get(key);
+
+  if (!status) {
+    return null;
+  }
+
+  // 检查是否过期
+  if (Date.now() - status.updatedAt > APPROVAL_STATUS_TTL) {
+    approvalStatusCache.delete(key);
+    return null;
+  }
+
+  return status;
+}
+
+export function clearApprovalStatus(tokenAddress: string, spenderAddress: string) {
+  const key = getApprovalStatusKey(tokenAddress, spenderAddress);
+  approvalStatusCache.delete(key);
+  logger.debug(`[Approval Status] 清除授权状态: ${key}`);
+}
+
+/**
+ * 等待授权完成
+ * @param tokenAddress 代币地址
+ * @param spenderAddress 授权地址
+ * @param txHash 授权交易哈希（可选）
+ * @param maxWaitMs 最大等待时间（毫秒）
+ * @returns 是否成功
+ */
+export async function waitForApprovalComplete(
+  tokenAddress: string,
+  spenderAddress: string,
+  txHash?: string,
+  maxWaitMs: number = 30000
+): Promise<boolean> {
+  const startTime = Date.now();
+  const checkInterval = 500;
+
+  logger.debug(`[Approval Status] 等待授权完成: ${tokenAddress.slice(0, 10)}... -> ${spenderAddress.slice(0, 10)}...`);
+
+  while (Date.now() - startTime < maxWaitMs) {
+    const status = getApprovalStatus(tokenAddress, spenderAddress);
+
+    if (status?.status === 'success') {
+      logger.debug(`[Approval Status] 授权已完成`);
+      return true;
+    }
+    if (status?.status === 'failed') {
+      logger.debug(`[Approval Status] 授权失败`);
+      return false;
+    }
+    if (!status) {
+      // 状态已清除或过期，认为授权未进行
+      logger.debug(`[Approval Status] 授权状态不存在，停止等待`);
+      return false;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, checkInterval));
+  }
+
+  logger.debug(`[Approval Status] 等待超时`);
+  return false;
+}
+
 // ========== 授权缓存（性能优化：避免重复查询链上授权状态）==========
 type AllowanceCacheEntry = {
   amount: bigint;
@@ -73,7 +160,25 @@ function getCachedAllowance(tokenAddress: string, spenderAddress: string): bigin
 function setCachedAllowance(tokenAddress: string, spenderAddress: string, amount: bigint) {
   const cacheKey = `${tokenAddress.toLowerCase()}:${spenderAddress.toLowerCase()}`;
   allowanceCache.set(cacheKey, { amount, updatedAt: Date.now() });
-  logger.debug('[AllowanceCache] 缓存授权状态:', { tokenAddress: tokenAddress.slice(0, 10), spender: spenderAddress.slice(0, 10), amount: amount.toString() });
+
+  // 🐛 修复问题4：改进日志，显示授权对象（V2/V3）
+  const spenderLower = spenderAddress.toLowerCase();
+  let spenderType = 'Unknown';
+  if (spenderLower === CONTRACTS.PANCAKE_ROUTER.toLowerCase()) {
+    spenderType = 'V2 Router';
+  } else if (spenderLower === CONTRACTS.PANCAKE_SMART_ROUTER.toLowerCase()) {
+    spenderType = 'V3 Router';
+  } else if (spenderLower === CONTRACTS.FOUR_TOKEN_MANAGER_V2.toLowerCase()) {
+    spenderType = 'Four.meme';
+  } else if (spenderLower === CONTRACTS.FLAP_PORTAL.toLowerCase()) {
+    spenderType = 'Flap';
+  }
+
+  logger.debug(`[AllowanceCache] 缓存授权状态 (${spenderType}):`, {
+    tokenAddress: tokenAddress.slice(0, 10),
+    spender: spenderAddress.slice(0, 10),
+    amount: amount.toString()
+  });
 }
 
 function clearAllowanceCache(tokenAddress: string, spenderAddress: string) {
@@ -501,16 +606,41 @@ export async function prepareTokenSell({ publicClient, tokenAddress, accountAddr
   let balance, allowance, totalSupply;
   let decimals: number | undefined;
 
-  if (tokenInfo && tokenInfo.balance && tokenInfo.allowance !== undefined) {
-    // 使用前端缓存的信息（性能优化）
+  // 🐛 修复：tokenInfo 的授权信息在 allowances 对象中（复数），不是 allowance（单数）
+  // 需要根据 spenderAddress 判断使用哪个通道的授权
+  let hasValidCache = false;
+  if (tokenInfo && tokenInfo.balance && tokenInfo.allowances) {
     balance = BigInt(tokenInfo.balance);
-    allowance = BigInt(tokenInfo.allowance);
     totalSupply = BigInt(tokenInfo.totalSupply);
+
+    // 根据 spenderAddress 获取对应通道的授权
+    // PancakeSwap Router 使用 'pancake'
+    // Four.meme 使用 'four'
+    // Flap 使用 'flap'
+    const spenderLower = spenderAddress.toLowerCase();
+    let channelKey: string | null = null;
+
+    if (spenderLower === CONTRACTS.PANCAKE_ROUTER.toLowerCase() ||
+        spenderLower === CONTRACTS.PANCAKE_SMART_ROUTER.toLowerCase()) {
+      channelKey = 'pancake';
+    } else if (spenderLower === CONTRACTS.FOUR_TOKEN_MANAGER_V2.toLowerCase()) {
+      channelKey = 'four';
+    } else if (spenderLower === CONTRACTS.FLAP_PORTAL.toLowerCase()) {
+      channelKey = 'flap';
+    }
+
+    if (channelKey && tokenInfo.allowances[channelKey] !== undefined) {
+      allowance = BigInt(tokenInfo.allowances[channelKey]);
+      hasValidCache = true;
+      logger.debug(`[prepareTokenSell] 使用缓存的代币信息 (${channelKey})`);
+    }
+
     if (requireGweiPrecision && tokenInfo.decimals !== undefined) {
       decimals = Number(tokenInfo.decimals);
     }
-    logger.debug('[prepareTokenSell] 使用缓存的代币信息');
-  } else {
+  }
+
+  if (!hasValidCache) {
     // 降级到重新查询
     logger.debug('[prepareTokenSell] 缓存不可用，重新查询代币信息');
     const state = await fetchTokenState(
@@ -583,6 +713,14 @@ async function ensureTokenApproval({
 }): Promise<string | null> {
   if (currentAllowance < amount) {
     logger.debug(`[ensureTokenApproval] 授权代币给 ${spenderAddress.slice(0, 6)}...`);
+
+    // 标记为"授权中"
+    setApprovalStatus(tokenAddress, spenderAddress, {
+      allowance: totalSupply,
+      status: 'pending',
+      updatedAt: Date.now()
+    });
+
     const sendApprove = (nonce?: number) =>
       sendContractTransaction({
         walletClient,
@@ -596,18 +734,36 @@ async function ensureTokenApproval({
         fallbackGasLimit: BigInt(TX_CONFIG.GAS_LIMIT.APPROVE),
         nonce
       });
-    const approveHash = nonceExecutor
-      ? await nonceExecutor('approve', (nonce) => sendApprove(nonce))
-      : await sendApprove();
 
-    // 🚀 性能优化：不等待授权确认，立即返回
-    // await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    logger.debug('[ensureTokenApproval] 授权交易已发送（不等待确认）:', approveHash);
+    try {
+      const approveHash = nonceExecutor
+        ? await nonceExecutor('approve', (nonce) => sendApprove(nonce))
+        : await sendApprove();
 
-    // 授权成功后更新缓存（乐观更新）
-    setCachedAllowance(tokenAddress, spenderAddress, totalSupply);
+      // 🚀 性能优化：不等待授权确认，立即返回
+      logger.debug('[ensureTokenApproval] 授权交易已发送（不等待确认）:', approveHash);
 
-    return approveHash;
+      // 更新状态为"授权中"（带 txHash）
+      setApprovalStatus(tokenAddress, spenderAddress, {
+        allowance: totalSupply,
+        status: 'pending',
+        txHash: approveHash,
+        updatedAt: Date.now()
+      });
+
+      // 授权成功后更新缓存（乐观更新）
+      setCachedAllowance(tokenAddress, spenderAddress, totalSupply);
+
+      return approveHash;
+    } catch (error) {
+      // 授权失败，更新状态
+      setApprovalStatus(tokenAddress, spenderAddress, {
+        allowance: 0n,
+        status: 'failed',
+        updatedAt: Date.now()
+      });
+      throw error;
+    }
   }
   return null;
 }
@@ -1942,8 +2098,11 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       const normalizedQuote = quoteToken.toLowerCase();
       const normalizedWrapper = nativeWrapper.toLowerCase();
 
-      // 如果 quoteToken 不是 WBNB，优先尝试 quoteToken 路径
-      if (normalizedQuote !== normalizedWrapper) {
+      // 🐛 修复：过滤掉 0x0000... 地址（表示 BNB 筹集）
+      const isZeroAddress = normalizedQuote === ZERO_ADDRESS.toLowerCase();
+
+      // 如果 quoteToken 不是 WBNB 且不是 0x0000...，优先尝试 quoteToken 路径
+      if (normalizedQuote !== normalizedWrapper && !isZeroAddress) {
         const quoteTokenPath = direction === 'buy'
           ? [nativeWrapper, quoteToken, tokenAddress]
           : [tokenAddress, quoteToken, nativeWrapper];
@@ -1966,6 +2125,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         } catch (error) {
           logger.debug(`${channelLabel} QuoteToken 路径失败: ${error?.message || error}`);
         }
+      } else if (isZeroAddress) {
+        logger.debug(`${channelLabel} QuoteToken 是 0x0000（BNB 筹集），跳过 QuoteToken 路径`);
       } else {
         logger.debug(`${channelLabel} QuoteToken 是 WBNB，将使用直接路径`);
       }
@@ -2443,8 +2604,11 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           return { kind: 'v2', path: result.path, amountOut: result.amountOut };
         }
       } catch (error) {
-        logger.warn(`${channelLabel} ${platformName} V2 路径失败，fallback 到正常流程: ${error?.message || error}`);
-        // 失败后继续正常流程
+        // 🐛 修复：Four.meme/Flap 已迁移代币失败后直接抛出错误
+        // 不要 fallback 到 V3 查询，因为这些代币只在 V2
+        logger.error(`${channelLabel} ${platformName} V2 路径失败: ${error?.message || error}`);
+        updateRouteLoadingStatus(tokenAddress, direction, 'failed');
+        throw new Error(`${platformName} 已迁移代币交易失败: ${error?.message || error}`);
       }
     }
 
@@ -2940,14 +3104,19 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       let v2AllowanceFromCache: bigint | null = null;
       let v3AllowanceFromCache: bigint | null = null;
 
+      // 🚀 性能优化：Four.meme/Flap 已迁移代币只使用 V2，跳过 V3 授权查询
+      const shouldSkipV3 = routeInfo?.readyForPancake &&
+                          (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap');
+
       if (tokenInfo && tokenInfo.allowances) {
         // tokenInfo 包含授权信息，直接使用
         if (tokenInfo.allowances.pancake) {
           v2AllowanceFromCache = BigInt(tokenInfo.allowances.pancake);
           logger.debug(`${channelLabel} 使用 tokenInfo 中的 V2 授权: ${v2AllowanceFromCache}`);
         }
-        // V3 使用相同的 pancake 授权（因为都是 PancakeSwap）
-        if (tokenInfo.allowances.pancake) {
+        // 🐛 修复：只有在不跳过 V3 时才设置 V3 授权缓存
+        // Four.meme/Flap 已迁移代币只使用 V2，不需要 V3 授权
+        if (tokenInfo.allowances.pancake && !shouldSkipV3) {
           v3AllowanceFromCache = BigInt(tokenInfo.allowances.pancake);
           logger.debug(`${channelLabel} 使用 tokenInfo 中的 V3 授权: ${v3AllowanceFromCache}`);
         }
@@ -2962,7 +3131,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           logger.debug(`${channelLabel} 使用本地 V2 授权缓存: ${cached}`);
         }
       }
-      if (v3AllowanceFromCache === null && smartRouterAddress) {
+      if (v3AllowanceFromCache === null && smartRouterAddress && !shouldSkipV3) {
         const cached = getCachedAllowance(tokenAddress, smartRouterAddress);
         if (cached !== null) {
           v3AllowanceFromCache = cached;
@@ -2992,7 +3161,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           })()
         : Promise.resolve(v2AllowanceFromCache);
 
-      const v3AllowancePromise = (smartRouterAddress && v3AllowanceFromCache === null)
+      // 🐛 修复问题2：Four.meme/Flap 已迁移代币跳过 V3 授权查询
+      const v3AllowancePromise = (smartRouterAddress && v3AllowanceFromCache === null && !shouldSkipV3)
         ? (async () => {
             // 查询链上授权
             try {
@@ -3011,6 +3181,31 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             }
           })()
         : Promise.resolve(v3AllowanceFromCache);
+
+      if (shouldSkipV3 && v3AllowanceFromCache === null) {
+        logger.debug(`${channelLabel} Four.meme/Flap 已迁移代币，跳过 V3 授权查询`);
+      }
+
+      // 🚀 性能优化：检查授权是否正在进行中（修复问题2）
+      // 如果买入时并发授权还在 pending，卖出需要等待授权完成
+      const v2ApprovalStatus = contractAddress ? getApprovalStatus(tokenAddress, contractAddress) : null;
+      const v3ApprovalStatus = smartRouterAddress ? getApprovalStatus(tokenAddress, smartRouterAddress) : null;
+
+      if (v2ApprovalStatus?.status === 'pending') {
+        logger.debug(`${channelLabel} 检测到 V2 授权正在进行中，等待完成...`);
+        const success = await waitForApprovalComplete(tokenAddress, contractAddress, v2ApprovalStatus.txHash);
+        if (!success) {
+          logger.warn(`${channelLabel} V2 授权等待超时或失败`);
+        }
+      }
+
+      if (v3ApprovalStatus?.status === 'pending') {
+        logger.debug(`${channelLabel} 检测到 V3 授权正在进行中，等待完成...`);
+        const success = await waitForApprovalComplete(tokenAddress, smartRouterAddress, v3ApprovalStatus.txHash);
+        if (!success) {
+          logger.warn(`${channelLabel} V3 授权等待超时或失败`);
+        }
+      }
 
       // 🚀 性能优化：检查是否有有效的卖出路由缓存
       const hint = getTokenTradeHint(tokenAddress);
@@ -3083,7 +3278,15 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         logger.debug(`${channelLabel} 使用预查询的 V3 授权: ${allowanceValue}`);
       }
 
-      await ensureTokenApproval({
+      // 🔧 修复问题3：添加参数验证
+      if (!amountToSell || amountToSell <= 0n) {
+        throw new Error(`无效的卖出数量: ${amountToSell}`);
+      }
+      if (!finalRoutePlan || !finalRoutePlan.amountOut) {
+        throw new Error('路由查询失败，无法获取有效路径');
+      }
+
+      const approveHash = await ensureTokenApproval({
         publicClient,
         walletClient,
         account,
@@ -3097,12 +3300,45 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         nonceExecutor
       });
 
+      // 🐛 修复：如果刚刚发送了授权交易，禁用动态 Gas 估算
+      // 因为授权交易还在 pending，Gas 估算会失败（链上状态还是未授权）
+      // 虽然有 fallback 机制，但会产生不必要的错误日志
+      const shouldDisableDynamicGas = !!approveHash;
+
+      // 如果刚刚发送了授权交易，标记授权状态为成功（乐观更新）
+      // 因为使用了 nonce 机制，卖出交易会在授权之后执行
+      if (approveHash) {
+        setApprovalStatus(tokenAddress, spenderAddress, {
+          allowance: totalSupply,
+          status: 'success',
+          txHash: approveHash,
+          updatedAt: Date.now()
+        });
+        logger.debug(`${channelLabel} 刚发送授权交易，禁用动态 Gas 估算以避免失败`);
+      }
+
       const amountOutMinBase = calculateMinAmountOut(finalRoutePlan.amountOut, slippage);
       if (finalRoutePlan.kind === 'v2') {
         const { path } = finalRoutePlan;
+
+        // 🔧 修复问题3：验证 V2 路径参数
+        if (!path || path.length < 2) {
+          throw new Error(`无效的 V2 交易路径: ${JSON.stringify(path)}`);
+        }
+        if (!amountOutMinBase || amountOutMinBase < 0n) {
+          throw new Error(`无效的最小输出金额: ${amountOutMinBase}`);
+        }
+        if (!account?.address) {
+          throw new Error('账户地址未定义');
+        }
+
         const amountOutMin = amountOutMinBase;
         updateTokenTradeHint(tokenAddress, channelId, 'sell', { routerAddress: contractAddress, path, mode: 'v2' });
         const deadline = Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS;
+
+        if (!deadline || deadline <= 0) {
+          throw new Error(`无效的截止时间: ${deadline}`);
+        }
 
         const sendSell = (nonce?: number) =>
           sendContractTransaction({
@@ -3116,7 +3352,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             gasPrice,
             fallbackGasLimit,
             publicClient,
-            dynamicGas: {
+            dynamicGas: shouldDisableDynamicGas ? undefined : {
               enabled: true,
               key: `${channelId}:sell:v2`,
               bufferBps: 1000,
@@ -3144,6 +3380,18 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       // 此时 finalRoutePlan 应该是 v3 类型
       if (finalRoutePlan.kind === 'v3') {
         const v3Route = finalRoutePlan.route;
+
+        // 🔧 修复问题3：验证 V3 路径参数
+        if (!v3Route || !v3Route.tokens || v3Route.tokens.length < 2) {
+          throw new Error(`无效的 V3 交易路径: ${JSON.stringify(v3Route?.tokens)}`);
+        }
+        if (!v3Route.fees || v3Route.fees.length !== v3Route.tokens.length - 1) {
+          throw new Error(`无效的 V3 费率配置: ${JSON.stringify(v3Route?.fees)}`);
+        }
+        if (!account?.address) {
+          throw new Error('账户地址未定义');
+        }
+
       updateTokenTradeHint(tokenAddress, channelId, 'sell', { routerAddress: smartRouterAddress, path: v3Route.tokens, fees: v3Route.fees, mode: 'v3' });
       const amountOutMin = amountOutMinBase > 0n ? amountOutMinBase : 1n;
       const isSingleHop = v3Route.tokens.length === 2;
@@ -3191,7 +3439,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           gasPrice,
           fallbackGasLimit,
           publicClient,
-          dynamicGas: {
+          dynamicGas: shouldDisableDynamicGas ? undefined : {
             enabled: true,
             key: `${channelId}:sell:v3`,
             bufferBps: 1200,

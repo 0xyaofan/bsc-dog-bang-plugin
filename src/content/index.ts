@@ -51,6 +51,8 @@ let tokenContextObserverStarted = false;
 let lastSyncedTokenAddress: string | null = null;
 let lastSyncedUrl = '';
 let tokenContextSyncPromise: Promise<void> | null = null;
+let lastSyncTime = 0;
+const MIN_SYNC_INTERVAL = 500; // 最小同步间隔，防止重复调用
 let historyListenersInstalled = false;
 let userSettings: UserSettings = DEFAULT_USER_SETTINGS;
 export const tradingSettingsReady = loadUserSettings().then((settings) => {
@@ -527,6 +529,13 @@ function syncTokenContextFromCurrentPage(force = false) {
     return;
   }
 
+  // 防止短时间内重复调用
+  const now = Date.now();
+  if (!force && now - lastSyncTime < MIN_SYNC_INTERVAL) {
+    logger.debug('[Dog Bang] 同步间隔过短，跳过');
+    return;
+  }
+
   // 修复：只有当前标签页可见时才同步上下文
   // 避免后台标签页覆盖当前标签页的代币信息
   if (document.hidden && !force) {
@@ -552,6 +561,9 @@ function syncTokenContextFromCurrentPage(force = false) {
     if (!force && tokenAddress === lastSyncedTokenAddress && window.location.href === lastSyncedUrl) {
       return;
     }
+
+    // 更新同步时间戳
+    lastSyncTime = Date.now();
 
     // Update floating window when token changes
     const floatingWindow = document.getElementById('dog-bang-floating');
@@ -619,6 +631,15 @@ function syncTokenContextFromCurrentPage(force = false) {
 
     lastSyncedTokenAddress = tokenAddress;
     lastSyncedUrl = window.location.href;
+
+    // 🚀 新增：页面切换时执行自动授权检查
+    // 等待用户设置加载完成后再执行
+    tradingSettingsReady.then(() => {
+      logger.debug('[Dog Bang] 页面切换，检查是否需要自动授权');
+      autoApproveOnSwitch(tokenAddress, preferredChannelId);
+    }).catch(error => {
+      logger.error('[Dog Bang] 加载用户设置失败:', error);
+    });
   })()
     .catch((error) => {
       logger.debug('[Dog Bang] 同步 Side Panel 上下文失败:', error);
@@ -927,12 +948,11 @@ function startFastPolling(tokenAddress: string, previousBalance: string) {
     fastPollingCount++;
 
     try {
-      // 查询最新余额
-      await loadTokenInfo(tokenAddress);
+      // 🐛 优化：只查询余额，不重复获取代币静态信息（symbol, decimals）
+      const currentBalance = await updateTokenBalance(tokenAddress);
 
       // 检查余额是否变化
-      const currentBalance = currentTokenInfo?.balance || '0';
-      if (currentBalance !== previousBalance) {
+      if (currentBalance && currentBalance !== previousBalance) {
         logger.debug('[Dog Bang] 检测到余额变化，停止快速轮询', {
           previous: previousBalance,
           current: currentBalance
@@ -965,6 +985,89 @@ function stopFastPolling() {
 
 // ========== 代币信息加载（从 background 获取）==========
 // 优化1: 移除前端缓存，全部从 background 获取
+// ========== 代币信息加载（拆分为多个细粒度函数）==========
+
+/**
+ * 仅从 background 获取并更新代币余额
+ * 用于买卖后的快速轮询，只获取余额，避免重复获取静态信息
+ */
+async function updateTokenBalance(tokenAddress: string): Promise<string | null> {
+  try {
+    const response = await safeSendMessage({
+      action: 'get_token_info',
+      data: {
+        tokenAddress,
+        needApproval: false  // 余额更新不需要授权信息
+      }
+    });
+
+    if (response && response.success) {
+      // 只更新余额相关字段，保留其他静态信息
+      if (currentTokenInfo) {
+        currentTokenInfo.balance = response.data.balance;
+        currentTokenInfo.totalSupply = response.data.totalSupply;
+      }
+
+      // 更新余额显示
+      updateTokenBalanceDisplay(tokenAddress);
+
+      return response.data.balance;
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] Error updating token balance:', error);
+  }
+  return null;
+}
+
+/**
+ * 仅更新授权信息
+ * 用于授权完成后，只获取授权信息，不重复获取静态信息（symbol, decimals）
+ */
+async function updateTokenAllowances(tokenAddress: string, channel?: string): Promise<void> {
+  try {
+    const response = await safeSendMessage({
+      action: 'get_token_info',
+      data: {
+        tokenAddress,
+        needApproval: true  // 获取授权信息
+      }
+    });
+
+    if (response && response.success) {
+      // 如果 currentTokenInfo 不存在，创建一个新的
+      if (!currentTokenInfo) {
+        currentTokenInfo = {
+          address: tokenAddress,
+          symbol: response.data.symbol,
+          decimals: response.data.decimals,
+          totalSupply: response.data.totalSupply,
+          balance: response.data.balance,
+          allowances: response.data.allowances
+        };
+        logger.debug('[Dog Bang] 创建 currentTokenInfo 并设置授权信息');
+      } else {
+        // 只更新授权信息，保留其他字段
+        if (response.data.allowances) {
+          currentTokenInfo.allowances = response.data.allowances;
+        }
+        logger.debug('[Dog Bang] 授权信息已更新');
+      }
+
+      // 更新授权状态显示
+      const panelElement = document.getElementById('dog-bang-panel');
+      const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
+      const currentChannel = channel || channelSelector?.value || 'pancake';
+      loadTokenApprovalStatus(tokenAddress, currentChannel);
+    }
+  } catch (error) {
+    logger.error('[Dog Bang] Error updating token allowances:', error);
+  }
+}
+
+/**
+ * 完整加载代币信息（包括静态信息和授权信息）
+ * 用于页面加载、切换代币等场景
+ */
 async function loadTokenInfo(tokenAddress) {
   try {
     logger.debug('[Dog Bang] 从 background 获取代币信息');
@@ -997,11 +1100,14 @@ async function loadTokenInfo(tokenAddress) {
       updateTokenBalanceDisplay(tokenAddress);
       scheduleSellEstimate();
 
-      // 同时更新授权状态
-      const panelElement = document.getElementById('dog-bang-panel');
-      const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
-      const currentChannel = channelSelector?.value || 'pancake';
-      loadTokenApprovalStatus(tokenAddress, currentChannel);
+      // 🐛 优化：只在需要授权时才检查授权状态
+      // 买入不需要授权，只有卖出或用户主动操作时才需要
+      // 授权状态会在以下场景更新：
+      // 1. 页面切换时（observeUrlChanges）
+      // 2. 通道切换时（channel-selector change event）
+      // 3. 自动授权完成后
+      // 4. 用户点击授权按钮后
+      // 不需要在每次 loadTokenInfo 时都查询
 
       return currentTokenInfo;
     }
@@ -1128,11 +1234,9 @@ async function handleManualApprove() {
       // 延迟查询链上授权状态，确保 RPC 节点同步
       // 后端已经等待交易确认，但不同 RPC 节点间可能有同步延迟
       setTimeout(async () => {
-        await loadTokenApprovalStatus(tokenAddress, channel);
-
-        // 刷新代币信息以更新余额等
+        // 🐛 优化：授权完成后只需要更新授权信息，不需要重新获取静态信息
         if (currentTokenAddress) {
-          loadTokenInfo(currentTokenAddress);
+          updateTokenAllowances(currentTokenAddress, channel);
         }
       }, 1500); // 延迟 1.5 秒
     } else {
@@ -1176,11 +1280,9 @@ async function handleRevokeApproval() {
 
       // 延迟查询链上授权状态，确保 RPC 节点同步
       setTimeout(async () => {
-        await loadTokenApprovalStatus(tokenAddress, channel);
-
-        // 刷新代币信息以更新余额等
+        // 🐛 优化：授权完成后只需要更新授权信息，不需要重新获取静态信息
         if (currentTokenAddress) {
-          loadTokenInfo(currentTokenAddress);
+          updateTokenAllowances(currentTokenAddress, channel);
         }
       }, 1500); // 延迟 1.5 秒
     } else {
@@ -1210,17 +1312,11 @@ async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
   const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
   const currentChannel = channel || channelSelector?.value || 'pancake';
 
-  // 先查询当前授权状态
-  const approved = await loadTokenApprovalStatus(tokenAddress, currentChannel);
-
-  // 如果已授权,则不需要重新授权
-  if (approved) {
-    logger.debug('[Dog Bang] 代币已授权,跳过自动授权');
-    return;
-  }
-
   logger.debug('[Dog Bang] 执行切换时自动授权:', { tokenAddress, channel: currentChannel });
 
+  // 🐛 修复：不检查授权状态，直接发送授权请求
+  // background 的 ensureTokenApproval 会自动判断是否需要授权
+  // 如果已授权，会直接返回成功，不会重复授权
   updateTokenApprovalDisplay(false, true, undefined, 'approve');
 
   try {
@@ -1233,7 +1329,11 @@ async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
     });
 
     if (response && response.success) {
-      logger.debug('[Dog Bang] 自动授权成功');
+      if (response.needApproval) {
+        logger.debug('[Dog Bang] 自动授权已执行:', response.message);
+      } else {
+        logger.debug('[Dog Bang] 代币已授权，跳过:', response.message);
+      }
 
       // 延迟查询链上授权状态，确保 RPC 节点同步
       setTimeout(async () => {
@@ -1412,13 +1512,16 @@ async function handleBuy(tokenAddress) {
         }
       });
 
-      // 买入成功后立即刷新余额
+      // 买入成功后立即刷新必要信息
       const previousBalance = currentTokenInfo?.balance || '0';
-      loadWalletStatus();
-      loadTokenInfo(tokenAddress);
-      loadTokenRoute(tokenAddress, { force: true });
+      loadWalletStatus();  // 刷新 BNB 余额（买入花费了 BNB）
+      // 🐛 优化：不需要立即调用 loadTokenInfo，因为：
+      // 1. 代币信息（符号、精度等）在页面加载时已获取，不会变化
+      // 2. 交易刚提交，链上可能还未确认，余额查不到新值
+      // 3. startFastPolling 会每秒轮询 loadTokenInfo，等待余额变化
+      loadTokenRoute(tokenAddress, { force: true });  // 刷新路由缓存（买入后可能影响流动性）
 
-      // 启动快速轮询，快速检测余额变化
+      // 启动快速轮询，快速检测余额变化（内部会调用 loadTokenInfo）
       startFastPolling(tokenAddress, previousBalance);
 
       timer.step('处理成功响应和通知');
@@ -1528,6 +1631,13 @@ async function handleSell(tokenAddress) {
     }
   }
 
+  // 🐛 优化：确保 currentTokenInfo 有授权信息，用于卖出时的性能优化
+  // 如果没有授权信息，快速获取一次（使用缓存，很快）
+  if (!currentTokenInfo || !currentTokenInfo.allowances) {
+    logger.debug('[Dog Bang] currentTokenInfo 缺少授权信息，快速获取');
+    await updateTokenAllowances(tokenAddress, channel);
+  }
+
   try {
     // 优化1: 简化前端逻辑，数据查询全由 background 处理
     // showStatus(`正在通过 ${getChannelName(channel)} 卖出...`, 'info');
@@ -1567,12 +1677,16 @@ async function handleSell(tokenAddress) {
         }
       });
 
-      // 卖出成功后立即刷新余额
+      // 卖出成功后立即刷新必要信息
       const is100PercentSell = parseFloat(percent) === 100;
       const previousBalance = currentTokenInfo?.balance || '0';
-      loadWalletStatus();
-      loadTokenInfo(tokenAddress);
-      loadTokenRoute(tokenAddress, { force: true });
+      loadWalletStatus();  // 刷新 BNB 余额（卖出获得了 BNB）
+      // 🐛 优化：不需要立即调用 loadTokenInfo，因为：
+      // 1. 代币信息（符号、精度等）在页面加载时已获取，不会变化
+      // 2. 交易刚提交，链上可能还未确认，余额查不到新值
+      // 3. startFastPolling 会每秒轮询 loadTokenInfo，等待余额变化
+      // 4. 100% 卖出会在下面直接清零余额显示
+      loadTokenRoute(tokenAddress, { force: true });  // 刷新路由缓存（卖出后可能影响流动性）
 
       // 启动快速轮询，快速检测余额变化（100%卖出除外，因为会直接清零）
       if (!is100PercentSell) {
@@ -2239,7 +2353,16 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
   const channelSelector = panel.querySelector('#channel-selector') as HTMLSelectElement | null;
   const currentChannel = defaultChannelId || channelSelector?.value || 'pancake';
   loadTokenApprovalStatus(tokenAddress, currentChannel);
-  autoApproveOnSwitch(tokenAddress, currentChannel);
+
+  // 🐛 修复：等待 userSettings 加载完成后再执行自动授权
+  // 避免使用默认设置导致自动授权不生效
+  logger.debug('[Dog Bang] 准备执行自动授权检查，等待用户设置加载...');
+  tradingSettingsReady.then(() => {
+    logger.debug('[Dog Bang] 用户设置已加载，开始检查自动授权');
+    autoApproveOnSwitch(tokenAddress, currentChannel);
+  }).catch(error => {
+    logger.error('[Dog Bang] 加载用户设置失败:', error);
+  });
 
 }
 
@@ -3157,14 +3280,9 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
     try {
       logger.debug('[Dog Bang] 检查通道授权:', { tokenAddress, channel });
 
-      // 先查询当前授权状态
-      const currentApprovalStatus = await loadTokenApprovalStatus(tokenAddress, channel);
-
-      // 如果已授权，不需要重新授权
-      if (currentApprovalStatus) {
-        logger.debug('[Dog Bang] 代币已授权，跳过');
-        return;
-      }
+      // 🐛 修复问题11：不要预检查授权状态，让 background 的 ensureTokenApproval 处理
+      // 如果已授权，background 会返回 needApproval: false
+      // 如果未授权，background 会发送授权交易并返回 needApproval: true
 
       // 显示授权中状态
       updateTokenApprovalDisplay(false, true, undefined, 'approve');
@@ -3177,18 +3295,20 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
         }
       });
 
-      if (response && response.success && response.needApproval) {
-        logger.debug('[Dog Bang] ✓ 自动授权完成:', response.message);
+      if (response && response.success) {
+        if (response.needApproval) {
+          logger.debug('[Dog Bang] ✓ 自动授权完成:', response.message);
 
-        // 延迟查询链上授权状态，确保 RPC 节点同步
-        setTimeout(async () => {
+          // 延迟查询链上授权状态，确保 RPC 节点同步
+          setTimeout(async () => {
+            await loadTokenApprovalStatus(tokenAddress, channel);
+          }, 1500);
+        } else {
+          logger.debug('[Dog Bang] 代币已授权，跳过:', response.message);
+
+          // 即使不需要授权，也更新一下状态（无需延迟，因为没有新交易）
           await loadTokenApprovalStatus(tokenAddress, channel);
-        }, 1500);
-      } else if (response?.message) {
-        logger.debug('[Dog Bang] 授权状态:', response.message);
-
-        // 即使不需要授权，也更新一下状态（无需延迟，因为没有新交易）
-        await loadTokenApprovalStatus(tokenAddress, channel);
+        }
       }
     } catch (error) {
       logger.debug('[Dog Bang] 授权检查异常:', error.message);
@@ -3262,7 +3382,14 @@ function handleTxConfirmationPush(data) {
     performanceMetrics.transactions++;
 
     if ((pendingInfo?.token && pendingInfo.token === currentTokenAddress) || (!pendingInfo && currentTokenAddress)) {
-      loadTokenInfo(currentTokenAddress);
+      // 🐛 优化：区分交易类型，避免重复获取静态信息
+      if (pendingInfo?.type === 'buy' || pendingInfo?.type === 'sell') {
+        // 买卖交易：只更新余额（静态信息不变，授权信息不变）
+        updateTokenBalance(currentTokenAddress);
+      } else {
+        // 授权交易：只更新授权信息（静态信息不变）
+        updateTokenAllowances(currentTokenAddress);
+      }
     }
     loadWalletStatus();
   } else if (status === 'failed') {

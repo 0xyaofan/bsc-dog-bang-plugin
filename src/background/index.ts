@@ -3230,7 +3230,7 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
 }
 
 // 卖出代币（多通道支持）
-async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, channel = 'pancake', forceChannel = false }) {
+async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, channel = 'pancake', forceChannel = false, tokenInfo }) {
   return nonceMutex.runExclusive(async () => {
     const timer = new PerformanceTimer('sell');
     let stepStart = perf.now();
@@ -3361,6 +3361,7 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
             slippage: resolvedSlippage,
             gasPrice: normalizedGasPrice,
             nonceExecutor,
+            tokenInfo: tokenInfo,  // 🐛 修复问题1：传递 tokenInfo
             routeInfo: routeInfo
           }),
           quoteBalancePromise || Promise.resolve(0n)
@@ -3889,7 +3890,14 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
     await createClients();
   }
 
-  const metadata = await ensureTokenMetadata(tokenAddress, { needSymbol: true, needTotalSupply: true });
+  // 🐛 优化：只在需要时获取静态信息（symbol, totalSupply）
+  // decimals 是必须的（用于余额格式化），所以总是获取
+  // symbol 和 totalSupply 只在首次加载时需要，后续可以使用缓存
+  const metadata = await ensureTokenMetadata(tokenAddress, {
+    needSymbol: true,
+    needTotalSupply: true
+  });
+
   const cacheScope = getCacheScope();
   const normalizedTokenAddress = normalizeAddressValue(tokenAddress);
   const normalizedWalletAddress = normalizeAddressValue(walletAddress);
