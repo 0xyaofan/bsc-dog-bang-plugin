@@ -586,7 +586,7 @@ function syncTokenContextFromCurrentPage(force = false) {
         preferredChannelId = response.data.preferredChannel;
       }
 
-      // 预加载优化：在后台预加载余额和授权信息（不阻塞主流程）
+      // 预加载优化：在后台预加载余额、授权和路由信息（不阻塞主流程）
       // 这样用户点击买入时，数据已经缓存好了
       Promise.all([
         // 预加载代币余额
@@ -598,6 +598,12 @@ function syncTokenContextFromCurrentPage(force = false) {
         // 预加载授权状态（如果启用了切换页面授权）
         safeSendMessage({
           action: 'prefetch_approval_status',
+          data: { tokenAddress }
+        }).catch(() => {}), // 静默失败
+
+        // 🚀 新增：预加载交易路由（买入优先，卖出并发）
+        safeSendMessage({
+          action: 'prefetch_route',
           data: { tokenAddress }
         }).catch(() => {}) // 静默失败
       ]).catch(() => {}); // 整体静默失败，不影响主流程
@@ -3599,9 +3605,9 @@ async function refreshRouteCacheIfNeeded() {
 
     if (buyCache.needsQuery || buyExpiringSoon) {
       logger.info('[Route Cache] 买入路由缓存过期或即将过期，主动刷新');
-      // 触发预加载（通过 background）
+      // 🚀 修复：触发路由预加载（会同时预加载买入和卖出路由）
       safeSendMessage({
-        action: 'prefetch_token_balance',
+        action: 'prefetch_route',
         data: { tokenAddress }
       }).catch(() => {});
     }
@@ -3612,14 +3618,10 @@ async function refreshRouteCacheIfNeeded() {
 
     if (sellCache.needsQuery || sellExpiringSoon) {
       logger.info('[Route Cache] 卖出路由缓存过期或即将过期，主动刷新');
-      // 触发卖出路由预加载（通过估算卖出金额）
+      // 🚀 修复：触发路由预加载（会同时预加载买入和卖出路由）
       safeSendMessage({
-        action: 'estimate_sell_amount',
-        data: {
-          tokenAddress,
-          amount: '1000000000000000000', // 1 token
-          channel: currentTokenRoute?.preferredChannel || 'pancake'
-        }
+        action: 'prefetch_route',
+        data: { tokenAddress }
       }).catch(() => {});
     }
   } catch (error) {

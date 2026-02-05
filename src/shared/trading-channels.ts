@@ -1641,6 +1641,7 @@ type SellQuoteParams = {
   tokenAddress: string;
   amount: bigint;
   tokenInfo?: any;
+  routeInfo?: any;
 };
 
 type TradingChannel = {
@@ -3132,14 +3133,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       }
     },
 
-    async quoteSell({ publicClient, tokenAddress, amount, tokenInfo }) {
+    async quoteSell({ publicClient, tokenAddress, amount, tokenInfo, routeInfo }) {
       if (!publicClient || !tokenAddress || !amount || amount <= 0n) {
         return null;
       }
       try {
         // quoteSell 用于预估，也会触发路由查询
         // 这里查询到的路由会被缓存，供后续真实交易使用
-        const routePlan = await findBestRoute('sell', publicClient, tokenAddress, amount, tokenInfo?.quoteToken);
+        const routePlan = await findBestRoute('sell', publicClient, tokenAddress, amount, tokenInfo?.quoteToken, routeInfo);
         return routePlan.amountOut ?? null;
       } catch (error) {
         logger.debug(`${channelLabel} 卖出预估失败: ${error.message}`);

@@ -2534,7 +2534,8 @@ async function handlePrefetchRoute({ tokenAddress }: { tokenAddress?: string } =
     const sellPromise = channelHandler.quoteSell?.({
       publicClient,
       tokenAddress,
-      amount: sellAmount
+      amount: sellAmount,
+      routeInfo: route
     }).catch(() => null);
 
     // 并发执行，但不等待结果（后台预加载）
@@ -3993,7 +3994,8 @@ async function handleEstimateSellAmount(payload: SellEstimatePayload = {}) {
     const estimate = await channelHandler.quoteSell({
       publicClient,
       tokenAddress: normalizedToken,
-      amount: amountToSell
+      amount: amountToSell,
+      routeInfo: route
     });
 
     if (estimate === null || estimate === undefined) {
