@@ -602,6 +602,13 @@ function alignAmountToGweiPrecision(amount: bigint, decimals?: number) {
 }
 
 export async function prepareTokenSell({ publicClient, tokenAddress, accountAddress, spenderAddress, percent, tokenInfo, options }: PrepareTokenSellParams) {
+  const fnStart = perf.now();
+  logger.debug('[PrepareTokenSell] 开始准备卖出', {
+    tokenAddress: tokenAddress.slice(0, 10),
+    spenderAddress: spenderAddress.slice(0, 10),
+    percent
+  });
+
   const requireGweiPrecision = Boolean(options?.requireGweiPrecision);
   // 使用缓存的信息或重新查询
   let balance, allowance, totalSupply;
@@ -610,6 +617,7 @@ export async function prepareTokenSell({ publicClient, tokenAddress, accountAddr
   // 🐛 修复：tokenInfo 的授权信息在 allowances 对象中（复数），不是 allowance（单数）
   // 需要根据 spenderAddress 判断使用哪个通道的授权
   let hasValidCache = false;
+  const cacheStart = perf.now();
   if (tokenInfo && tokenInfo.balance && tokenInfo.allowances) {
     balance = BigInt(tokenInfo.balance);
     totalSupply = BigInt(tokenInfo.totalSupply);
@@ -633,17 +641,22 @@ export async function prepareTokenSell({ publicClient, tokenAddress, accountAddr
     if (channelKey && tokenInfo.allowances[channelKey] !== undefined) {
       allowance = BigInt(tokenInfo.allowances[channelKey]);
       hasValidCache = true;
-      logger.debug(`[prepareTokenSell] 使用缓存的代币信息 (${channelKey})`);
+      logger.debug(`[PrepareTokenSell] 使用缓存的代币信息 (${channelKey}) (${perf.measure(cacheStart).toFixed(2)}ms)`);
+    } else {
+      logger.debug(`[PrepareTokenSell] 缓存未命中 (channelKey: ${channelKey})`);
     }
 
     if (requireGweiPrecision && tokenInfo.decimals !== undefined) {
       decimals = Number(tokenInfo.decimals);
     }
+  } else {
+    logger.debug('[PrepareTokenSell] tokenInfo 不可用');
   }
 
   if (!hasValidCache) {
     // 降级到重新查询
-    logger.debug('[prepareTokenSell] 缓存不可用，重新查询代币信息');
+    const queryStart = perf.now();
+    logger.debug('[PrepareTokenSell] 缓存不可用，重新查询代币信息');
     const state = await fetchTokenState(
       publicClient,
       tokenAddress,
@@ -657,23 +670,37 @@ export async function prepareTokenSell({ publicClient, tokenAddress, accountAddr
     if (requireGweiPrecision) {
       decimals = state.decimals;
     }
+    logger.debug(`[PrepareTokenSell] 链上查询完成 (${perf.measure(queryStart).toFixed(2)}ms)`, {
+      balance: balance.toString(),
+      allowance: allowance.toString()
+    });
   }
 
   if (balance === 0n) {
+    logger.debug('[PrepareTokenSell] ❌ 代币余额为 0');
     throw new Error('代币余额为 0');
   }
 
   // 计算卖出数量
+  const calcStart = perf.now();
   let amountToSell = percent === 100
     ? balance  // 100%直接使用余额，避免精度损失
     : balance * BigInt(percent) / 100n;
 
   if (requireGweiPrecision) {
+    const beforeAlign = amountToSell;
     amountToSell = alignAmountToGweiPrecision(amountToSell, decimals);
+    logger.debug(`[PrepareTokenSell] Gwei 精度对齐: ${beforeAlign.toString()} -> ${amountToSell.toString()}`);
     if (amountToSell <= 0n) {
+      logger.debug('[PrepareTokenSell] ❌ 卖出数量过小');
       throw new Error('卖出数量过小，无法满足 Four.meme 的 Gwei 精度限制');
     }
   }
+  logger.debug(`[PrepareTokenSell] 计算卖出数量完成 (${perf.measure(calcStart).toFixed(2)}ms)`, {
+    amountToSell: amountToSell.toString()
+  });
+
+  logger.debug(`[PrepareTokenSell] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
 
   return { balance, allowance, totalSupply, amountToSell };
 }
@@ -712,15 +739,25 @@ async function ensureTokenApproval({
   gasPrice?: number | bigint;
   nonceExecutor?: NonceExecutor;
 }): Promise<string | null> {
+  const fnStart = perf.now();
+  logger.debug('[EnsureTokenApproval] 检查授权', {
+    tokenAddress: tokenAddress.slice(0, 10),
+    spenderAddress: spenderAddress.slice(0, 10),
+    amount: amount.toString(),
+    currentAllowance: currentAllowance.toString()
+  });
+
   if (currentAllowance < amount) {
-    logger.debug(`[ensureTokenApproval] 授权代币给 ${spenderAddress.slice(0, 6)}...`);
+    logger.debug(`[EnsureTokenApproval] 授权不足，需要授权 (当前: ${currentAllowance.toString()}, 需要: ${amount.toString()})`);
 
     // 标记为"授权中"
+    const statusStart = perf.now();
     setApprovalStatus(tokenAddress, spenderAddress, {
       allowance: totalSupply,
       status: 'pending',
       updatedAt: Date.now()
     });
+    logger.debug(`[EnsureTokenApproval] 标记授权状态为 pending (${perf.measure(statusStart).toFixed(2)}ms)`);
 
     const sendApprove = (nonce?: number) =>
       sendContractTransaction({
@@ -737,14 +774,19 @@ async function ensureTokenApproval({
       });
 
     try {
+      const txStart = perf.now();
+      logger.debug('[EnsureTokenApproval] 发送授权交易...');
       const approveHash = nonceExecutor
         ? await nonceExecutor('approve', (nonce) => sendApprove(nonce))
         : await sendApprove();
 
+      logger.debug(`[EnsureTokenApproval] 授权交易已发送 (${perf.measure(txStart).toFixed(2)}ms)`, { approveHash });
+
       // 🚀 性能优化：不等待授权确认，立即返回
-      logger.debug('[ensureTokenApproval] 授权交易已发送（不等待确认）:', approveHash);
+      logger.debug('[EnsureTokenApproval] 不等待确认，立即返回');
 
       // 更新状态为"授权中"（带 txHash）
+      const updateStart = perf.now();
       setApprovalStatus(tokenAddress, spenderAddress, {
         allowance: totalSupply,
         status: 'pending',
@@ -754,9 +796,12 @@ async function ensureTokenApproval({
 
       // 授权成功后更新缓存（乐观更新）
       setCachedAllowance(tokenAddress, spenderAddress, totalSupply);
+      logger.debug(`[EnsureTokenApproval] 更新缓存完成 (${perf.measure(updateStart).toFixed(2)}ms)`);
 
+      logger.debug(`[EnsureTokenApproval] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
       return approveHash;
     } catch (error) {
+      logger.debug(`[EnsureTokenApproval] ❌ 授权失败 (${perf.measure(fnStart).toFixed(2)}ms)`);
       // 授权失败，更新状态
       setApprovalStatus(tokenAddress, spenderAddress, {
         allowance: 0n,
@@ -765,6 +810,9 @@ async function ensureTokenApproval({
       });
       throw error;
     }
+  } else {
+    logger.debug('[EnsureTokenApproval] 授权充足，无需授权');
+    logger.debug(`[EnsureTokenApproval] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
   }
   return null;
 }
@@ -826,6 +874,16 @@ async function sendContractTransaction({
   dynamicGas?: DynamicGasOptions;
   nonce?: number;
 }) {
+  const fnStart = perf.now();
+  logger.debug('[SendContractTx] 开始发送合约交易', {
+    to: to.slice(0, 10),
+    functionName,
+    value: value.toString(),
+    nonce
+  });
+
+  // 构建请求
+  const buildStart = perf.now();
   const request: any = {
     account,
     chain,
@@ -836,48 +894,75 @@ async function sendContractTransaction({
 
   if (typeof nonce === 'number' && Number.isFinite(nonce)) {
     request.nonce = BigInt(nonce);
+    logger.debug(`[SendContractTx] 使用指定 nonce: ${nonce}`);
   }
   if (typeof gasPrice === 'number' && Number.isFinite(gasPrice) && gasPrice > 0) {
     request.gasPrice = toWeiFromGwei(gasPrice);
+    logger.debug(`[SendContractTx] 使用 gasPrice: ${gasPrice} Gwei`);
   } else if (typeof gasPrice === 'bigint') {
     request.gasPrice = gasPrice;
+    logger.debug(`[SendContractTx] 使用 gasPrice: ${gasPrice.toString()} Wei`);
   }
+  logger.debug(`[SendContractTx] 请求构建完成 (${perf.measure(buildStart).toFixed(2)}ms)`);
 
+  // 处理动态 Gas
   let shouldRefreshDynamicGas = false;
   if (dynamicGas?.enabled && publicClient) {
+    const gasStart = perf.now();
     const cacheEntry = dynamicGasCache.get(dynamicGas.key);
     const effectiveTtl = dynamicGas.ttl ?? DYNAMIC_GAS_CACHE_TTL;
     if (cacheEntry && Date.now() - cacheEntry.updatedAt < effectiveTtl) {
       request.gas = cacheEntry.gas;
+      logger.debug(`[SendContractTx] 使用缓存的动态 Gas: ${cacheEntry.gas.toString()} (key: ${dynamicGas.key})`);
     } else if (fallbackGasLimit) {
       request.gas = fallbackGasLimit;
       shouldRefreshDynamicGas = true;
+      logger.debug(`[SendContractTx] 使用 fallback Gas: ${fallbackGasLimit.toString()}，稍后刷新缓存`);
     } else {
       shouldRefreshDynamicGas = true;
+      logger.debug('[SendContractTx] 需要估算动态 Gas');
     }
 
     if (shouldRefreshDynamicGas) {
       const estimationRequest = { ...request };
       delete estimationRequest.gas;
+      logger.debug('[SendContractTx] 后台刷新动态 Gas 缓存...');
       resolveDynamicGasLimit(publicClient, estimationRequest, dynamicGas).catch((error) =>
         logger.debug(`[Channel] 动态 Gas 刷新失败 (${functionName}):`, error?.message || error)
       );
     }
+    logger.debug(`[SendContractTx] 动态 Gas 处理完成 (${perf.measure(gasStart).toFixed(2)}ms)`);
+  } else if (fallbackGasLimit) {
+    request.gas = fallbackGasLimit;
+    logger.debug(`[SendContractTx] 使用 fallback Gas: ${fallbackGasLimit.toString()}`);
   }
 
   try {
-    return await walletClient.sendTransaction(request);
+    const sendStart = perf.now();
+    logger.debug('[SendContractTx] 发送交易...');
+    const txHash = await walletClient.sendTransaction(request);
+    logger.debug(`[SendContractTx] ✅ 交易已发送 (${perf.measure(sendStart).toFixed(2)}ms)`, { txHash });
+    logger.debug(`[SendContractTx] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
+    return txHash;
   } catch (error) {
+    logger.debug(`[SendContractTx] ❌ 交易失败 (${perf.measure(fnStart).toFixed(2)}ms)`, {
+      error: error?.message || error
+    });
+
     if (!fallbackGasLimit) {
       throw error;
     }
 
-    logger.debug(`[Channel] sendTransaction 失败 (${functionName})，使用 fallback gas 重新尝试:`, error?.message || error);
+    logger.debug(`[SendContractTx] 使用 fallback gas 重新尝试: ${fallbackGasLimit.toString()}`);
+    const retryStart = perf.now();
 
-    return await walletClient.sendTransaction({
+    const txHash = await walletClient.sendTransaction({
       ...request,
       gas: fallbackGasLimit
     });
+    logger.debug(`[SendContractTx] ✅ 重试成功 (${perf.measure(retryStart).toFixed(2)}ms)`, { txHash });
+    logger.debug(`[SendContractTx] ✅ 总耗时（含重试）: ${perf.measure(fnStart).toFixed(2)}ms`);
+    return txHash;
   }
 }
 

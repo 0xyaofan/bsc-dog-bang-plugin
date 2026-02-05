@@ -361,7 +361,19 @@ async function sendFourEncodedBuy(params: {
   nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
   label?: string;
 }) {
+  const fnStart = perf.now();
   const { tokenAddress, amount, maxFunds, funds, minAmount, msgValue, gasPriceWei, nonceExecutor, label = 'four-buy-encoded' } = params;
+
+  logger.debug(`[FourEncodedBuy] 开始执行`, {
+    tokenAddress: tokenAddress.slice(0, 10),
+    amount: amount?.toString(),
+    maxFunds: maxFunds?.toString(),
+    funds: funds?.toString(),
+    minAmount: minAmount?.toString(),
+    msgValue: msgValue.toString()
+  });
+
+  const encodeStart = perf.now();
   assertWalletReadyForFourQuote();
   const encodedArgs = encodeBuyTokenStruct({
     token: tokenAddress as Address,
@@ -371,8 +383,11 @@ async function sendFourEncodedBuy(params: {
     funds,
     minAmount
   });
+  logger.debug(`[FourEncodedBuy] 参数编码完成 (${perf.measure(encodeStart).toFixed(2)}ms)`);
 
+  const txStart = perf.now();
   const txHash = await nonceExecutor(label, async (nonce) => {
+    logger.debug(`[FourEncodedBuy] 发送交易 (nonce: ${nonce})`);
     const hash = await walletClient.sendTransaction({
       account: walletAccount,
       chain: chainConfig,
@@ -388,6 +403,8 @@ async function sendFourEncodedBuy(params: {
     });
     return hash;
   });
+  logger.debug(`[FourEncodedBuy] 交易已发送 (${perf.measure(txStart).toFixed(2)}ms)`, { txHash });
+  logger.debug(`[FourEncodedBuy] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
 
   return txHash;
 }
@@ -1350,36 +1367,66 @@ function isNonceRelatedError(error: any) {
 }
 
 async function executeWithNonceRetry(task: (nonce: number) => Promise<any>, context: string) {
+  const fnStart = perf.now();
+  logger.debug(`[NonceRetry] 开始执行 (context: ${context})`);
+
   const MAX_ATTEMPTS = 3;
   let lastError;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const attemptStart = perf.now();
+    logger.debug(`[NonceRetry] 尝试 ${attempt + 1}/${MAX_ATTEMPTS}`);
+
     const reservedNonce = await reserveManagedNonce(`${context}_attempt_${attempt + 1}`);
+    logger.debug(`[NonceRetry] 预留 nonce: ${reservedNonce} (${perf.measure(attemptStart).toFixed(2)}ms)`);
+
     try {
-      return await task(reservedNonce);
+      const taskStart = perf.now();
+      const result = await task(reservedNonce);
+      logger.debug(`[NonceRetry] ✅ 任务执行成功 (${perf.measure(taskStart).toFixed(2)}ms)`);
+      logger.debug(`[NonceRetry] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
+      return result;
     } catch (error) {
       lastError = error;
+      logger.debug(`[NonceRetry] ❌ 任务执行失败 (${perf.measure(attemptStart).toFixed(2)}ms)`);
+
       const message = (error?.shortMessage || error?.message || String(error) || '').toLowerCase();
       const isNonceIssue =
         isNonceRelatedError(error) || message.includes('missing or invalid parameters');
+
       if (isNonceIssue) {
         logger.warn(
           `[${context}] 检测到 nonce 不一致 (attempt ${attempt + 1}/${MAX_ATTEMPTS})，重置 nonce 并重新同步`
         );
+        logger.debug(`[NonceRetry] 错误信息: ${message.slice(0, 200)}`);
+
+        const resetStart = perf.now();
         resetWalletNonce(`${context}_gapped_nonce`);
         await diagnoseNonceMismatch(`${context}_attempt_${attempt + 1}`);
+        logger.debug(`[NonceRetry] Nonce 重置完成 (${perf.measure(resetStart).toFixed(2)}ms)`);
 
         if (attempt < MAX_ATTEMPTS - 1) {
+          const syncStart = perf.now();
           await syncManagedNonce(`${context}_retry_${attempt + 1}`);
+          logger.debug(`[NonceRetry] Nonce 同步完成 (${perf.measure(syncStart).toFixed(2)}ms)`);
+
           // nonce 不一致一般与节点连通性无关，无需切换节点
+          const clientStart = perf.now();
           await createClients(false);
+          logger.debug(`[NonceRetry] 客户端重建完成 (${perf.measure(clientStart).toFixed(2)}ms)`);
+
+          logger.debug(`[NonceRetry] 准备重试...`);
           continue;
+        } else {
+          logger.debug(`[NonceRetry] 已达最大重试次数，放弃`);
         }
       } else {
+        logger.debug(`[NonceRetry] 非 nonce 错误，回滚 nonce: ${reservedNonce}`);
         rollbackManagedNonce(reservedNonce);
       }
       throw error;
     }
   }
+  logger.debug(`[NonceRetry] ❌ 所有尝试失败，总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
   throw lastError;
 }
 

@@ -4,6 +4,8 @@ import {
   prepareQuoteFunds,
   type SwapContext
 } from './four-quote-bridge.js';
+import { logger } from '../shared/logger.js';
+import { perf } from '../shared/performance.js';
 
 export type FlapQuoteRouteInfo = {
   quoteToken?: string;
@@ -45,8 +47,17 @@ type PrepareFlapQuoteParams = {
 };
 
 export async function prepareFlapQuoteBuy(params: PrepareFlapQuoteParams) {
+  const fnStart = perf.now();
   const { tokenAddress, amountInWei, slippage, quoteToken, swapContext, publicClient, walletAddress } = params;
-  return await prepareQuoteFunds({
+
+  logger.debug('[PrepareFlapQuoteBuy] 开始准备 Flap Quote 买入', {
+    tokenAddress: tokenAddress.slice(0, 10),
+    amountInWei: amountInWei.toString(),
+    quoteToken: quoteToken.slice(0, 10)
+  });
+
+  const prepareStart = perf.now();
+  const result = await prepareQuoteFunds({
     tokenAddress,
     quoteToken,
     amountInWei,
@@ -56,4 +67,12 @@ export async function prepareFlapQuoteBuy(params: PrepareFlapQuoteParams) {
     publicClient,
     walletAddress
   });
+  logger.debug(`[PrepareFlapQuoteBuy] Quote 资金准备完成 (${perf.measure(prepareStart).toFixed(2)}ms)`, {
+    quoteAmount: result.quoteAmount.toString(),
+    usedWalletQuote: result.usedWalletQuote
+  });
+
+  logger.debug(`[PrepareFlapQuoteBuy] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
+
+  return result;
 }
