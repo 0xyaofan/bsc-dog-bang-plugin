@@ -2344,8 +2344,16 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
     }
 
+    // 🚀 调试：打印 routeInfo 信息
+    if (routeInfo) {
+      logger.debug(`${channelLabel} RouteInfo: platform=${routeInfo.platform}, readyForPancake=${routeInfo.readyForPancake}, quoteToken=${routeInfo.quoteToken?.slice(0, 10) || 'undefined'}`);
+    } else {
+      logger.debug(`${channelLabel} RouteInfo: null/undefined`);
+    }
+
     // 🚀 Four.meme & Flap 优化：已迁移代币的池子都在 Pancake V2 上，跳过 V3 查询
-    if (quoteToken && routeInfo?.readyForPancake && (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap')) {
+    // 注意：BNB 筹集币种的 quoteToken 是 undefined，所以不检查 quoteToken
+    if (routeInfo?.readyForPancake && (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap')) {
       // Four.meme 已迁移代币：所有池子都在 V2（包括 BNB 和非 BNB 筹集币种）
       // Flap 已迁移代币：所有池子都在 V2（包括 BNB 和非 BNB 筹集币种）
       const platformName = routeInfo.platform === 'four' ? 'Four.meme' : 'Flap';
