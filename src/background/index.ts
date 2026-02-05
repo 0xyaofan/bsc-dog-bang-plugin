@@ -3038,6 +3038,10 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
       // 步骤5: 执行区块链买入交易
       stepStart = perf.now();
       logger.debug('[Buy] 开始区块链操作...');
+      const buyTxStart = perf.now();
+
+      // 5.1: 初始化执行器和判断交易类型
+      let subStepStart = perf.now();
       const nonceExecutor = (label: string, sender: (nonce: number) => Promise<any>) =>
         executeWithNonceRetry(sender, `${resolvedChannelId}:${label}`);
       const useQuoteBridge = shouldUseFourQuote(routeInfo, resolvedChannelId);
@@ -3051,13 +3055,24 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
       const isXModeToken = routeInfo?.platform === 'xmode';
       const shouldUseXModeBuy = isXModeToken && FOUR_CHANNEL_IDS.has(resolvedChannelId);
       const quoteTokenAddress = routeInfo?.quoteToken;
+      logger.debug(`[Buy] 初始化执行器和判断交易类型 (${perf.measure(subStepStart).toFixed(2)}ms)`, {
+        useCustomAggregator,
+        useQuoteBridge,
+        useFlapQuote,
+        shouldUseXModeBuy,
+        channel: resolvedChannelId
+      });
+
       let txHash;
       if (useCustomAggregator) {
+        // 5.2: 自定义聚合器买入
+        subStepStart = perf.now();
         const quoteToken = routeInfo?.quoteToken;
         if (!quoteToken) {
           throw new Error('无法读取募集币种信息，请稍后重试');
         }
         try {
+          logger.debug('[Buy] 开始执行自定义聚合器买入...');
           txHash = await executeCustomAggregatorBuy({
             channelId: resolvedChannelId,
             tokenAddress: normalizedTokenAddress,
@@ -3073,7 +3088,9 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
             gasPriceWei,
             nonceExecutor
           });
+          logger.debug(`[Buy] ✅ 自定义聚合器买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
         } catch (aggregatorError) {
+          logger.debug(`[Buy] ❌ 自定义聚合器买入失败 (${perf.measure(subStepStart).toFixed(2)}ms)`);
           if (isAggregatorUnsupportedError(aggregatorError)) {
             logger.debug('[Aggregator] 当前募集币路径不支持合约交易，自动回退到默认逻辑', {
               channelId: resolvedChannelId,
@@ -3085,8 +3102,10 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
         }
       }
       if (!txHash && useQuoteBridge) {
+        // 5.3: Four.meme Quote 买入
+        subStepStart = perf.now();
         const quoteToken = requireFourQuoteToken(routeInfo);
-        logger.debug('[Buy] 检测到非 BNB 支付，自动触发兑换流程', {
+        logger.debug('[Buy] 开始执行 Four.meme Quote 买入...', {
           quoteToken,
           quoteLabel: resolveQuoteTokenName(quoteToken)
         });
@@ -3099,13 +3118,16 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
           nonceExecutor,
           useEncodedBuy: shouldUseXModeBuy
         });
+        logger.debug(`[Buy] ✅ Four.meme Quote 买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
       }
       if (!txHash && useFlapQuote) {
+        // 5.4: Flap Quote 买入
+        subStepStart = perf.now();
         const quoteToken = routeInfo?.quoteToken;
         if (!quoteToken) {
           throw new Error('无法读取 Flap 募集币种信息，请稍后重试');
         }
-        logger.debug('[Buy] 检测到 Flap 募集币种支付，自动触发兑换流程', {
+        logger.debug('[Buy] 开始执行 Flap Quote 买入...', {
           quoteToken,
           quoteLabel: resolveQuoteTokenName(quoteToken)
         });
@@ -3117,16 +3139,24 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
           gasPriceWei,
           nonceExecutor
         });
+        logger.debug(`[Buy] ✅ Flap Quote 买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
       }
       if (!txHash && shouldUseXModeBuy && isBnbQuote(quoteTokenAddress)) {
+        // 5.5: XMode 直接买入
+        subStepStart = perf.now();
+        logger.debug('[Buy] 开始执行 XMode 直接买入...');
         txHash = await executeXModeDirectBuy({
           tokenAddress: normalizedTokenAddress,
           amountBnb: amount,
           gasPriceWei,
           nonceExecutor
         });
+        logger.debug(`[Buy] ✅ XMode 直接买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
       }
       if (!txHash) {
+        // 5.6: 标准通道买入
+        subStepStart = perf.now();
+        logger.debug(`[Buy] 开始执行标准通道买入 (${resolvedChannelId})...`);
         txHash = await channelHandler.buy({
           publicClient,
           walletClient,
@@ -3140,7 +3170,10 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
           quoteToken: routeInfo?.quoteToken,
           routeInfo: routeInfo
         });
+        logger.debug(`[Buy] ✅ 标准通道买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
       }
+
+      logger.debug(`[Buy] 🎯 总买入交易耗时: ${perf.measure(buyTxStart).toFixed(2)}ms`);
       timer.step(`执行区块链买入交易 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
       // 步骤6: 清除缓存
@@ -3296,6 +3329,10 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
       // 步骤5: 执行区块链卖出交易
       stepStart = perf.now();
       logger.debug('[Sell] 开始区块链操作...');
+      const sellTxStart = perf.now();
+
+      // 5.1: 初始化执行器和判断交易类型
+      let subStepStart = perf.now();
       const nonceExecutor = (label: string, sender: (nonce: number) => Promise<any>) =>
         executeWithNonceRetry(sender, `${resolvedChannelId}:${label}`);
       const useQuoteBridge = shouldUseFourQuote(routeInfo, resolvedChannelId);
@@ -3305,9 +3342,18 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
         resolvedChannelId,
         routeInfo
       );
+      logger.debug(`[Sell] 初始化执行器和判断交易类型 (${perf.measure(subStepStart).toFixed(2)}ms)`, {
+        useCustomAggregator,
+        useQuoteBridge,
+        channel: resolvedChannelId
+      });
+
       let txHash: string | null = null;
       if (useCustomAggregator) {
+        // 5.2: 自定义聚合器卖出
+        subStepStart = perf.now();
         try {
+          logger.debug('[Sell] 开始执行自定义聚合器卖出...');
           txHash = await executeCustomAggregatorSell({
             channelId: resolvedChannelId,
             tokenAddress: normalizedTokenAddress,
@@ -3322,7 +3368,9 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
             gasPriceWei,
             nonceExecutor
           });
+          logger.debug(`[Sell] ✅ 自定义聚合器卖出完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
         } catch (aggregatorError) {
+          logger.debug(`[Sell] ❌ 自定义聚合器卖出失败 (${perf.measure(subStepStart).toFixed(2)}ms)`);
           if (isAggregatorUnsupportedError(aggregatorError)) {
             logger.debug('[Aggregator] 当前卖出路径不支持合约交易，自动回退到默认逻辑', {
               channelId: resolvedChannelId,
@@ -3336,18 +3384,25 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
 
       let pendingQuoteSettlement: Omit<FourQuoteSettlementParams, 'txHash'> | null = null;
       if (!txHash) {
+        // 5.3: 标准通道卖出（可能包含 Quote 兑换）
+        subStepStart = perf.now();
+
         // 性能优化：并发执行 quote balance 查询和卖出交易
         let quoteBalancePromise: Promise<bigint> | null = null;
         let quoteToken: string | null = null;
 
         if (useQuoteBridge) {
+          const quoteBalanceStart = perf.now();
           quoteToken = requireFourQuoteToken(routeInfo);
           quoteBalancePromise = getQuoteBalance(publicClient, quoteToken, walletAccount.address);
-          logger.debug('[Sell] 检测到非 BNB 支付，卖出后将自动兑换', {
+          logger.debug('[Sell] 并发查询 Quote Balance...', {
             quoteToken,
             quoteLabel: resolveQuoteTokenName(quoteToken)
           });
         }
+
+        logger.debug(`[Sell] 开始执行标准通道卖出 (${resolvedChannelId})...`);
+        const sellStart = perf.now();
 
         // 并发执行：卖出交易和 quote balance 查询
         const [sellTxHash, quoteBalanceBefore] = await Promise.all([
@@ -3367,6 +3422,9 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
           quoteBalancePromise || Promise.resolve(0n)
         ]);
 
+        logger.debug(`[Sell] ✅ 标准通道卖出完成 (${perf.measure(sellStart).toFixed(2)}ms)`);
+        logger.debug(`[Sell] ✅ 标准通道卖出总耗时（含并发查询） (${perf.measure(subStepStart).toFixed(2)}ms)`);
+
         txHash = sellTxHash;
 
         if (useQuoteBridge && quoteToken) {
@@ -3382,6 +3440,8 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
       if (!txHash) {
         throw new Error('未能发送卖出交易');
       }
+
+      logger.debug(`[Sell] 🎯 总卖出交易耗时: ${perf.measure(sellTxStart).toFixed(2)}ms`);
       timer.step(`执行区块链卖出交易 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
       // 步骤6: 清除缓存
