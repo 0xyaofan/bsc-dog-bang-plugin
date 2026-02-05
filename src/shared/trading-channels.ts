@@ -530,6 +530,10 @@ export async function prepareTokenSell({ publicClient, tokenAddress, accountAddr
 
 /**
  * 确保代币授权：如果授权不足则执行授权
+ *
+ * 🚀 性能优化：不等待授权交易确认，立即返回
+ * - 返回授权交易的 hash（如果发送了授权）
+ * - 调用方可以使用 nonce 机制确保卖出交易在授权之后执行
  */
 type NonceExecutor = <T>(label: string, sender: (nonce: number) => Promise<T>) => Promise<T>;
 
@@ -557,7 +561,7 @@ async function ensureTokenApproval({
   totalSupply: bigint;
   gasPrice?: number | bigint;
   nonceExecutor?: NonceExecutor;
-}) {
+}): Promise<string | null> {
   if (currentAllowance < amount) {
     logger.debug(`[ensureTokenApproval] 授权代币给 ${spenderAddress.slice(0, 6)}...`);
     const sendApprove = (nonce?: number) =>
@@ -576,12 +580,17 @@ async function ensureTokenApproval({
     const approveHash = nonceExecutor
       ? await nonceExecutor('approve', (nonce) => sendApprove(nonce))
       : await sendApprove();
-    await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    logger.debug('[ensureTokenApproval] 授权完成');
 
-    // 授权成功后更新缓存
+    // 🚀 性能优化：不等待授权确认，立即返回
+    // await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    logger.debug('[ensureTokenApproval] 授权交易已发送（不等待确认）:', approveHash);
+
+    // 授权成功后更新缓存（乐观更新）
     setCachedAllowance(tokenAddress, spenderAddress, totalSupply);
+
+    return approveHash;
   }
+  return null;
 }
 
 function uniquePaths(paths: string[][]) {
@@ -2334,33 +2343,30 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
     }
 
-    // 🚀 Flap 优化：已迁移的非 BNB 筹集币种，池子都在 Pancake V2 上
-    if (quoteToken && routeInfo?.platform === 'flap' && routeInfo?.readyForPancake) {
-      const normalizedQuote = quoteToken.toLowerCase();
-      const normalizedWrapper = nativeWrapper.toLowerCase();
+    // 🚀 Four.meme & Flap 优化：已迁移代币的池子都在 Pancake V2 上，跳过 V3 查询
+    if (quoteToken && routeInfo?.readyForPancake && (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap')) {
+      // Four.meme 已迁移代币：所有池子都在 V2（包括 BNB 和非 BNB 筹集币种）
+      // Flap 已迁移代币：所有池子都在 V2（包括 BNB 和非 BNB 筹集币种）
+      const platformName = routeInfo.platform === 'four' ? 'Four.meme' : 'Flap';
+      logger.info(`${channelLabel} 🚀 ${platformName} 已迁移代币，直接使用 V2 路径（跳过 V3）`);
 
-      // 如果 quoteToken 不是 WBNB，说明是非 BNB 筹集币种
-      if (normalizedQuote !== normalizedWrapper) {
-        logger.info(`${channelLabel} 🚀 Flap 已迁移非 BNB 筹集币种，直接使用 V2 QuoteToken 路径`);
-
-        try {
-          // 直接查询 V2 QuoteToken 路径，跳过 V3
-          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken);
-          if (result && result.amountOut > 0n) {
-            logger.perf(`${channelLabel} ✅ Flap V2 QuoteToken 路径成功，耗时: ${Date.now() - startTime}ms`);
-            // 缓存路由，标记为 V2
-            updateTokenTradeHint(tokenAddress, channelId, direction, {
-              routerAddress: contractAddress,
-              path: result.path,
-              mode: 'v2'
-            });
-            updateRouteLoadingStatus(tokenAddress, direction, 'success');
-            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
-          }
-        } catch (error) {
-          logger.warn(`${channelLabel} Flap V2 QuoteToken 路径失败，fallback 到正常流程: ${error?.message || error}`);
-          // 失败后继续正常流程
+      try {
+        // 直接查询 V2 路径，跳过 V3
+        const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken);
+        if (result && result.amountOut > 0n) {
+          logger.perf(`${channelLabel} ✅ ${platformName} V2 路径成功，耗时: ${Date.now() - startTime}ms`);
+          // 缓存路由，标记为 V2
+          updateTokenTradeHint(tokenAddress, channelId, direction, {
+            routerAddress: contractAddress,
+            path: result.path,
+            mode: 'v2'
+          });
+          updateRouteLoadingStatus(tokenAddress, direction, 'success');
+          return { kind: 'v2', path: result.path, amountOut: result.amountOut };
         }
+      } catch (error) {
+        logger.warn(`${channelLabel} ${platformName} V2 路径失败，fallback 到正常流程: ${error?.message || error}`);
+        // 失败后继续正常流程
       }
     }
 
@@ -2851,7 +2857,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         hasAccurateEstimate = false; // 标记为低精度预估
       }
 
-      // 性能优化：优先使用 tokenInfo 中的授权信息（来自现有缓存）
+      // 🚀 性能优化：优先使用 tokenInfo 中的授权信息（来自现有缓存）
       // 如果 tokenInfo 包含授权信息，直接使用，避免链上查询
       let v2AllowanceFromCache: bigint | null = null;
       let v3AllowanceFromCache: bigint | null = null;
@@ -2869,22 +2875,28 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         }
       }
 
-      // 性能优化：并行查询 V2 和 V3 授权，避免等待路由结果
-      // 这样无论最终使用哪个路由，都不需要再查询授权
-      // 优先使用 tokenInfo 中的授权，如果没有才查询链上
-      const v2AllowancePromise = smartRouterAddress
+      // 🚀 性能优化：如果没有 tokenInfo 缓存，检查本地授权缓存
+      // 这样可以在并发查询之前就知道是否需要查询授权
+      if (v2AllowanceFromCache === null && contractAddress) {
+        const cached = getCachedAllowance(tokenAddress, contractAddress);
+        if (cached !== null) {
+          v2AllowanceFromCache = cached;
+          logger.debug(`${channelLabel} 使用本地 V2 授权缓存: ${cached}`);
+        }
+      }
+      if (v3AllowanceFromCache === null && smartRouterAddress) {
+        const cached = getCachedAllowance(tokenAddress, smartRouterAddress);
+        if (cached !== null) {
+          v3AllowanceFromCache = cached;
+          logger.debug(`${channelLabel} 使用本地 V3 授权缓存: ${cached}`);
+        }
+      }
+
+      // 🚀 性能优化：只有在缓存未命中时才并发查询授权
+      // 如果缓存已经有授权信息，直接使用，避免不必要的 RPC 调用
+      const v2AllowancePromise = (contractAddress && v2AllowanceFromCache === null)
         ? (async () => {
-            // 优先使用 tokenInfo 中的授权
-            if (v2AllowanceFromCache !== null) {
-              return v2AllowanceFromCache;
-            }
-            // 其次使用我们自己的缓存
-            const cached = getCachedAllowance(tokenAddress, contractAddress);
-            if (cached !== null) {
-              logger.debug(`${channelLabel} 使用 V2 授权缓存: ${cached}`);
-              return cached;
-            }
-            // 最后查询链上
+            // 查询链上授权
             try {
               const allowance = await publicClient.readContract({
                 address: tokenAddress,
@@ -2893,27 +2905,18 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
                 args: [account.address, contractAddress]
               });
               setCachedAllowance(tokenAddress, contractAddress, allowance);
+              logger.debug(`${channelLabel} 查询链上 V2 授权: ${allowance}`);
               return allowance;
             } catch (err) {
               logger.warn(`${channelLabel} V2 授权查询失败: ${err?.message || err}`);
               return 0n;
             }
           })()
-        : Promise.resolve(null);
+        : Promise.resolve(v2AllowanceFromCache);
 
-      const v3AllowancePromise = smartRouterAddress
+      const v3AllowancePromise = (smartRouterAddress && v3AllowanceFromCache === null)
         ? (async () => {
-            // 优先使用 tokenInfo 中的授权
-            if (v3AllowanceFromCache !== null) {
-              return v3AllowanceFromCache;
-            }
-            // 其次使用我们自己的缓存
-            const cached = getCachedAllowance(tokenAddress, smartRouterAddress);
-            if (cached !== null) {
-              logger.debug(`${channelLabel} 使用 V3 授权缓存: ${cached}`);
-              return cached;
-            }
-            // 最后查询链上
+            // 查询链上授权
             try {
               const allowance = await publicClient.readContract({
                 address: tokenAddress,
@@ -2922,13 +2925,14 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
                 args: [account.address, smartRouterAddress]
               });
               setCachedAllowance(tokenAddress, smartRouterAddress, allowance);
+              logger.debug(`${channelLabel} 查询链上 V3 授权: ${allowance}`);
               return allowance;
             } catch (err) {
               logger.warn(`${channelLabel} V3 授权查询失败: ${err?.message || err}`);
               return 0n;
             }
           })()
-        : Promise.resolve(null);
+        : Promise.resolve(v3AllowanceFromCache);
 
       // 🚀 性能优化：检查是否有有效的卖出路由缓存
       const hint = getTokenTradeHint(tokenAddress);
@@ -2975,13 +2979,11 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       // 3. 如果已经使用实际金额查询，跳过重查
       let finalRoutePlan = routePlan;
       if (!shouldUseActualAmount) {
-        const amountDiff = amountToSell > estimatedAmount
-          ? amountToSell - estimatedAmount
-          : estimatedAmount - amountToSell;
-
-        // 使用 PancakeSwap SDK 计算价格影响百分比
-        const priceImpact = calculatePriceImpact(estimatedAmount, amountToSell);
-        const diffPercent = parseFloat(priceImpact.toSignificant(4));
+        // 🚀 性能优化：修复金额差异计算逻辑
+        // 计算金额差异百分比（避免除以 0）
+        const diffPercent = estimatedAmount > 0n
+          ? Number((amountToSell > estimatedAmount ? amountToSell - estimatedAmount : estimatedAmount - amountToSell) * 10000n / estimatedAmount) / 100
+          : (amountToSell > 0n ? 100 : 0);
 
         // 根据预估精度选择阈值
         const reQueryThreshold = hasAccurateEstimate ? 10 : 5;
@@ -3512,4 +3514,4 @@ function getChannel(channelId) {
   return channel;
 }
 
-export { getChannel, ChannelRouter, clearAllowanceCache };
+export { getChannel, ChannelRouter, clearAllowanceCache, getCachedAllowance };

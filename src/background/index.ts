@@ -48,8 +48,8 @@ import {
   parseUnits,
   withCache
 } from '../shared/viem-helper.js';
-import { encodeAbiParameters, type Address } from 'viem';
-import { getChannel, setPancakePreferredMode, clearAllowanceCache } from '../shared/trading-channels.js';
+import { encodeAbiParameters, parseEther, type Address } from 'viem';
+import { getChannel, setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, getCachedAllowance } from '../shared/trading-channels.js';
 import { TxWatcher } from '../shared/tx-watcher.js';
 import { dedupePromise } from '../shared/promise-dedupe.js';
 import {
@@ -2429,6 +2429,125 @@ async function handlePrefetchApprovalStatus({ tokenAddress }: { tokenAddress?: s
   }
 }
 
+/**
+ * 查询缓存信息（调试用）
+ */
+async function handleGetCacheInfo({ tokenAddress }: { tokenAddress?: string } = {}) {
+  try {
+    if (!tokenAddress) {
+      return { success: false, error: '缺少 tokenAddress 参数' };
+    }
+
+    const normalizedAddress = normalizeAddressValue(tokenAddress);
+
+    // 获取路由缓存
+    const tradeHint = getTokenTradeHint(normalizedAddress);
+
+    // 获取授权缓存
+    const allowances: Record<string, string> = {};
+    if (walletAccount) {
+      const pancakeRouter = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
+      const smartRouter = '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4';
+
+      const pancakeAllowance = getCachedAllowance(normalizedAddress, pancakeRouter);
+      const smartRouterAllowance = getCachedAllowance(normalizedAddress, smartRouter);
+
+      if (pancakeAllowance !== null) {
+        allowances.pancake = pancakeAllowance.toString();
+      }
+      if (smartRouterAllowance !== null) {
+        allowances.smartRouter = smartRouterAllowance.toString();
+      }
+    }
+
+    // 格式化时间戳
+    const formatTimestamp = (ts?: number) => {
+      if (!ts) return null;
+      const age = Math.floor((Date.now() - ts) / 1000);
+      return {
+        timestamp: ts,
+        ageSeconds: age,
+        ageMinutes: Math.floor(age / 60)
+      };
+    };
+
+    return {
+      success: true,
+      tokenAddress: normalizedAddress,
+      cache: {
+        route: tradeHint ? {
+          buyRouteStatus: tradeHint.buyRouteStatus || 'idle',
+          sellRouteStatus: tradeHint.sellRouteStatus || 'idle',
+          buyRouteLoadedAt: formatTimestamp(tradeHint.buyRouteLoadedAt),
+          sellRouteLoadedAt: formatTimestamp(tradeHint.sellRouteLoadedAt),
+          lastMode: tradeHint.lastMode,
+          lastBuyPath: tradeHint.lastBuyPath,
+          lastSellPath: tradeHint.lastSellPath,
+          channelId: tradeHint.channelId,
+          updatedAt: formatTimestamp(tradeHint.updatedAt)
+        } : null,
+        allowances
+      }
+    };
+  } catch (error) {
+    logger.error('[GetCacheInfo] Error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * 预加载交易路由
+ * 在用户切换到代币页面时后台预加载买入和卖出路由
+ * 买入路由优先，卖出路由并发执行但不阻塞
+ */
+async function handlePrefetchRoute({ tokenAddress }: { tokenAddress?: string } = {}) {
+  try {
+    if (!tokenAddress || !walletAccount || !publicClient) {
+      return { success: false, cached: false };
+    }
+
+    // 获取路由信息
+    const route = await resolveTokenRoute(tokenAddress, { force: false });
+    if (!route || route.lockReason) {
+      return { success: false, cached: false };
+    }
+
+    const channelId = route.preferredChannel || 'pancake';
+    let channelHandler: any;
+    try {
+      channelHandler = getChannel(channelId);
+    } catch (error) {
+      logger.debug('[Prefetch] 未知通道，使用 Pancake:', error);
+      channelHandler = getChannel('pancake');
+    }
+
+    // 预加载买入路由（使用小额 BNB）
+    const buyAmount = parseEther('0.001'); // 0.001 BNB
+    const buyPromise = channelHandler.quoteBuy?.({
+      publicClient,
+      tokenAddress,
+      amount: buyAmount
+    }).catch(() => null);
+
+    // 预加载卖出路由（使用 1 token）
+    const sellAmount = parseEther('1'); // 1 token
+    const sellPromise = channelHandler.quoteSell?.({
+      publicClient,
+      tokenAddress,
+      amount: sellAmount
+    }).catch(() => null);
+
+    // 并发执行，但不等待结果（后台预加载）
+    Promise.all([buyPromise, sellPromise]).catch(() => {});
+
+    return { success: true, cached: true };
+  } catch (error) {
+    // 预加载失败静默处理
+    logger.debug('[Prefetch] Route prefetch failed:', error);
+    return { success: false, cached: false };
+  }
+}
+
 const ACTION_HANDLER_MAP = {
   import_wallet: handleImportWallet,
   unlock_wallet: handleUnlockWallet,
@@ -2447,7 +2566,10 @@ const ACTION_HANDLER_MAP = {
   estimate_sell_amount: handleEstimateSellAmount,
   // 预加载处理器
   prefetch_token_balance: handlePrefetchTokenBalance,
-  prefetch_approval_status: handlePrefetchApprovalStatus
+  prefetch_approval_status: handlePrefetchApprovalStatus,
+  prefetch_route: handlePrefetchRoute,
+  // 调试工具
+  get_cache_info: handleGetCacheInfo
 };
 
 async function processExtensionRequest(action: string, data: any = {}) {
@@ -3582,16 +3704,41 @@ async function handleCheckTokenApproval({ tokenAddress, channel = 'pancake' }) {
         spenderAddress = CONTRACTS.PANCAKE_ROUTER;
     }
 
-    // 查询当前授权额度
-    const allowance = await executeWithRetry(async () => publicClient.readContract({
-      address: tokenAddress,
-      abi: ERC20_ABI,
-      functionName: 'allowance',
-      args: [walletAccount.address, spenderAddress]
-    }));
+    // 🚀 性能优化：优先使用缓存，避免频繁查询链上
+    // 1. 先尝试从 tokenInfo 缓存获取
+    const normalizedTokenAddress = normalizeTokenAddressValue(tokenAddress);
+    const tokenInfo = normalizedTokenAddress ? readCachedTokenInfo(normalizedTokenAddress, walletAccount.address, true) : null;
 
-    const metadata = await ensureTokenMetadata(tokenAddress, { needTotalSupply: true });
-    const totalSupply = metadata.totalSupply ?? 0n;
+    let allowance: bigint | null = null;
+    let totalSupply: bigint | null = null;
+
+    // 从 tokenInfo 缓存获取授权信息
+    if (tokenInfo?.allowances) {
+      const channelKey = channel === 'pancake' ? 'pancake' : channel === 'four' || channel === 'xmode' ? 'four' : 'flap';
+      if (tokenInfo.allowances[channelKey]) {
+        allowance = BigInt(tokenInfo.allowances[channelKey]);
+        logger.debug('[Check Approval] 使用 tokenInfo 缓存的授权:', allowance.toString());
+      }
+    }
+
+    // 如果缓存未命中，查询链上
+    if (allowance === null) {
+      allowance = await executeWithRetry(async () => publicClient.readContract({
+        address: tokenAddress,
+        abi: ERC20_ABI,
+        functionName: 'allowance',
+        args: [walletAccount.address, spenderAddress]
+      }));
+      logger.debug('[Check Approval] 查询链上授权:', allowance.toString());
+    }
+
+    // 获取 totalSupply（优先使用缓存）
+    if (tokenInfo?.totalSupply) {
+      totalSupply = BigInt(tokenInfo.totalSupply);
+    } else {
+      const metadata = await ensureTokenMetadata(tokenAddress, { needTotalSupply: true });
+      totalSupply = metadata.totalSupply ?? 0n;
+    }
 
     // 如果授权额度大于总供应量的50%，认为已授权
     const approved = allowance > totalSupply / 2n;
