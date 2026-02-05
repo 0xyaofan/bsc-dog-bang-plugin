@@ -26,7 +26,7 @@ import {
 } from '../shared/viem-helper.js';
 import { prepareTokenSell } from '../shared/trading-channels.js';
 import type { Address } from 'viem';
-import { PerformanceTimer } from '../shared/performance.js';
+import { PerformanceTimer, perf } from '../shared/performance.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const V3_FEE_TIERS = [100, 250, 500, 2500, 10000];
@@ -537,6 +537,7 @@ async function resolveSellSwapMode(publicClient: any, quoteToken: string): Promi
 }
 
 export async function executeCustomAggregatorBuy(params: AggregatorBuyParams) {
+  const fnStart = perf.now();
   const {
     channelId,
     tokenAddress,
@@ -553,6 +554,8 @@ export async function executeCustomAggregatorBuy(params: AggregatorBuyParams) {
     nonceExecutor
   } = params;
 
+  // 5.2.1: 参数验证
+  let stepStart = perf.now();
   const timer = new PerformanceTimer('agg-buy');
   const normalizedAggregator = normalizeAggregatorAddress(aggregatorAddress);
   if (!normalizedAggregator) {
@@ -567,7 +570,10 @@ export async function executeCustomAggregatorBuy(params: AggregatorBuyParams) {
   if (amountWei <= 0n) {
     throw new Error('买入数量必须大于 0');
   }
+  logger.debug(`[Aggregator] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.2: 规划 Quote 兑换路径
+  stepStart = perf.now();
   const quotePlan = await planAggregatorQuoteSwap({
     publicClient,
     quoteToken,
@@ -575,7 +581,13 @@ export async function executeCustomAggregatorBuy(params: AggregatorBuyParams) {
     slippage
   });
   const swapMode = quotePlan.swapMode;
+  logger.debug(`[Aggregator] 规划 Quote 兑换路径完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+    swapMode: swapMode.kind,
+    minPaymentAmount: quotePlan.minPaymentAmount.toString()
+  });
 
+  // 5.2.3: 构建交易参数
+  stepStart = perf.now();
   const deadline = BigInt(Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS);
   const args = buildAggregatorArgs(channelId, {
     tokenAddress,
@@ -587,7 +599,10 @@ export async function executeCustomAggregatorBuy(params: AggregatorBuyParams) {
     swapMode
   });
   const functionName = channelId === 'flap' ? 'buyFlap' : 'buyFourMeme';
+  logger.debug(`[Aggregator] 构建交易参数完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.4: 执行买入交易
+  stepStart = perf.now();
   logger.debug('[Aggregator] 使用自定义合约买入', {
     channelId,
     tokenAddress,
@@ -614,11 +629,15 @@ export async function executeCustomAggregatorBuy(params: AggregatorBuyParams) {
     return hash;
   });
   timer.step('send_tx');
+  logger.debug(`[Aggregator] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { txHash });
+
+  logger.debug(`[Aggregator] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
 
   return txHash;
 }
 
 export async function executeCustomAggregatorSell(params: AggregatorSellParams) {
+  const fnStart = perf.now();
   const {
     channelId,
     tokenAddress,
@@ -634,6 +653,8 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     nonceExecutor
   } = params;
 
+  // 5.2.1: 参数验证
+  let stepStart = perf.now();
   if (!FOUR_AGGREGATOR_CHANNELS.has(channelId)) {
     throw createUnsupportedPathError(new Error(`Sell aggregator not supported for ${channelId}`));
   }
@@ -653,7 +674,10 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     throw new Error('卖出比例无效');
   }
   const sellPercent = Math.min(100, Math.max(1, Math.floor(percentValue)));
+  logger.debug(`[Aggregator] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.2: 准备卖出状态（查询余额和授权）
+  stepStart = perf.now();
   const fourTokenManager = CONTRACTS.FOUR_TOKEN_MANAGER_V2 as Address;
   const aggregatorSpender = normalizedAggregator as Address;
   const quoteAllowanceCacheKey = createAllowanceCacheKey(quoteToken, account.address, aggregatorSpender);
@@ -669,7 +693,12 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
   if (amountToSell <= 0n) {
     throw new Error('卖出数量必须大于 0');
   }
+  logger.debug(`[Aggregator] 准备卖出状态完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+    amountToSell: amountToSell.toString()
+  });
 
+  // 5.2.3: 确保代币授权（Token -> FourTokenManager）
+  stepStart = perf.now();
   const timer = new PerformanceTimer('agg-sell');
   await ensureAggregatorTokenApproval({
     publicClient,
@@ -684,7 +713,10 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     gasPriceWei,
     nonceExecutor
   });
+  logger.debug(`[Aggregator] 确保代币授权完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.4: 确保 Quote Token 授权（Quote -> Aggregator）
+  stepStart = perf.now();
   const quoteAllowance = await readAllowanceOrZero(
     publicClient,
     quoteToken,
@@ -711,7 +743,10 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     nonceExecutor,
     allowanceCacheKey: quoteAllowanceCacheKey
   });
+  logger.debug(`[Aggregator] 确保 Quote Token 授权完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.5: 构建交易参数
+  stepStart = perf.now();
   const swapMode = await resolveSellSwapMode(publicClient, quoteToken);
   const minPaymentAmount = 0n;
   const minBnbAmount = 1n;
@@ -740,7 +775,10 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     functionName: 'sellFourMeme',
     args
   });
+  logger.debug(`[Aggregator] 构建交易参数完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.6: 模拟交易
+  stepStart = perf.now();
   let simulationError: any = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -780,7 +818,10 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     logger.warn('[Aggregator] 卖出模拟失败，回退到默认逻辑:', simulationError?.shortMessage || simulationError?.message || simulationError);
     throw createUnsupportedPathError(simulationError);
   }
+  logger.debug(`[Aggregator] 模拟交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.2.7: 执行卖出交易
+  stepStart = perf.now();
   const txHash = await nonceExecutor('aggregator-sell', async (nonce) => {
     const hash = await walletClient.sendTransaction({
       account,
@@ -795,6 +836,9 @@ export async function executeCustomAggregatorSell(params: AggregatorSellParams) 
     return hash;
   });
   timer.step('send_tx');
+  logger.debug(`[Aggregator] 执行卖出交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { txHash });
+
+  logger.debug(`[Aggregator] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
 
   return txHash;
 }

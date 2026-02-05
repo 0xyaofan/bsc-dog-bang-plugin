@@ -16,6 +16,7 @@ import { parseEther, parseUnits, formatEther, encodeFunctionData, withCache } fr
 import { dedupePromise } from './promise-dedupe.js';
 import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
 import { calculatePriceImpact, calculateMinAmountOut } from './pancake-sdk-utils.js';
+import { perf } from './performance.js';
 
 // ========== 路径缓存（优化4：减少 getAmountsOut 调用）==========
 // 注意：此缓存存储的是兑换金额（价格敏感数据），必须保持短期缓存以反映市场价格变化
@@ -2880,16 +2881,21 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
   return {
     async buy({ publicClient, walletClient, account, chain, tokenAddress, amount, slippage, gasPrice, nonceExecutor, quoteToken, routeInfo }) {
-      const buyStartTime = Date.now();
+      const fnStart = perf.now();
       logger.perf(`${channelLabel} ⏱️ 开始买入交易`);
       logger.debug(`${channelLabel} 买入:`, { tokenAddress, amount, slippage, quoteToken: quoteToken?.slice(0, 10) });
 
+      // 5.6.1: 解析买入金额
+      let stepStart = perf.now();
       const amountIn = parseEther(amount);
+      logger.debug(`${channelLabel} 解析买入金额完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
-      // 步骤1: 查询最佳路由
-      const routeStartTime = Date.now();
+      // 5.6.2: 查询最佳路由
+      stepStart = perf.now();
       const routePlan = await findBestRoute('buy', publicClient, tokenAddress, amountIn, quoteToken, routeInfo);
-      logger.perf(`${channelLabel} ⏱️ 路由查询完成，耗时: ${Date.now() - routeStartTime}ms`);
+      logger.debug(`${channelLabel} 查询最佳路由完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+        routeKind: routePlan.kind
+      });
 
       const deadline = Math.floor(Date.now() / 1000) + TX_CONFIG.DEADLINE_SECONDS;
 
@@ -2898,9 +2904,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         updateTokenTradeHint(tokenAddress, channelId, 'buy', { routerAddress: contractAddress, path, mode: 'v2' });
         const amountOutMin = calculateMinAmountOut(amountOut, slippage);
 
-        // 步骤2: 准备并发送 V2 交易
-        const txStartTime = Date.now();
-        logger.perf(`${channelLabel} ⏱️ 开始发送 V2 交易...`);
+        // 5.6.3: 发送 V2 交易
+        stepStart = perf.now();
+        logger.debug(`${channelLabel} 开始发送 V2 交易...`);
 
         const sendSwap = (nonce?: number) =>
           sendContractTransaction({
@@ -2927,8 +2933,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           ? await nonceExecutor('buy', (nonce) => sendSwap(nonce))
           : await sendSwap();
 
-        logger.perf(`${channelLabel} ⏱️ V2 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
-        logger.perf(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
+        logger.debug(`${channelLabel} V2 交易已发送 (${perf.measure(stepStart).toFixed(2)}ms)`);
+        logger.debug(`${channelLabel} ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
         logger.debug(`${channelLabel} 交易发送:`, hash);
         return hash;
       }
@@ -2947,6 +2953,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
         logger.info(`${channelLabel} 执行混合 V2/V3 路由交易: ${routePlan.mixedRouteInfo.description}`);
 
+        // 5.6.3: 执行混合路由交易
+        stepStart = perf.now();
         const hash = await executeMixedV2V3Trade({
           publicClient,
           walletClient,
@@ -2971,6 +2979,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           channelLabel
         });
 
+        logger.debug(`${channelLabel} 混合路由交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
+        logger.debug(`${channelLabel} ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
         logger.info(`${channelLabel} 混合路由交易完成:`, hash);
         return hash;
       }
@@ -2988,9 +2998,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       const amountOutMin = calculateMinAmountOut(routePlan.amountOut, slippage);
       const isSingleHop = v3Route.tokens.length === 2;
 
-      // 步骤2: 准备并发送 V3 交易
-      const txStartTime = Date.now();
-      logger.perf(`${channelLabel} ⏱️ 开始发送 V3 交易...`);
+      // 5.6.3: 发送 V3 交易
+      stepStart = perf.now();
+      logger.debug(`${channelLabel} 开始发送 V3 交易...`);
 
       const sendV3Swap = (nonce?: number) => {
         if (isSingleHop) {
@@ -3056,8 +3066,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         ? await nonceExecutor('buy', (nonce) => sendV3Swap(nonce))
         : await sendV3Swap();
 
-      logger.perf(`${channelLabel} ⏱️ V3 交易已发送，耗时: ${Date.now() - txStartTime}ms`);
-      logger.perf(`${channelLabel} ⏱️ 买入交易总耗时: ${Date.now() - buyStartTime}ms`);
+      logger.debug(`${channelLabel} V3 交易已发送 (${perf.measure(stepStart).toFixed(2)}ms)`);
+      logger.debug(`${channelLabel} ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
       logger.debug(`${channelLabel} 交易发送(V3):`, hash);
       return hash;
       } else {
@@ -3066,6 +3076,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     },
 
     async sell({ publicClient, walletClient, account, chain, tokenAddress, percent, slippage, gasPrice, tokenInfo, nonceExecutor, routeInfo }) {
+      const fnStart = perf.now();
       logger.debug(`${channelLabel} 卖出:`, { tokenAddress, percent, slippage });
 
       // 从 tokenInfo 获取 quoteToken
@@ -3074,7 +3085,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         logger.debug(`${channelLabel} QuoteToken: ${quoteToken.slice(0, 10)}`);
       }
 
-      // 性能优化：并发执行 prepareTokenSell 和 findBestRoute（使用预估金额）
+      // 5.3.1: 并发执行准备卖出和预估金额计算
+      let stepStart = perf.now();
       const preparePromise = prepareTokenSell({
         publicClient,
         tokenAddress,
@@ -3098,6 +3110,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         estimatedAmount = parseEther('1');
         hasAccurateEstimate = false; // 标记为低精度预估
       }
+      logger.debug(`${channelLabel} 预估金额计算完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+        hasAccurateEstimate,
+        estimatedAmount: estimatedAmount.toString()
+      });
 
       // 🚀 性能优化：优先使用 tokenInfo 中的授权信息（来自现有缓存）
       // 如果 tokenInfo 包含授权信息，直接使用，避免链上查询
@@ -3188,6 +3204,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       // 🚀 性能优化：检查授权是否正在进行中（修复问题2）
       // 如果买入时并发授权还在 pending，卖出需要等待授权完成
+      stepStart = perf.now();
       const v2ApprovalStatus = contractAddress ? getApprovalStatus(tokenAddress, contractAddress) : null;
       const v3ApprovalStatus = smartRouterAddress ? getApprovalStatus(tokenAddress, smartRouterAddress) : null;
 
@@ -3206,7 +3223,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           logger.warn(`${channelLabel} V3 授权等待超时或失败`);
         }
       }
+      logger.debug(`${channelLabel} 检查授权状态完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+      // 5.3.2: 并发查询路由和授权
+      stepStart = perf.now();
       // 🚀 性能优化：检查是否有有效的卖出路由缓存
       const hint = getTokenTradeHint(tokenAddress);
       const hasSellCache = isRouteCacheValid(hint, 'sell');
@@ -3242,7 +3262,12 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           v3AllowancePromise
         ]);
       }
+      logger.debug(`${channelLabel} 并发查询路由和授权完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+        routeKind: routePlan.kind
+      });
 
+      // 5.3.3: 处理路由重查（如果需要）
+      stepStart = perf.now();
       const { totalSupply, amountToSell } = initialState;
       let allowanceValue = initialState.allowance;
 
@@ -3267,7 +3292,10 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           logger.debug(`${channelLabel} 实际金额与预估差异 ${diffPercent.toFixed(2)}%，在阈值内，使用预估路由`);
         }
       }
+      logger.debug(`${channelLabel} 路由重查处理完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+      // 5.3.4: 确保代币授权
+      stepStart = perf.now();
       // 使用预查询的授权值（已在并发查询中获取）
       const spenderAddress = finalRoutePlan.kind === 'v2' ? contractAddress : smartRouterAddress;
       if (finalRoutePlan.kind === 'v2' && v2AllowanceValue !== null) {
@@ -3299,7 +3327,12 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         gasPrice,
         nonceExecutor
       });
+      logger.debug(`${channelLabel} 确保代币授权完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+        approveHash: approveHash || 'none'
+      });
 
+      // 5.3.5: 发送卖出交易
+      stepStart = perf.now();
       // 🐛 修复：如果刚刚发送了授权交易，禁用动态 Gas 估算
       // 因为授权交易还在 pending，Gas 估算会失败（链上状态还是未授权）
       // 虽然有 fallback 机制，但会产生不必要的错误日志
@@ -3340,6 +3373,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           throw new Error(`无效的截止时间: ${deadline}`);
         }
 
+        logger.debug(`${channelLabel} 开始发送 V2 卖出交易...`);
         const sendSell = (nonce?: number) =>
           sendContractTransaction({
             walletClient,
@@ -3364,6 +3398,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           ? await nonceExecutor('sell', (nonce) => sendSell(nonce))
           : await sendSell();
 
+        logger.debug(`${channelLabel} V2 卖出交易已发送 (${perf.measure(stepStart).toFixed(2)}ms)`);
+        logger.debug(`${channelLabel} ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
         logger.debug(`${channelLabel} 交易发送:`, hash);
         return hash;
       }
@@ -3427,6 +3463,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       });
       const calls = [swapCallData, unwrapCallData];
 
+      logger.debug(`${channelLabel} 开始发送 V3 卖出交易...`);
       const sendV3Sell = (nonce?: number) =>
         sendContractTransaction({
           walletClient,
@@ -3451,6 +3488,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         ? await nonceExecutor('sell', (nonce) => sendV3Sell(nonce))
         : await sendV3Sell();
 
+      logger.debug(`${channelLabel} V3 卖出交易已发送 (${perf.measure(stepStart).toFixed(2)}ms)`);
+      logger.debug(`${channelLabel} ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
       logger.debug(`${channelLabel} 交易发送(V3):`, hash);
       return hash;
       } else {

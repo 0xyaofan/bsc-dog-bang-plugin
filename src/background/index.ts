@@ -401,7 +401,11 @@ async function executeFourQuoteBuy(params: {
   nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
   useEncodedBuy?: boolean;
 }) {
+  const fnStart = perf.now();
   const { tokenAddress, amountBnb, slippage, quoteToken, gasPriceWei, nonceExecutor, useEncodedBuy = false } = params;
+
+  // 5.3.1: 参数验证
+  let stepStart = perf.now();
   assertWalletReadyForFourQuote();
   const amountStr = typeof amountBnb === 'string' ? amountBnb : amountBnb?.toString?.() || '0';
   let amountWei: bigint;
@@ -413,7 +417,10 @@ async function executeFourQuoteBuy(params: {
   if (amountWei <= 0n) {
     throw new Error('买入数量必须大于 0');
   }
+  logger.debug(`[FourQuote] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.3.2: 准备 Quote 买入（BNB 兑换为 Quote Token）
+  stepStart = perf.now();
   const swapContext = buildFourSwapContext(gasPriceWei, nonceExecutor);
   const { quoteAmount, usedWalletQuote } = await prepareFourQuoteBuy({
     tokenAddress,
@@ -424,7 +431,13 @@ async function executeFourQuoteBuy(params: {
     publicClient,
     walletAddress: walletAccount.address
   });
+  logger.debug(`[FourQuote] 准备 Quote 买入完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+    quoteAmount: quoteAmount.toString(),
+    usedWalletQuote
+  });
 
+  // 5.3.3: 执行买入交易
+  stepStart = perf.now();
   let buyHash: string;
   if (useEncodedBuy) {
     buyHash = await sendFourEncodedBuy({
@@ -454,8 +467,9 @@ async function executeFourQuoteBuy(params: {
       return hash;
     });
   }
+  logger.debug(`[FourQuote] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { buyHash });
 
-  logger.debug('[FourQuote] 已使用募集币种完成买入', {
+  logger.debug(`[FourQuote] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`, {
     token: tokenAddress,
     quoteToken,
     quoteAmount: quoteAmount.toString(),
@@ -474,7 +488,11 @@ async function executeFlapQuoteBuy(params: {
   gasPriceWei: bigint;
   nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
 }) {
+  const fnStart = perf.now();
   const { tokenAddress, amountBnb, slippage, quoteToken, gasPriceWei, nonceExecutor } = params;
+
+  // 5.4.1: 参数验证
+  let stepStart = perf.now();
   assertWalletReadyForFourQuote();
   const amountStr = typeof amountBnb === 'string' ? amountBnb : amountBnb?.toString?.() || '0';
   let amountWei: bigint;
@@ -486,7 +504,10 @@ async function executeFlapQuoteBuy(params: {
   if (amountWei <= 0n) {
     throw new Error('买入数量必须大于 0');
   }
+  logger.debug(`[FlapQuote] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.4.2: 准备 Quote 买入（BNB 兑换为 Quote Token）
+  stepStart = perf.now();
   const swapContext = buildFourSwapContext(gasPriceWei, nonceExecutor);
   const { quoteAmount, usedWalletQuote } = await prepareFlapQuoteBuy({
     tokenAddress,
@@ -497,7 +518,13 @@ async function executeFlapQuoteBuy(params: {
     publicClient,
     walletAddress: walletAccount.address
   });
+  logger.debug(`[FlapQuote] 准备 Quote 买入完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+    quoteAmount: quoteAmount.toString(),
+    usedWalletQuote
+  });
 
+  // 5.4.3: 查询 Flap Portal 报价
+  stepStart = perf.now();
   const expected = await publicClient.readContract({
     address: CONTRACTS.FLAP_PORTAL,
     abi: FLAP_PORTAL_ABI,
@@ -514,7 +541,13 @@ async function executeFlapQuoteBuy(params: {
   }
   const slippageBps = resolveSwapSlippageBps(slippage);
   const minTokens = expectedTokens * BigInt(10000 - slippageBps) / 10000n;
+  logger.debug(`[FlapQuote] 查询 Flap Portal 报价完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
+    expectedTokens: expectedTokens.toString(),
+    minTokens: minTokens.toString()
+  });
 
+  // 5.4.4: 执行买入交易
+  stepStart = perf.now();
   const txHash = await nonceExecutor('flap-quote-buy', async (nonce) => {
     const hash = await walletClient.sendTransaction({
       account: walletAccount,
@@ -537,8 +570,9 @@ async function executeFlapQuoteBuy(params: {
     });
     return hash;
   });
+  logger.debug(`[FlapQuote] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { txHash });
 
-  logger.debug('[FlapQuote] 已使用募集币种完成买入', {
+  logger.debug(`[FlapQuote] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`, {
     token: tokenAddress,
     quoteToken,
     quoteAmount: quoteAmount.toString(),
@@ -554,7 +588,11 @@ async function executeXModeDirectBuy(params: {
   gasPriceWei: bigint;
   nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
 }) {
+  const fnStart = perf.now();
   const { tokenAddress, amountBnb, gasPriceWei, nonceExecutor } = params;
+
+  // 5.5.1: 参数验证
+  let stepStart = perf.now();
   assertWalletReadyForFourQuote();
   const amountStr = typeof amountBnb === 'string' ? amountBnb : amountBnb?.toString?.() || '0';
   let amountWei: bigint;
@@ -566,7 +604,10 @@ async function executeXModeDirectBuy(params: {
   if (amountWei <= 0n) {
     throw new Error('买入数量必须大于 0');
   }
+  logger.debug(`[XMode] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
+  // 5.5.2: 执行 XMode 买入交易
+  stepStart = perf.now();
   const buyHash = await sendFourEncodedBuy({
     tokenAddress,
     funds: amountWei,
@@ -576,8 +617,9 @@ async function executeXModeDirectBuy(params: {
     nonceExecutor,
     label: 'xmode-buy'
   });
+  logger.debug(`[XMode] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { buyHash });
 
-  logger.debug('[FourQuote] 已使用 X Mode 接口买入', {
+  logger.debug(`[XMode] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`, {
     token: tokenAddress,
     amountWei: amountWei.toString(),
     buyHash
