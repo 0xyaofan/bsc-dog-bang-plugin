@@ -1845,7 +1845,8 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     tokenAddress: string,
     amountIn: bigint,
     preferredPath?: string[],
-    quoteToken?: string
+    quoteToken?: string,
+    routeInfo?: any
   ) => {
     if (preferredPath && preferredPath.length >= 2) {
       try {
@@ -1863,6 +1864,55 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         }
       } catch (error) {
         logger.debug(`${channelLabel} 缓存路径失效，重新搜索: ${error?.message || error}`);
+      }
+    }
+
+    // 🚀 性能优化：如果有 pancakePairAddress，直接使用已知的 pair 构建路径
+    const pancakePairAddress = routeInfo?.metadata?.pancakePairAddress;
+    if (pancakePairAddress && pancakePairAddress !== '0x0000000000000000000000000000000000000000') {
+      // 从 metadata 获取 quoteToken（优先使用 metadata 中的信息）
+      const pairQuoteToken = routeInfo?.metadata?.pancakeQuoteToken || quoteToken;
+
+      // 处理 BNB 筹集币种：quoteToken 为 0x0000... 时视为 WBNB
+      const normalizedQuote = (pairQuoteToken && pairQuoteToken !== '0x0000000000000000000000000000000000000000')
+        ? pairQuoteToken
+        : nativeWrapper;
+
+      const normalizedWrapper = nativeWrapper.toLowerCase();
+      const quoteTokenLower = normalizedQuote.toLowerCase();
+
+      // 构建路径
+      let knownPath: string[];
+      if (quoteTokenLower === normalizedWrapper) {
+        // BNB 筹集：直接路径 WBNB ↔ Token
+        knownPath = direction === 'buy'
+          ? [nativeWrapper, tokenAddress]
+          : [tokenAddress, nativeWrapper];
+        logger.debug(`${channelLabel} 🚀 使用已知 Pair (BNB 筹集): ${pancakePairAddress.slice(0, 10)}`);
+      } else {
+        // 非 BNB 筹集：WBNB → QuoteToken → Token
+        knownPath = direction === 'buy'
+          ? [nativeWrapper, normalizedQuote, tokenAddress]
+          : [tokenAddress, normalizedQuote, nativeWrapper];
+        logger.debug(`${channelLabel} 🚀 使用已知 Pair (非 BNB 筹集): ${pancakePairAddress.slice(0, 10)}, QuoteToken: ${normalizedQuote.slice(0, 10)}`);
+      }
+
+      try {
+        const results = await fetchPathAmounts(
+          publicClient,
+          amountIn,
+          [knownPath],
+          contractAddress,
+          abi,
+          channelLabel
+        );
+
+        if (results.length > 0 && results[0].amountOut > 0n) {
+          logger.debug(`${channelLabel} ✅ 已知 Pair 路径成功，输出: ${results[0].amountOut.toString()}`);
+          return { path: knownPath, amountOut: results[0].amountOut };
+        }
+      } catch (error) {
+        logger.debug(`${channelLabel} 已知 Pair 路径失败，fallback 到路径搜索: ${error?.message || error}`);
       }
     }
 
@@ -2361,7 +2411,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       try {
         // 直接查询 V2 路径，跳过 V3
-        const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken);
+        const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken, routeInfo);
         if (result && result.amountOut > 0n) {
           logger.perf(`${channelLabel} ✅ ${platformName} V2 路径成功，耗时: ${Date.now() - startTime}ms`);
           // 缓存路由，标记为 V2
@@ -2396,7 +2446,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           const preferredV2Path = direction === 'buy' ? updatedHint?.lastBuyPath : updatedHint?.lastSellPath;
           if (preferredV2Path && preferredV2Path.length > 0) {
             try {
-              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken, routeInfo);
               if (result && result.amountOut > 0n) {
                 logger.perf(`${channelLabel} ✅ 使用预加载的 V2 路由，总耗时: ${Date.now() - startTime}ms`);
                 return { kind: 'v2', path: result.path, amountOut: result.amountOut };
@@ -2463,7 +2513,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
           if (preferredV2Path && preferredV2Path.length > 0) {
             try {
-              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken, routeInfo);
               if (result && result.amountOut > 0n) {
                 logger.perf(`${channelLabel} ✅ 使用缓存 V2 路由，耗时: ${Date.now() - startTime}ms`);
                 return { kind: 'v2', path: result.path, amountOut: result.amountOut };
@@ -2525,7 +2575,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             const v2Start = Date.now();
             logger.debug(`${channelLabel} 开始 V2 查询...`);
             try {
-              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken);
+              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken, routeInfo);
               logger.debug(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
               return result;
             } catch (error) {
