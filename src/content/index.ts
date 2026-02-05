@@ -1002,8 +1002,17 @@ async function updateTokenBalance(tokenAddress: string): Promise<string | null> 
     });
 
     if (response && response.success) {
-      // 只更新余额相关字段，保留其他静态信息
-      if (currentTokenInfo) {
+      // 如果 currentTokenInfo 不存在，创建一个新的
+      if (!currentTokenInfo) {
+        currentTokenInfo = {
+          address: tokenAddress,
+          symbol: response.data.symbol,
+          decimals: response.data.decimals,
+          totalSupply: response.data.totalSupply,
+          balance: response.data.balance
+        };
+      } else {
+        // 只更新余额相关字段，保留其他静态信息
         currentTokenInfo.balance = response.data.balance;
         currentTokenInfo.totalSupply = response.data.totalSupply;
       }
@@ -1638,6 +1647,13 @@ async function handleSell(tokenAddress) {
     await updateTokenAllowances(tokenAddress, channel);
   }
 
+  // 🐛 修复：如果有待确认的买入交易，强制刷新余额
+  // 避免使用买入前的旧余额导致 100% 卖出只卖出一部分
+  if (hasPendingBuy) {
+    logger.debug('[Dog Bang] 检测到待确认的买入交易，强制刷新余额');
+    await updateTokenBalance(tokenAddress);
+  }
+
   try {
     // 优化1: 简化前端逻辑，数据查询全由 background 处理
     // showStatus(`正在通过 ${getChannelName(channel)} 卖出...`, 'info');
@@ -1684,7 +1700,7 @@ async function handleSell(tokenAddress) {
       // 🐛 优化：不需要立即调用 loadTokenInfo，因为：
       // 1. 代币信息（符号、精度等）在页面加载时已获取，不会变化
       // 2. 交易刚提交，链上可能还未确认，余额查不到新值
-      // 3. startFastPolling 会每秒轮询 loadTokenInfo，等待余额变化
+      // 3. startFastPolling 会每秒轮询，等待余额变化
       // 4. 100% 卖出会在下面直接清零余额显示
       loadTokenRoute(tokenAddress, { force: true });  // 刷新路由缓存（卖出后可能影响流动性）
 
@@ -2406,6 +2422,10 @@ type FloatingWindowState = {
   position: { x: number; y: number };
   collapsed: boolean;
   opened: boolean; // 记录浮动窗口是否打开
+  // 保存用户设置的值
+  slippage?: string;
+  buyGas?: string;
+  sellGas?: string;
 };
 
 let floatingWindowDragging = false;
@@ -2455,6 +2475,12 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   // 避免使用旧代币的手动通道设置导致新代币交易失败
   userChannelOverride = false;
 
+  // 🐛 修复：初始化 currentTokenInfo，确保买卖时有完整的代币信息
+  // 浮动窗口创建时必须加载代币信息，否则 currentTokenInfo 会是 null
+  loadTokenInfo(tokenAddress).catch(err => {
+    logger.debug('[Floating Window] Failed to load token info:', err);
+  });
+
   // Ensure token route is loaded for the floating window to display correct channel
   if (!currentTokenRoute || currentTokenRoute.tokenAddress !== tokenAddress) {
     loadTokenRoute(tokenAddress).catch(err => {
@@ -2469,17 +2495,18 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   const buyGasPresets = tradingPresets.buyGasPresets ?? DEFAULT_USER_SETTINGS.trading.buyGasPresets;
   const sellGasPresets = tradingPresets.sellGasPresets ?? DEFAULT_USER_SETTINGS.trading.sellGasPresets;
 
+  const state = getFloatingWindowState();
+
+  // 使用保存的设置值，如果没有则使用默认值
   const defaultSlippageValue = escapeHtml(
-    tradingPresets.defaultSlippageValue ?? slippagePresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSlippageValue
+    state.slippage ?? tradingPresets.defaultSlippageValue ?? slippagePresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSlippageValue
   );
   const defaultBuyGasValue = escapeHtml(
-    tradingPresets.defaultBuyGasValue ?? buyGasPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultBuyGasValue
+    state.buyGas ?? tradingPresets.defaultBuyGasValue ?? buyGasPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultBuyGasValue
   );
   const defaultSellGasValue = escapeHtml(
-    tradingPresets.defaultSellGasValue ?? sellGasPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSellGasValue
+    state.sellGas ?? tradingPresets.defaultSellGasValue ?? sellGasPresets[0] ?? DEFAULT_USER_SETTINGS.trading.defaultSellGasValue
   );
-
-  const state = getFloatingWindowState();
 
   const floatingWindow = document.createElement('div');
   floatingWindow.id = 'dog-bang-floating';
@@ -2827,6 +2854,16 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           const gasInput = floatingWindow.querySelector('[data-setting="sell-gas"]') as HTMLInputElement;
           const gasPrice = parseFloat(gasInput?.value || '1');
 
+          // 🐛 修复：如果有待确认的买入交易，强制刷新余额
+          // 避免使用买入前的旧余额导致 100% 卖出只卖出一部分
+          const hasPendingBuy = Array.from(pendingTransactions.values()).some(
+            tx => tx.type === 'buy' && tx.token === currentTokenAddress
+          );
+          if (hasPendingBuy) {
+            logger.debug('[Floating Window] 检测到待确认的买入交易，强制刷新余额');
+            await updateTokenBalance(currentTokenAddress);
+          }
+
           const response = await safeSendMessage({
             action: 'sell_token',
             data: {
@@ -2909,16 +2946,25 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
     if (slippageInput) {
       const displaySlippage = floatingWindow.querySelector('#display-slippage');
       if (displaySlippage) displaySlippage.textContent = `${slippageInput.value}%`;
+      // 保存滑点值
+      state.slippage = slippageInput.value;
     }
     if (buyGasInput) {
       const displayBuyGas = floatingWindow.querySelector('#display-buy-gas');
       if (displayBuyGas) displayBuyGas.textContent = `${buyGasInput.value}Gwei`;
+      // 保存 Buy Gas 值
+      state.buyGas = buyGasInput.value;
     }
     if (sellGasInput) {
       const displaySellGas = floatingWindow.querySelector('#display-sell-gas');
       if (displaySellGas) displaySellGas.textContent = `${sellGasInput.value}Gwei`;
+      // 保存 Sell Gas 值
+      state.sellGas = sellGasInput.value;
     }
-    
+
+    // 保存状态到 localStorage
+    saveFloatingWindowState(state);
+
     // Display current token's preferred channel instead of global channel selector
     const displayChannel = floatingWindow.querySelector('#display-channel');
     if (displayChannel) {
@@ -3590,8 +3636,9 @@ function handleTokenBalancePush(data, options: { fromPending?: boolean } = {}) {
   // 只更新当前代币的余额
   if (data.tokenAddress === currentTokenAddress) {
     const tokenBalanceEl = document.getElementById('token-balance');
+    const floatingTokenBalanceEl = document.querySelector('#floating-token-balance');
 
-    if (!tokenBalanceEl) {
+    if (!tokenBalanceEl && !floatingTokenBalanceEl) {
       if (!fromPending) {
         pendingTokenBalance = data;
         logger.debug('[Dog Bang] PUSH: 面板未就绪，已缓存代币余额');
@@ -3601,12 +3648,34 @@ function handleTokenBalancePush(data, options: { fromPending?: boolean } = {}) {
       return;
     }
 
-    if (data.balance && currentTokenInfo) {
-      currentTokenInfo.balance = data.balance;
+    if (data.balance !== undefined) {
+      // 如果 currentTokenInfo 不存在，创建一个基本的对象
+      if (!currentTokenInfo) {
+        currentTokenInfo = {
+          address: data.tokenAddress,
+          symbol: '',
+          decimals: 18,
+          totalSupply: '0',
+          balance: data.balance
+        };
+        logger.debug('[Dog Bang] PUSH: 创建 currentTokenInfo 并更新余额');
+      } else {
+        currentTokenInfo.balance = data.balance;
+        logger.debug('[Dog Bang] PUSH: 更新 currentTokenInfo.balance');
+      }
     }
+
+    // 更新主面板余额显示
     if (tokenBalanceEl && data.balance !== undefined) {
       tokenBalanceEl.textContent = data.balance;
     }
+
+    // 更新浮动窗口余额显示
+    if (floatingTokenBalanceEl && data.balance !== undefined) {
+      floatingTokenBalanceEl.textContent = data.balance;
+      logger.debug('[Dog Bang] PUSH: 更新浮动窗口余额显示');
+    }
+
     updateTokenBalanceDisplay(currentTokenAddress);
     logger.debug('[Dog Bang] PUSH: 代币余额已更新');
     scheduleSellEstimate();
