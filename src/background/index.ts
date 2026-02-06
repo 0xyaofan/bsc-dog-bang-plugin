@@ -4052,27 +4052,34 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
   const normalizedTokenAddress = normalizeAddressValue(tokenAddress);
   const normalizedWalletAddress = normalizeAddressValue(walletAddress);
 
-  // 使用 RPC 队列来限制余额查询频率
-  // 余额查询是非关键操作，使用 low 优先级
-  const queueKey = `balance:${normalizedTokenAddress}:${normalizedWalletAddress}`;
-  const balanceValue = await rpcQueue.enqueue(
-    queueKey,
-    () =>
-      cacheCall(
-        () =>
-          executeWithRetry(async () =>
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'balanceOf',
-              args: [walletAddress]
-            })
-          ),
-        `token-info-balance:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
-        TOKEN_INFO_CACHE_TTL
-      ),
-    'low' // 余额查询使用低优先级
-  );
+  // 判断是否使用队列：
+  // - 如果需要授权信息，说明是交易前的查询，属于关键请求，不使用队列
+  // - 如果不需要授权信息，说明是快速轮询的余额查询，属于非关键请求，使用队列
+  const useQueue = !needApproval;
+
+  const balanceExecutor = () =>
+    cacheCall(
+      () =>
+        executeWithRetry(async () =>
+          publicClient.readContract({
+            address: tokenAddress,
+            abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [walletAddress]
+          })
+        ),
+      `token-info-balance:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
+      TOKEN_INFO_CACHE_TTL
+    );
+
+  // 关键请求直接执行，非关键请求使用队列
+  const balanceValue = useQueue
+    ? await rpcQueue.enqueue(
+        `balance:${normalizedTokenAddress}:${normalizedWalletAddress}`,
+        balanceExecutor,
+        'low' // 快速轮询的余额查询使用低优先级
+      )
+    : await balanceExecutor();
 
   const result: TokenInfoResult = {
     symbol: metadata.symbol || '',
@@ -4082,39 +4089,33 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
   };
 
   if (needApproval) {
-    // 授权查询也使用队列，但优先级稍高
-    const allowanceQueueKey = `allowance:${normalizedTokenAddress}:${normalizedWalletAddress}`;
-    const [pancakeAllowance, fourAllowance, flapAllowance] = await rpcQueue.enqueue(
-      allowanceQueueKey,
+    // 授权查询是交易前的关键操作，不使用队列
+    const [pancakeAllowance, fourAllowance, flapAllowance] = await cacheCall(
       () =>
-        cacheCall(
-          () =>
-            executeWithRetry(async () =>
-              Promise.all([
-                publicClient.readContract({
-                  address: tokenAddress,
-                  abi: ERC20_ABI,
-                  functionName: 'allowance',
-                  args: [walletAddress, CONTRACTS.PANCAKE_ROUTER]
-                }),
-                publicClient.readContract({
-                  address: tokenAddress,
-                  abi: ERC20_ABI,
-                  functionName: 'allowance',
-                  args: [walletAddress, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
-                }),
-                publicClient.readContract({
-                  address: tokenAddress,
-                  abi: ERC20_ABI,
-                  functionName: 'allowance',
-                  args: [walletAddress, CONTRACTS.FLAP_PORTAL]
-                })
-              ])
-            ),
-          `token-allowances:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
-          TOKEN_INFO_CACHE_TTL
+        executeWithRetry(async () =>
+          Promise.all([
+            publicClient.readContract({
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'allowance',
+              args: [walletAddress, CONTRACTS.PANCAKE_ROUTER]
+            }),
+            publicClient.readContract({
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'allowance',
+              args: [walletAddress, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
+            }),
+            publicClient.readContract({
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'allowance',
+              args: [walletAddress, CONTRACTS.FLAP_PORTAL]
+            })
+          ])
         ),
-      'normal' // 授权查询使用普通优先级
+      `token-allowances:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
+      TOKEN_INFO_CACHE_TTL
     );
 
     result.allowances = {

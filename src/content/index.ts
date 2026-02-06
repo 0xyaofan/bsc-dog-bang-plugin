@@ -759,8 +759,8 @@ const sellAutoApproveCache = new Set<string>();
 // 快速轮询相关变量
 let fastPollingTimer: number | null = null;
 let fastPollingCount = 0;
-const FAST_POLLING_INTERVAL = 2000; // 2秒（降低频率避免节点限流）
-const FAST_POLLING_MAX_COUNT = 8; // 最多轮询8次（总共16秒）
+const FAST_POLLING_INTERVAL = 1000; // 1秒（非关键请求会通过队列控制频率）
+const FAST_POLLING_MAX_COUNT = 10; // 最多轮询10次
 
 // 浮动窗口快速轮询相关变量
 let floatingFastPollingTimer: number | null = null;
@@ -935,15 +935,15 @@ function stopPolling() {
 // ========== 快速轮询机制（买入/卖出后）==========
 /**
  * 启动快速轮询，用于买入/卖出后快速更新余额
- * 每2秒查询一次，持续16秒或直到检测到余额变化
- * 注意：使用 RPC 队列来避免节点限流
+ * 每1秒查询一次，持续10秒或直到检测到余额变化
+ * 注意：快速轮询的余额查询会通过 RPC 队列自动控制频率，避免节点限流
  */
 function startFastPolling(tokenAddress: string, previousBalance: string) {
   // 停止之前的快速轮询
   stopFastPolling();
 
   fastPollingCount = 0;
-  logger.debug('[Dog Bang] 启动快速轮询，检测余额变化（每2秒）');
+  logger.debug('[Dog Bang] 启动快速轮询，检测余额变化');
 
   fastPollingTimer = setInterval(async () => {
     fastPollingCount++;
