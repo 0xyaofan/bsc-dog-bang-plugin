@@ -2887,6 +2887,131 @@ async function handleBatchCheckApproval({ queries }: { queries: any[] }) {
   }
 }
 
+/**
+ * 获取代币完整信息（聚合接口）
+ * 一次性返回：余额、授权（3个合约）、元数据、路由等
+ */
+async function handleGetTokenFullInfo({ queries }: { queries: any[] }) {
+  const fnStart = perf.now();
+  logger.debug(`[TokenFullInfo] 批量查询代币完整信息: ${queries.length} 个请求`);
+
+  try {
+    if (!publicClient || !walletAccount) {
+      throw new Error('Client not initialized');
+    }
+
+    const results = await Promise.all(
+      queries.map(async (query) => {
+        const { tokenAddress, walletAddress } = query;
+        const effectiveWallet = walletAddress || walletAccount.address;
+
+        try {
+          // 构建 MultiCall 合约调用
+          const contracts: any[] = [
+            // 1. 余额
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'balanceOf',
+              args: [effectiveWallet]
+            },
+            // 2-4. 授权（3个合约）
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'allowance',
+              args: [effectiveWallet, CONTRACTS.PANCAKE_ROUTER]
+            },
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'allowance',
+              args: [effectiveWallet, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
+            },
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'allowance',
+              args: [effectiveWallet, CONTRACTS.FLAP_PORTAL]
+            },
+            // 5-7. 元数据
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'symbol'
+            },
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'decimals'
+            },
+            {
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'totalSupply'
+            }
+          ];
+
+          // 使用 MultiCall 一次性查询所有链上数据
+          const multicallStart = perf.now();
+          const multicallResults = await publicClient.multicall({ contracts });
+          logger.debug(`[TokenFullInfo] MultiCall 完成 (${perf.measure(multicallStart).toFixed(2)}ms)`);
+
+          // 解析结果
+          const balance = multicallResults[0].status === 'success' ? multicallResults[0].result.toString() : '0';
+          const pancakeAllowance = multicallResults[1].status === 'success' ? multicallResults[1].result.toString() : '0';
+          const fourAllowance = multicallResults[2].status === 'success' ? multicallResults[2].result.toString() : '0';
+          const flapAllowance = multicallResults[3].status === 'success' ? multicallResults[3].result.toString() : '0';
+          const symbol = multicallResults[4].status === 'success' ? multicallResults[4].result : '';
+          const decimals = multicallResults[5].status === 'success' ? Number(multicallResults[5].result) : 18;
+          const totalSupply = multicallResults[6].status === 'success' ? multicallResults[6].result.toString() : '0';
+
+          // 查询路由信息（使用缓存）
+          const routeStart = perf.now();
+          const route = await fetchRouteWithFallback(tokenAddress, false);
+          logger.debug(`[TokenFullInfo] 路由查询完成 (${perf.measure(routeStart).toFixed(2)}ms)`);
+
+          return {
+            success: true,
+            tokenAddress,
+            walletAddress: effectiveWallet,
+            balance,
+            allowances: {
+              pancake: pancakeAllowance,
+              four: fourAllowance,
+              flap: flapAllowance
+            },
+            metadata: {
+              symbol,
+              decimals,
+              totalSupply
+            },
+            route: {
+              platform: route.platform,
+              readyForPancake: route.readyForPancake,
+              channelId: route.channelId
+            }
+          };
+        } catch (error) {
+          logger.error(`[TokenFullInfo] 查询失败 [${tokenAddress}]:`, error);
+          return {
+            success: false,
+            tokenAddress,
+            error: error.message
+          };
+        }
+      })
+    );
+
+    logger.debug(`[TokenFullInfo] ✅ 批量查询完成 (${perf.measure(fnStart).toFixed(2)}ms)`);
+
+    return { success: true, data: results };
+  } catch (error) {
+    logger.error('[TokenFullInfo] 批量查询失败:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 const ACTION_HANDLER_MAP = {
   import_wallet: handleImportWallet,
   unlock_wallet: handleUnlockWallet,
@@ -2912,6 +3037,8 @@ const ACTION_HANDLER_MAP = {
   batch_query_allowance: handleBatchQueryAllowance,
   batch_query_metadata: handleBatchQueryMetadata,
   batch_check_approval: handleBatchCheckApproval,
+  // 聚合查询接口
+  get_token_full_info: handleGetTokenFullInfo,
   // 调试工具
   get_cache_info: handleGetCacheInfo
 };

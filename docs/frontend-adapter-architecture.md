@@ -59,6 +59,30 @@
 
 ## 核心特性
 
+### 0. 聚合查询接口（推荐）
+
+**问题**：页面切换时需要查询多个信息（余额、授权、元数据、路由等）
+
+```typescript
+// 之前：需要多次调用
+const balance = await queryBalance(token, wallet);
+const allowance1 = await queryAllowance(token, wallet, spender1);
+const allowance2 = await queryAllowance(token, wallet, spender2);
+const allowance3 = await queryAllowance(token, wallet, spender3);
+const metadata = await queryMetadata(token, ['symbol', 'decimals']);
+const route = await queryRoute(token);
+// 需要调用 6 次方法
+```
+
+**解决**：一次调用获取所有信息
+
+```typescript
+// 现在：一次调用
+const info = await queryTokenFullInfo(token, wallet);
+// 返回：{ balance, allowances: { pancake, four, flap }, metadata, route }
+// 只需调用 1 次方法，1 次 RPC 调用（MultiCall）
+```
+
 ### 1. 自动批量合并
 
 **问题**：页面切换时可能同时查询多个代币的信息
@@ -139,7 +163,57 @@ queryApprovalStatus(tokenAddress, walletAddress, spenderAddress, options)
 
 ## 使用示例
 
-### 场景 1：页面切换时查询代币信息
+### 场景 1：页面切换时查询代币信息（推荐使用聚合接口）
+
+```typescript
+// 🎯 推荐：使用聚合接口，一次调用获取所有信息
+import { queryTokenFullInfo } from './frontend-adapter';
+
+const tokenInfo = await queryTokenFullInfo(tokenAddress, walletAddress);
+
+// 返回结果包含所有信息：
+// {
+//   success: true,
+//   tokenAddress: '0x...',
+//   walletAddress: '0x...',
+//   balance: '1000000000000000000',
+//   allowances: {
+//     pancake: '0',
+//     four: '115792089237316195423570985008687907853269984665640564039457584007913129639935',
+//     flap: '0'
+//   },
+//   metadata: {
+//     symbol: 'TOKEN',
+//     decimals: 18,
+//     totalSupply: '1000000000000000000000000'
+//   },
+//   route: {
+//     platform: 'four',
+//     readyForPancake: false,
+//     channelId: 'four'
+//   }
+// }
+
+// 总共：1 次消息，1 次 RPC 调用（MultiCall）
+```
+
+```typescript
+// ⚠️ 不推荐：分别调用多个接口（虽然会自动批量，但仍需多次调用）
+import { queryBalance, queryAllowance, queryMetadata, queryRoute } from './frontend-adapter';
+
+// 这些查询会自动合并为批量请求
+const [balance, pancakeAllowance, fourAllowance, flapAllowance, metadata, route] = await Promise.all([
+  queryBalance(tokenAddress, walletAddress),
+  queryAllowance(tokenAddress, walletAddress, PANCAKE_ROUTER),
+  queryAllowance(tokenAddress, walletAddress, FOUR_TOKEN_MANAGER),
+  queryAllowance(tokenAddress, walletAddress, FLAP_PORTAL),
+  queryMetadata(tokenAddress, ['symbol', 'decimals', 'totalSupply']),
+  queryRoute(tokenAddress)
+]);
+// 总共：6 次方法调用，1-2 次消息，1 次 RPC 调用（MultiCall）
+```
+
+### 场景 1（旧）：页面切换时查询代币信息
 
 ```typescript
 // 之前：多次独立查询
@@ -335,11 +409,18 @@ ACTION_HANDLER_MAP['batch_query_new_type'] = handleBatchQueryNewType;
 
 前端对接层的核心价值：
 
-1. **分离关注点**：前端需求不污染后端核心代码
-2. **自动优化**：自动批量、去重、优先级管理
-3. **统一接口**：标准化的查询接口，减少混乱
-4. **性能提升**：减少 75-90% 的 RPC 调用
-5. **易于维护**：清晰的架构，易于扩展
+1. **聚合查询接口**：页面切换时一次调用获取所有信息，减少方法调用次数
+2. **分离关注点**：前端需求不污染后端核心代码
+3. **自动优化**：自动批量、去重、优先级管理
+4. **统一接口**：标准化的查询接口，减少混乱
+5. **性能提升**：减少 75-90% 的 RPC 调用
+6. **易于维护**：清晰的架构，易于扩展
+
+### 推荐使用方式
+
+- **页面切换场景**：使用 `queryTokenFullInfo` 聚合接口
+- **单个查询场景**：使用 `queryBalance`、`queryAllowance` 等独立接口
+- **交易前查询**：使用 `{ priority: 'high', immediate: true }` 选项
 
 ---
 

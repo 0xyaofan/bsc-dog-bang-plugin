@@ -13,7 +13,7 @@ import { perf } from './performance.js';
 
 // ========== 类型定义 ==========
 
-type QueryType = 'balance' | 'allowance' | 'metadata' | 'route' | 'approval_status';
+type QueryType = 'balance' | 'allowance' | 'metadata' | 'route' | 'approval_status' | 'token_full_info';
 
 type QueryRequest = {
   id: string;
@@ -43,7 +43,8 @@ class FrontendAdapter {
     ['allowance', { maxWaitTime: 50, maxBatchSize: 10 }],
     ['metadata', { maxWaitTime: 50, maxBatchSize: 10 }],
     ['route', { maxWaitTime: 100, maxBatchSize: 5 }],
-    ['approval_status', { maxWaitTime: 50, maxBatchSize: 10 }]
+    ['approval_status', { maxWaitTime: 50, maxBatchSize: 10 }],
+    ['token_full_info', { maxWaitTime: 20, maxBatchSize: 5 }] // 聚合查询优先级更高
   ]);
 
   constructor() {
@@ -77,6 +78,11 @@ class FrontendAdapter {
     // 授权状态查询处理器
     this.queryHandlers.set('approval_status', async (requests) => {
       return this.handleApprovalStatusQueries(requests);
+    });
+
+    // 代币完整信息查询处理器（聚合接口）
+    this.queryHandlers.set('token_full_info', async (requests) => {
+      return this.handleTokenFullInfoQueries(requests);
     });
   }
 
@@ -339,6 +345,24 @@ class FrontendAdapter {
   }
 
   /**
+   * 处理代币完整信息查询（聚合接口）
+   */
+  private async handleTokenFullInfoQueries(requests: QueryRequest[]): Promise<any[]> {
+    const response = await chrome.runtime.sendMessage({
+      action: 'get_token_full_info',
+      data: {
+        queries: requests.map(r => r.params)
+      }
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Token full info query failed');
+    }
+
+    return response.data;
+  }
+
+  /**
    * 清空所有待处理的请求
    */
   clear() {
@@ -419,4 +443,21 @@ export async function queryApprovalStatus(
   options?: any
 ) {
   return frontendAdapter.query('approval_status', { tokenAddress, walletAddress, spenderAddress }, options);
+}
+
+/**
+ * 查询代币完整信息（聚合接口）
+ * 一次性返回：余额、授权（3个合约）、元数据、路由等
+ *
+ * @param tokenAddress 代币地址
+ * @param walletAddress 钱包地址
+ * @param options 查询选项
+ * @returns 包含所有信息的对象
+ */
+export async function queryTokenFullInfo(
+  tokenAddress: string,
+  walletAddress: string,
+  options?: any
+) {
+  return frontendAdapter.query('token_full_info', { tokenAddress, walletAddress }, options);
 }
