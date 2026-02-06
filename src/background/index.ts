@@ -1496,35 +1496,25 @@ async function ensureTokenMetadata(
     }
 
     const fetched = await executeWithRetry(async () => {
-      const promises = missingFields.map((field) => {
-        switch (field) {
-          case 'symbol':
-            return publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'symbol'
-            });
-          case 'decimals':
-            return publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'decimals'
-            });
-          case 'totalSupply':
-            return publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'totalSupply'
-            });
-          default:
-            return Promise.resolve(null);
-        }
+      // 使用 MultiCall 批量查询元数据，减少 RPC 调用
+      const contracts = missingFields.map((field) => {
+        return {
+          address: tokenAddress,
+          abi: ERC20_ABI,
+          functionName: field
+        };
       });
 
-      const values = await Promise.all(promises);
+      const results = await publicClient.multicall({ contracts });
+
       const data: Partial<TokenMetadata> = {};
       missingFields.forEach((field, index) => {
-        const value = values[index];
+        const result = results[index];
+        if (result.status === 'failure') {
+          logger.warn(`[ensureTokenMetadata] Query ${field} failed:`, result.error);
+          return;
+        }
+        const value = result.result;
         if (field === 'decimals') {
           data.decimals = typeof value === 'number' ? value : Number(value);
         } else if (field === 'symbol') {
@@ -4089,34 +4079,47 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
   };
 
   if (needApproval) {
-    // 授权查询是交易前的关键操作，不使用队列
-    const [pancakeAllowance, fourAllowance, flapAllowance] = await cacheCall(
+    // 授权查询使用 MultiCall，减少 RPC 调用次数（3次 -> 1次）
+    const allowanceResults = await cacheCall(
       () =>
-        executeWithRetry(async () =>
-          Promise.all([
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [walletAddress, CONTRACTS.PANCAKE_ROUTER]
-            }),
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [walletAddress, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
-            }),
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [walletAddress, CONTRACTS.FLAP_PORTAL]
-            })
-          ])
-        ),
+        executeWithRetry(async () => {
+          const results = await publicClient.multicall({
+            contracts: [
+              {
+                address: tokenAddress,
+                abi: ERC20_ABI,
+                functionName: 'allowance',
+                args: [walletAddress, CONTRACTS.PANCAKE_ROUTER]
+              },
+              {
+                address: tokenAddress,
+                abi: ERC20_ABI,
+                functionName: 'allowance',
+                args: [walletAddress, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
+              },
+              {
+                address: tokenAddress,
+                abi: ERC20_ABI,
+                functionName: 'allowance',
+                args: [walletAddress, CONTRACTS.FLAP_PORTAL]
+              }
+            ]
+          });
+
+          // 提取结果，处理可能的错误
+          return results.map((r, index) => {
+            if (r.status === 'failure') {
+              logger.warn(`[fetchTokenInfoData] Allowance query ${index} failed:`, r.error);
+              return 0n;
+            }
+            return r.result;
+          });
+        }),
       `token-allowances:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
       TOKEN_INFO_CACHE_TTL
     );
+
+    const [pancakeAllowance, fourAllowance, flapAllowance] = allowanceResults;
 
     result.allowances = {
       pancake: pancakeAllowance.toString(),
