@@ -3724,7 +3724,7 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
 }
 
 // 授权代币（预授权功能）
-async function handleApproveToken({ tokenAddress, channel = 'pancake' }) {
+async function handleApproveToken({ tokenAddress, channel = 'pancake', pancakeVersion }) {
   return nonceMutex.runExclusive(async () => {
     let approveLockApplied = false;
 
@@ -3736,7 +3736,7 @@ async function handleApproveToken({ tokenAddress, channel = 'pancake' }) {
     };
 
     try {
-      logger.debug('[Approve] 开始预授权:', { tokenAddress, channel });
+      logger.debug('[Approve] 开始预授权:', { tokenAddress, channel, pancakeVersion });
 
       // 使用内存缓存检查钱包状态（优化1）
       if (!walletCache.encryptedKey) {
@@ -3755,11 +3755,18 @@ async function handleApproveToken({ tokenAddress, channel = 'pancake' }) {
         await createClients();
       }
 
-      // 获取授权地址（根据通道）
+      // 🐛 修复：根据通道和版本获取授权地址
       let spenderAddress;
       switch (channel) {
         case 'pancake':
-          spenderAddress = CONTRACTS.PANCAKE_ROUTER;
+          // 🐛 修复：根据 pancakeVersion 选择正确的 Router
+          if (pancakeVersion === 'v3') {
+            spenderAddress = CONTRACTS.PANCAKE_SMART_ROUTER;  // V3 Smart Router
+            logger.debug('[Approve] PancakeSwap V3，授权给 Smart Router:', spenderAddress);
+          } else {
+            spenderAddress = CONTRACTS.PANCAKE_ROUTER;  // V2 Router
+            logger.debug('[Approve] PancakeSwap V2，授权给 V2 Router:', spenderAddress);
+          }
           break;
         case 'four':
         case 'xmode':
@@ -4260,9 +4267,9 @@ async function handleBatchApproveTokens({ approvals }) {
   let allSuccess = true;
 
   for (const approval of approvals) {
-    const { tokenAddress, channel } = approval;
+    const { tokenAddress, channel, pancakeVersion } = approval;
     try {
-      const result = await handleApproveToken({ tokenAddress, channel });
+      const result = await handleApproveToken({ tokenAddress, channel, pancakeVersion });
       results.push({ tokenAddress, channel, ...result });
       if (!result.success) {
         allSuccess = false;

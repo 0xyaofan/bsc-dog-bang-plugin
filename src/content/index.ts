@@ -1596,9 +1596,11 @@ async function handleBuy(tokenAddress) {
 
   // 🐛 修复：使用路由信息中的 preferredChannel 而不是 DOM 的 channel-selector
   // 因为后端会根据 routeInfo.preferredChannel 自动选择通道，前端应该与后端保持一致
+  // 🐛 修复：传递 pancakeVersion 信息，确保授权正确的 Router（V2 或 V3）
   if (userSettings?.trading?.autoApproveMode === 'buy') {
     const effectiveChannel = currentTokenRoute?.preferredChannel || channel;
-    autoApproveToken(tokenAddress, effectiveChannel);
+    const pancakeVersion = currentTokenRoute?.metadata?.pancakeVersion;
+    autoApproveToken(tokenAddress, effectiveChannel, pancakeVersion);
   }
 
   if (!amount || parseFloat(amount) <= 0) {
@@ -1770,8 +1772,10 @@ async function handleSell(tokenAddress) {
   // 因为后端会根据 routeInfo.preferredChannel 自动选择通道，前端应该与后端保持一致
   // 🚀 优化：Four.meme 非 BNB 筹集币种 + 自定义聚合器需要双重授权
   // 注意：Flap 不需要聚合器，因为 Flap Portal 合约内置了自动兑换功能
+  // 🐛 修复：传递 pancakeVersion 信息，确保授权正确的 Router（V2 或 V3）
   if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel) {
     const effectiveChannel = currentTokenRoute?.preferredChannel || channel;
+    const pancakeVersion = currentTokenRoute?.metadata?.pancakeVersion;
     const sellApprovalKey = `${tokenAddress.toLowerCase()}:${effectiveChannel}`;
 
     if (!sellAutoApproveCache.has(sellApprovalKey)) {
@@ -1791,7 +1795,7 @@ async function handleSell(tokenAddress) {
           action: 'batch_approve_tokens',
           data: {
             approvals: [
-              { tokenAddress, channel: effectiveChannel },  // 授权代币给 Four.meme
+              { tokenAddress, channel: effectiveChannel, pancakeVersion },  // 授权代币给 Four.meme
               { tokenAddress: quoteToken, channel: 'aggregator' }  // 授权 QuoteToken 给聚合器
             ]
           }
@@ -1800,7 +1804,7 @@ async function handleSell(tokenAddress) {
         });
       } else {
         // 单次授权（Flap 或 Four.meme BNB 筹集）
-        await autoApproveToken(tokenAddress, effectiveChannel);
+        await autoApproveToken(tokenAddress, effectiveChannel, pancakeVersion);
       }
 
       sellAutoApproveCache.add(sellApprovalKey);
@@ -3504,7 +3508,7 @@ async function waitForPendingApprovalIfNeeded(action: 'sell' | 'buy' = 'sell') {
   }
 }
 
-async function requestTokenApproval(tokenAddress?: string | null, channel?: string | null) {
+async function requestTokenApproval(tokenAddress?: string | null, channel?: string | null, pancakeVersion?: string) {
   if (!tokenAddress || !channel) {
     return;
   }
@@ -3515,7 +3519,7 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
 
   const approvalPromise = (async () => {
     try {
-      logger.debug('[Dog Bang] 检查通道授权:', { tokenAddress, channel });
+      logger.debug('[Dog Bang] 检查通道授权:', { tokenAddress, channel, pancakeVersion });
 
       // 🐛 修复问题11：不要预检查授权状态，让 background 的 ensureTokenApproval 处理
       // 如果已授权，background 会返回 needApproval: false
@@ -3528,7 +3532,8 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
         action: 'approve_token',
         data: {
           tokenAddress,
-          channel
+          channel,
+          pancakeVersion  // 🐛 修复：传递 pancakeVersion 给后端
         }
       });
 
@@ -3566,7 +3571,7 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
 }
 
 // ========== 自动授权代币（简化版，由 background 处理判断逻辑）==========
-async function autoApproveToken(tokenAddress, channelOverride?: string) {
+async function autoApproveToken(tokenAddress, channelOverride?: string, pancakeVersion?: string) {
   try {
     // 等待一小段时间，让钱包状态和通道选择先完成
     await new Promise(resolve => setTimeout(resolve, CONTENT_CONFIG.AUTO_APPROVE_DEBOUNCE_MS));
@@ -3583,9 +3588,9 @@ async function autoApproveToken(tokenAddress, channelOverride?: string) {
       }
       channel = channelSelector.value;
     }
-    logger.debug('[Dog Bang] 当前通道:', channel);
+    logger.debug('[Dog Bang] 当前通道:', channel, 'pancakeVersion:', pancakeVersion);
 
-    await requestTokenApproval(tokenAddress, channel);
+    await requestTokenApproval(tokenAddress, channel, pancakeVersion);
 
   } catch (error) {
     // 自动授权失败不应该影响用户体验，静默处理
