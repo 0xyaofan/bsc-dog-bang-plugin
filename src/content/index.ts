@@ -1768,11 +1768,41 @@ async function handleSell(tokenAddress) {
 
   // 🐛 修复：使用路由信息中的 preferredChannel 而不是 DOM 的 channel-selector
   // 因为后端会根据 routeInfo.preferredChannel 自动选择通道，前端应该与后端保持一致
+  // 🚀 优化：非 BNB 筹集币种 + 自定义聚合器需要双重授权
   if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel) {
     const effectiveChannel = currentTokenRoute?.preferredChannel || channel;
     const sellApprovalKey = `${tokenAddress.toLowerCase()}:${effectiveChannel}`;
+
     if (!sellAutoApproveCache.has(sellApprovalKey)) {
-      await autoApproveToken(tokenAddress, effectiveChannel);
+      // 检测是否需要双重授权（非 BNB 筹集币种 + 自定义聚合器）
+      const isAggregatorEnabled = userSettings?.aggregator?.enabled === true;
+      const quoteToken = currentTokenRoute?.quoteToken;
+      const isNonBnbQuote = quoteToken && quoteToken !== '0x0000000000000000000000000000000000000000';
+      const isFourOrFlap = effectiveChannel === 'four' || effectiveChannel === 'flap';
+      const needsDualApproval = isAggregatorEnabled && isNonBnbQuote && isFourOrFlap;
+
+      if (needsDualApproval) {
+        // 双重授权：代币 + QuoteToken
+        logger.debug('[Dog Bang] 非 BNB 筹集币种，执行双重预授权');
+        const aggregatorAddress = userSettings.aggregator.contractAddress;
+
+        // 使用批量授权接口
+        await sendMessageViaAdapter({
+          action: 'batch_approve_tokens',
+          data: {
+            approvals: [
+              { tokenAddress, channel: effectiveChannel },  // 授权代币给 Four.meme
+              { tokenAddress: quoteToken, channel: 'aggregator' }  // 授权 QuoteToken 给聚合器
+            ]
+          }
+        }).catch((error) => {
+          logger.debug('[Dog Bang] 双重预授权失败:', error);
+        });
+      } else {
+        // 单次授权
+        await autoApproveToken(tokenAddress, effectiveChannel);
+      }
+
       sellAutoApproveCache.add(sellApprovalKey);
     }
   }

@@ -531,6 +531,21 @@ export async function revokeTokenApproval(tokenAddress: string, spenderAddress: 
 }
 
 /**
+ * 批量授权代币（用于非 BNB 筹集币种的双重授权）
+ * @param approvals 授权列表，每项包含 tokenAddress, spenderAddress, channel
+ * @returns 授权结果
+ */
+export async function batchApproveTokens(approvals: Array<{
+  tokenAddress: string;
+  channel: string;
+}>) {
+  return chrome.runtime.sendMessage({
+    action: 'batch_approve_tokens',
+    data: { approvals }
+  });
+}
+
+/**
  * 买入代币
  */
 export async function buyToken(params: {

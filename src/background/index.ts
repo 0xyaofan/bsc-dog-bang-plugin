@@ -2782,6 +2782,7 @@ const ACTION_HANDLER_MAP = {
   buy_token: handleBuyToken,
   sell_token: handleSellToken,
   approve_token: handleApproveToken,
+  batch_approve_tokens: handleBatchApproveTokens,
   check_token_approval: handleCheckTokenApproval,
   revoke_token_approval: handleRevokeTokenApproval,
   init_tx_watcher: handleInitTxWatcher,
@@ -3767,6 +3768,11 @@ async function handleApproveToken({ tokenAddress, channel = 'pancake' }) {
         case 'flap':
           spenderAddress = CONTRACTS.FLAP_PORTAL;
           break;
+        case 'aggregator':
+          // 自定义聚合器合约地址
+          const aggregatorSettings = getAggregatorRuntimeSettings();
+          spenderAddress = aggregatorSettings.contractAddress;
+          break;
         default:
           spenderAddress = CONTRACTS.PANCAKE_ROUTER;
       }
@@ -3906,6 +3912,11 @@ async function handleRevokeTokenApproval({ tokenAddress, channel = 'pancake' }) 
           break;
         case 'flap':
           spenderAddress = CONTRACTS.FLAP_PORTAL;
+          break;
+        case 'aggregator':
+          // 自定义聚合器合约地址
+          const aggregatorSettings = getAggregatorRuntimeSettings();
+          spenderAddress = aggregatorSettings.contractAddress;
           break;
         default:
           spenderAddress = CONTRACTS.PANCAKE_ROUTER;
@@ -4235,6 +4246,41 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
   }
 
   return result;
+}
+
+// 批量授权代币（用于非 BNB 筹集币种的双重授权）
+async function handleBatchApproveTokens({ approvals }) {
+  if (!Array.isArray(approvals) || approvals.length === 0) {
+    return { success: false, error: '授权列表为空' };
+  }
+
+  logger.debug('[Batch Approve] 开始批量授权:', { count: approvals.length });
+
+  const results = [];
+  let allSuccess = true;
+
+  for (const approval of approvals) {
+    const { tokenAddress, channel } = approval;
+    try {
+      const result = await handleApproveToken({ tokenAddress, channel });
+      results.push({ tokenAddress, channel, ...result });
+      if (!result.success) {
+        allSuccess = false;
+      }
+    } catch (error) {
+      logger.error('[Batch Approve] 授权失败:', { tokenAddress, channel, error: error.message });
+      results.push({ tokenAddress, channel, success: false, error: error.message });
+      allSuccess = false;
+    }
+  }
+
+  logger.debug('[Batch Approve] 批量授权完成:', { allSuccess, results });
+
+  return {
+    success: allSuccess,
+    results,
+    message: allSuccess ? '批量授权成功' : '部分授权失败'
+  };
 }
 
 // 获取代币信息（用于缓存）
