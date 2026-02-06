@@ -1572,8 +1572,11 @@ async function handleBuy(tokenAddress) {
 
   timer.step('读取交易参数');
 
+  // 🐛 修复：使用路由信息中的 preferredChannel 而不是 DOM 的 channel-selector
+  // 因为后端会根据 routeInfo.preferredChannel 自动选择通道，前端应该与后端保持一致
   if (userSettings?.trading?.autoApproveMode === 'buy') {
-    autoApproveToken(tokenAddress, channel);
+    const effectiveChannel = currentTokenRoute?.preferredChannel || channel;
+    autoApproveToken(tokenAddress, effectiveChannel);
   }
 
   if (!amount || parseFloat(amount) <= 0) {
@@ -1741,10 +1744,13 @@ async function handleSell(tokenAddress) {
 
   timer.step('参数验证和UI更新');
 
+  // 🐛 修复：使用路由信息中的 preferredChannel 而不是 DOM 的 channel-selector
+  // 因为后端会根据 routeInfo.preferredChannel 自动选择通道，前端应该与后端保持一致
   if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel) {
-    const sellApprovalKey = `${tokenAddress.toLowerCase()}:${channel}`;
+    const effectiveChannel = currentTokenRoute?.preferredChannel || channel;
+    const sellApprovalKey = `${tokenAddress.toLowerCase()}:${effectiveChannel}`;
     if (!sellAutoApproveCache.has(sellApprovalKey)) {
-      await autoApproveToken(tokenAddress, channel);
+      await autoApproveToken(tokenAddress, effectiveChannel);
       sellAutoApproveCache.add(sellApprovalKey);
     }
   }
