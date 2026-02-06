@@ -691,6 +691,15 @@ function syncTokenContextFromCurrentPage(force = false) {
         // 使用聚合接口一次性获取所有信息（包括路由）
         const tokenInfo: any = await FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress);
 
+        // 🐛 调试：打印完整的 tokenInfo 结构
+        logger.debug('[Dog Bang] tokenInfo 结构:', JSON.stringify({
+          success: tokenInfo?.success,
+          hasRoute: !!tokenInfo?.route,
+          channelId: tokenInfo?.route?.channelId,
+          metadata: tokenInfo?.route?.metadata,
+          pancakeVersion: tokenInfo?.route?.metadata?.pancakeVersion
+        }));
+
         if (tokenInfo?.success && tokenInfo.route?.channelId) {
           preferredChannelId = tokenInfo.route.channelId;
           pancakeVersion = tokenInfo.route?.metadata?.pancakeVersion;  // 🐛 修复：提取 pancakeVersion
