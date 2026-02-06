@@ -689,13 +689,13 @@ function syncTokenContextFromCurrentPage(force = false) {
 
         // 使用聚合接口预加载所有代币信息（不阻塞主流程）
         FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress)
-          .then(tokenInfo => {
+          .then((tokenInfo: any) => {
             if (tokenInfo?.success && tokenInfo.route?.channelId) {
               preferredChannelId = tokenInfo.route.channelId;
               logger.debug('[Dog Bang] 聚合接口获取到路由:', preferredChannelId);
             }
           })
-          .catch(error => {
+          .catch((error: any) => {
             logger.debug('[Dog Bang] 聚合接口预加载失败:', error);
           });
       }
