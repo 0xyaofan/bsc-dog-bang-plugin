@@ -358,10 +358,11 @@ const [balance, allowance] = await Promise.all([
 
 ### Phase 1：基础设施（已完成）
 - ✅ 创建前端对接层 (`frontend-adapter.ts`)
-- ✅ 在 background/index.ts 中实现批量查询处理器
+- ✅ 创建批量查询处理器 (`batch-query-handlers.ts`)
+- ✅ 在 background/index.ts 中集成批量查询处理器
 - ✅ 在 background 中注册批量查询接口
 
-**说明**：批量查询处理器直接在 `index.ts` 中实现，而不是单独的文件，这样可以直接访问模块级变量（`publicClient`、`walletAccount`、`ERC20_ABI` 等）。
+**说明**：批量查询处理器使用依赖注入模式实现在单独的 `batch-query-handlers.ts` 文件中，通过 `createBatchQueryHandlers(deps)` 函数接收所需的依赖（`publicClient`、`walletAccount`、`ERC20_ABI` 等），保持代码结构清晰，职责分明。
 
 ### Phase 2：迁移现有代码
 - ⏳ 迁移 content script 使用前端对接层
@@ -481,25 +482,48 @@ this.queryHandlers.set('new_query_type', async (requests) => {
 });
 ```
 
-3. 在 `background/index.ts` 中实现后端处理：
+3. 在 `background/index.ts` 中集成处理器：
 ```typescript
-async function handleBatchQueryNewType({ queries }: { queries: any[] }) {
-  // 使用 MultiCall 批量查询
-  // 可以直接访问 publicClient、walletAccount、ERC20_ABI 等变量
-  const contracts = queries.map(q => ({
-    address: q.tokenAddress,
-    abi: ERC20_ABI,
-    functionName: 'someFunction',
-    args: [q.param]
-  }));
+// 1. 导入批量查询处理器
+import { createBatchQueryHandlers, type BatchQueryDependencies } from './batch-query-handlers.js';
 
-  const results = await publicClient.multicall({ contracts });
-  // 处理并返回结果
+// 2. 声明全局变量
+let batchQueryHandlers = null;
+
+// 3. 在钱包初始化后创建处理器
+function initializeBatchQueryHandlers() {
+  if (!publicClient || !walletAccount) {
+    return;
+  }
+
+  const deps: BatchQueryDependencies = {
+    publicClient,
+    walletAccount,
+    ERC20_ABI,
+    CONTRACTS,
+    TOKEN_INFO_CACHE_TTL,
+    tokenInfoCache,
+    getCacheScope,
+    normalizeAddressValue,
+    ensureTokenMetadata,
+    fetchRouteWithFallback,
+    readCachedTokenInfo,
+    writeCachedTokenInfo,
+    fetchTokenInfoData
+  };
+
+  batchQueryHandlers = createBatchQueryHandlers(deps);
 }
-```
 
-4. 在 background 中注册接口：
-```typescript
+// 4. 创建委托函数
+async function handleBatchQueryNewType(data: any) {
+  if (!batchQueryHandlers) {
+    return { success: false, error: 'Batch query handlers not initialized' };
+  }
+  return batchQueryHandlers.handleBatchQueryNewType(data);
+}
+
+// 5. 注册到 ACTION_HANDLER_MAP
 const ACTION_HANDLER_MAP = {
   // ...
   batch_query_new_type: handleBatchQueryNewType

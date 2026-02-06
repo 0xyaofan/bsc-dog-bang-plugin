@@ -2677,7 +2677,9 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       try {
         // 直接查询 V2 路径，跳过 V3
-        const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, quoteToken, routeInfo);
+        // 🐛 修复：优先使用 routeInfo.quoteToken，因为它包含了代币的筹集币种信息
+        const effectiveQuoteToken = routeInfo.quoteToken || quoteToken;
+        const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, effectiveQuoteToken, routeInfo);
         if (result && result.amountOut > 0n) {
           logger.perf(`${channelLabel} ✅ ${platformName} V2 路径成功，耗时: ${Date.now() - startTime}ms`);
           // 缓存路由，标记为 V2

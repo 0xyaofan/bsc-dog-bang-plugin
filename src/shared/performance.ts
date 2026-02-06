@@ -31,6 +31,15 @@ export class DebugPerformanceTimer {
     this.steps = [];
   }
 
+  /**
+   * 重置计时器状态（用于对象池复用）
+   */
+  reset(type: string) {
+    this.type = type;
+    this.startTime = performance.now();
+    this.steps = [];
+  }
+
   step(name: string) {
     const now = performance.now();
     const duration = now - this.startTime - this.steps.reduce((sum, s) => sum + s.duration, 0);
@@ -101,6 +110,15 @@ export class NoOpPerformanceTimer {
     this.type = type;
     this.steps = [];
   }
+
+  /**
+   * 重置计时器状态（用于对象池复用）
+   */
+  reset(type: string) {
+    this.type = type;
+    this.steps = [];
+  }
+
   step(_name: string) {}
   finish(): PerformanceReport {
     return { totalTime: 0, steps: [] };
@@ -122,6 +140,13 @@ export class PerformanceTimer {
     }
   }
 
+  /**
+   * 重置计时器状态（用于对象池复用）
+   */
+  reset(type: string) {
+    this.impl.reset(type);
+  }
+
   step(name: string) {
     this.impl.step(name);
   }
@@ -129,6 +154,68 @@ export class PerformanceTimer {
   finish(): PerformanceReport {
     return this.impl.finish();
   }
+}
+
+/**
+ * 性能计时器对象池
+ * 复用 PerformanceTimer 实例，避免频繁创建对象
+ */
+class PerformanceTimerPool {
+  private pool: Map<string, PerformanceTimer[]> = new Map();
+  private maxPoolSize = 5; // 每种类型最多缓存 5 个实例
+
+  /**
+   * 获取或创建计时器
+   */
+  acquire(type: string): PerformanceTimer {
+    const typePool = this.pool.get(type);
+    if (typePool && typePool.length > 0) {
+      const timer = typePool.pop()!;
+      // 重置状态，清除上次使用的记录
+      timer.reset(type);
+      return timer;
+    }
+    return new PerformanceTimer(type);
+  }
+
+  /**
+   * 归还计时器到池中
+   */
+  release(type: string, timer: PerformanceTimer) {
+    if (!this.pool.has(type)) {
+      this.pool.set(type, []);
+    }
+    const typePool = this.pool.get(type)!;
+    if (typePool.length < this.maxPoolSize) {
+      // 归还前重置状态，确保池中对象干净
+      timer.reset(type);
+      typePool.push(timer);
+    }
+  }
+
+  /**
+   * 清空对象池
+   */
+  clear() {
+    this.pool.clear();
+  }
+}
+
+// 全局对象池实例
+const timerPool = new PerformanceTimerPool();
+
+/**
+ * 获取性能计时器（从对象池）
+ */
+export function getPerformanceTimer(type: string): PerformanceTimer {
+  return timerPool.acquire(type);
+}
+
+/**
+ * 归还性能计时器到对象池
+ */
+export function releasePerformanceTimer(type: string, timer: PerformanceTimer) {
+  timerPool.release(type, timer);
 }
 
 /**

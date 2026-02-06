@@ -31,10 +31,26 @@ const BASE_CHAIN = {
 
 const RPC_TIMEOUT_MS = RPC_CONFIG?.REQUEST_TIMEOUT_MS ?? 30000;
 
+/**
+ * Chain Config 缓存
+ * 避免重复创建相同的 chain config 对象
+ */
+const chainConfigCache = new Map<string, any>();
+
 export function buildChainConfig(rpcUrl?: string | null, wsUrl: string | null = null) {
+  // 生成缓存键
+  const cacheKey = `${rpcUrl || ''}:${wsUrl || ''}`;
+
+  // 检查缓存
+  const cached = chainConfigCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  // 创建新的 chain config
   const httpUrls = rpcUrl ? [rpcUrl] : [];
   const wsUrls = wsUrl ? [wsUrl] : [];
-  return {
+  const config = {
     ...BASE_CHAIN,
     rpcUrls: {
       default: {
@@ -47,6 +63,10 @@ export function buildChainConfig(rpcUrl?: string | null, wsUrl: string | null = 
       }
     }
   };
+
+  // 缓存并返回
+  chainConfigCache.set(cacheKey, config);
+  return config;
 }
 
 export function createHttpClient(rpcUrl: string, chain?: any) {

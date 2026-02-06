@@ -30,6 +30,36 @@ import { PerformanceTimer, perf } from '../shared/performance.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const V3_FEE_TIERS = [100, 250, 500, 2500, 10000];
+
+/**
+ * Fee Candidates 缓存（Aggregator）
+ * 预计算所有可能的 fee 排列组合，避免每次都 filter
+ */
+const aggregatorFeeCandidatesCache = new Map<number | null, readonly number[]>();
+
+// 预计算所有可能的排列
+function initializeAggregatorFeeCandidatesCache() {
+  // null 的情况：使用默认顺序
+  aggregatorFeeCandidatesCache.set(null, Object.freeze([...V3_FEE_TIERS]));
+
+  // 为每个 fee tier 预计算排列
+  V3_FEE_TIERS.forEach((preferredFee) => {
+    const candidates = [preferredFee, ...V3_FEE_TIERS.filter((fee) => fee !== preferredFee)];
+    aggregatorFeeCandidatesCache.set(preferredFee, Object.freeze(candidates));
+  });
+}
+
+// 初始化缓存
+initializeAggregatorFeeCandidatesCache();
+
+/**
+ * 获取 Fee Candidates（从缓存）
+ * 返回冻结的数组，防止外部修改
+ */
+function getAggregatorFeeCandidates(preferredFee?: number): readonly number[] {
+  const key = typeof preferredFee === 'number' ? preferredFee : null;
+  return aggregatorFeeCandidatesCache.get(key) || Object.freeze([...V3_FEE_TIERS]);
+}
 const V3_DIRECT_QUOTE_TOKENS = new Set(
   [
     CONTRACTS.USD1,
@@ -192,7 +222,20 @@ function getOrCreateFallbackClient(rpcUrl: string) {
   return client;
 }
 
+/**
+ * Fallback Client 数组缓存
+ * 避免每次调用都重新构建数组
+ */
+let cachedAggregatorFallbackClients: any[] | null = null;
+let cachedAggregatorPrimaryClient: any = null;
+
 function buildFallbackClients(primaryClient: any) {
+  // 如果 primaryClient 没变，直接返回缓存的数组
+  if (cachedAggregatorPrimaryClient === primaryClient && cachedAggregatorFallbackClients) {
+    return cachedAggregatorFallbackClients;
+  }
+
+  // 重新构建数组
   const clients: any[] = [];
   V3_FALLBACK_RPC_URLS.forEach((rpcUrl) => {
     const fallbackClient = getOrCreateFallbackClient(rpcUrl);
@@ -200,6 +243,11 @@ function buildFallbackClients(primaryClient: any) {
       clients.push(fallbackClient);
     }
   });
+
+  // 更新缓存
+  cachedAggregatorPrimaryClient = primaryClient;
+  cachedAggregatorFallbackClients = clients;
+
   return clients;
 }
 
@@ -315,11 +363,7 @@ async function quoteViaPancakeV3(params: {
   const factoryAddress = CONTRACTS.PANCAKE_V3_FACTORY as Address;
   const quoterAddress = CONTRACTS.PANCAKE_V3_QUOTER as Address;
   let lastError: any = null;
-  const requestedFee = typeof preferredFee === 'number' ? preferredFee : null;
-  const feeCandidates =
-    requestedFee !== null
-      ? [requestedFee, ...V3_FEE_TIERS.filter((fee) => fee !== requestedFee)]
-      : V3_FEE_TIERS;
+  const feeCandidates = getAggregatorFeeCandidates(preferredFee);
 
   for (const fee of feeCandidates) {
     try {

@@ -980,6 +980,9 @@ if (DEBUG_CONFIG.ENABLED) {
 
 let pollingActive = false;
 let walletStatusInterval: ReturnType<typeof setInterval> | null = null;
+let isWalletLocked = false;
+let lastWalletCheckTime = 0;
+const LOCKED_WALLET_CHECK_INTERVAL = 30000; // 钱包锁定时每30秒检查一次
 
 // 初始化钱包状态（只执行一次）
 function initWalletStatus() {
@@ -995,7 +998,17 @@ function initWalletStatus() {
   }
   walletStatusInterval = setInterval(() => {
     if (!document.hidden) {
-      loadWalletStatus();
+      // 钱包锁定时降低轮询频率
+      if (isWalletLocked) {
+        const now = Date.now();
+        if (now - lastWalletCheckTime >= LOCKED_WALLET_CHECK_INTERVAL) {
+          logger.debug('[Dog Bang] 钱包锁定中，执行定期检查');
+          loadWalletStatus();
+          lastWalletCheckTime = now;
+        }
+      } else {
+        loadWalletStatus();
+      }
     }
   }, UI_CONFIG.BALANCE_UPDATE_INTERVAL ?? CONTENT_CONFIG.BALANCE_POLL_FALLBACK_MS);
 
@@ -1872,6 +1885,10 @@ async function loadWalletStatus() {
     if (response.success) {
       const { address, bnbBalance, tokenBalance } = response.data;
 
+      // 钱包解锁
+      isWalletLocked = false;
+      lastWalletCheckTime = Date.now();
+
       setWalletAddressDisplay(address);
       walletStatusClass = 'wallet-unlocked';
       applyWalletStatusClass();
@@ -1891,6 +1908,10 @@ async function loadWalletStatus() {
         showStatus(`钱包状态错误: ${response?.error || status || '未知错误'}`, 'error');
         return;
       }
+
+      // 钱包锁定
+      isWalletLocked = true;
+      lastWalletCheckTime = Date.now();
 
       setTradeButtonsEnabled(false);
 
@@ -3177,8 +3198,24 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
         // 更新钱包按钮状态，确保浮动窗口的交易按钮可用
         setTradeButtonsEnabled(true);
       } else {
-        // 钱包未解锁或未设置，禁用交易按钮
-        setTradeButtonsEnabled(false);
+        // 钱包锁定时停止轮询
+        const status = response?.status;
+        if (status === 'locked' || status === 'not_loaded' || status === 'not_setup') {
+          logger.debug('[Floating Window] 钱包锁定，停止余额轮询');
+          clearInterval(balanceInterval);
+          stopFloatingFastPolling();
+
+          // 显示锁定提示
+          const bnbBalanceEl = floatingWindow.querySelector('#floating-bnb-balance');
+          const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
+          if (bnbBalanceEl) bnbBalanceEl.textContent = '🔒';
+          if (tokenBalanceEl) tokenBalanceEl.textContent = '🔒';
+
+          setTradeButtonsEnabled(false);
+        } else {
+          // 其他错误，禁用交易按钮
+          setTradeButtonsEnabled(false);
+        }
       }
     } catch (error) {
       logger.debug('[Floating Window] 更新余额失败:', error);
@@ -3932,7 +3969,10 @@ function startRouteCacheRefreshTimer() {
 
   // 每5分钟检查一次
   routeCacheRefreshTimer = setInterval(() => {
-    refreshRouteCacheIfNeeded();
+    // 页面隐藏或钱包锁定时跳过
+    if (!document.hidden && !isWalletLocked) {
+      refreshRouteCacheIfNeeded();
+    }
   }, 5 * 60 * 1000); // 5分钟
 
   logger.debug('[Route Cache] 启动定时刷新机制（每5分钟）');
