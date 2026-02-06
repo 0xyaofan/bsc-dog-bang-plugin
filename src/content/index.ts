@@ -687,26 +687,32 @@ function syncTokenContextFromCurrentPage(force = false) {
       if (walletStatusResponse?.success && walletStatusResponse.data?.address) {
         const walletAddress = walletStatusResponse.data.address;
 
-        // 使用聚合接口预加载所有代币信息（不阻塞主流程）
-        FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress)
-          .then((tokenInfo: any) => {
-            if (tokenInfo?.success && tokenInfo.route?.channelId) {
-              preferredChannelId = tokenInfo.route.channelId;
-              logger.debug('[Dog Bang] 聚合接口获取到路由:', preferredChannelId);
-            }
-          })
-          .catch((error: any) => {
-            logger.debug('[Dog Bang] 聚合接口预加载失败:', error);
-          });
-      }
+        // 使用聚合接口一次性获取所有信息（包括路由）
+        const tokenInfo = await FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress);
 
-      // 同时查询路由（用于立即获取 preferredChannelId）
-      const response = await sendMessageViaAdapter({
-        action: 'get_token_route',
-        data: { tokenAddress }
-      });
-      if (response && response.success && response.data?.preferredChannel) {
-        preferredChannelId = response.data.preferredChannel;
+        if (tokenInfo?.success && tokenInfo.route?.channelId) {
+          preferredChannelId = tokenInfo.route.channelId;
+          logger.debug('[Dog Bang] 聚合接口获取到完整信息，路由:', preferredChannelId);
+        } else {
+          // 聚合接口失败，回退到单独查询路由
+          logger.debug('[Dog Bang] 聚合接口失败，回退到单独查询路由');
+          const response = await sendMessageViaAdapter({
+            action: 'get_token_route',
+            data: { tokenAddress }
+          });
+          if (response && response.success && response.data?.preferredChannel) {
+            preferredChannelId = response.data.preferredChannel;
+          }
+        }
+      } else {
+        // 没有钱包地址，只查询路由
+        const response = await sendMessageViaAdapter({
+          action: 'get_token_route',
+          data: { tokenAddress }
+        });
+        if (response && response.success && response.data?.preferredChannel) {
+          preferredChannelId = response.data.preferredChannel;
+        }
       }
 
     } catch (error) {
