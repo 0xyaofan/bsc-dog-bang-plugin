@@ -3222,20 +3222,20 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       let v2AllowanceFromCache: bigint | null = null;
       let v3AllowanceFromCache: bigint | null = null;
 
-      // 🚀 性能优化：Four.meme/Flap 已迁移代币只使用 V2，跳过 V3 授权查询
-      const shouldSkipV3 = routeInfo?.readyForPancake &&
-                          (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap');
+      // 🐛 修复：根据路由元数据中的版本信息决定查询哪个授权
+      const pancakeVersion = routeInfo?.metadata?.pancakeVersion || 'v2';
+      const shouldSkipV2 = pancakeVersion === 'v3'; // V3 pool 不需要查询 V2 授权
+      const shouldSkipV3 = pancakeVersion === 'v2'; // V2 pool 不需要查询 V3 授权
 
       if (tokenInfo && tokenInfo.allowances) {
         // tokenInfo 包含授权信息，直接使用
-        if (tokenInfo.allowances.pancake) {
+        if (tokenInfo.allowances.pancake && !shouldSkipV2) {
           v2AllowanceFromCache = BigInt(tokenInfo.allowances.pancake);
           logger.debug(`${channelLabel} 使用 tokenInfo 中的 V2 授权: ${v2AllowanceFromCache}`);
         }
-        // 🐛 修复：只有在不跳过 V3 时才设置 V3 授权缓存
-        // Four.meme/Flap 已迁移代币只使用 V2，不需要 V3 授权
-        if (tokenInfo.allowances.pancake && !shouldSkipV3) {
-          v3AllowanceFromCache = BigInt(tokenInfo.allowances.pancake);
+        // 🐛 修复：根据版本决定是否使用 V3 授权缓存
+        if (tokenInfo.allowances.pancakeV3 && !shouldSkipV3) {
+          v3AllowanceFromCache = BigInt(tokenInfo.allowances.pancakeV3);
           logger.debug(`${channelLabel} 使用 tokenInfo 中的 V3 授权: ${v3AllowanceFromCache}`);
         }
       }
@@ -3259,7 +3259,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       // 🚀 性能优化：只有在缓存未命中时才并发查询授权
       // 如果缓存已经有授权信息，直接使用，避免不必要的 RPC 调用
-      const v2AllowancePromise = (contractAddress && v2AllowanceFromCache === null)
+      const v2AllowancePromise = (contractAddress && v2AllowanceFromCache === null && !shouldSkipV2)
         ? (async () => {
             // 查询链上授权
             try {
@@ -3279,7 +3279,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           })()
         : Promise.resolve(v2AllowanceFromCache);
 
-      // 🐛 修复问题2：Four.meme/Flap 已迁移代币跳过 V3 授权查询
+      // 🐛 修复：根据版本决定是否查询 V3 授权
       const v3AllowancePromise = (smartRouterAddress && v3AllowanceFromCache === null && !shouldSkipV3)
         ? (async () => {
             // 查询链上授权
@@ -3300,8 +3300,11 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           })()
         : Promise.resolve(v3AllowanceFromCache);
 
+      if (shouldSkipV2 && v2AllowanceFromCache === null) {
+        logger.debug(`${channelLabel} 使用 V3 pool，跳过 V2 授权查询`);
+      }
       if (shouldSkipV3 && v3AllowanceFromCache === null) {
-        logger.debug(`${channelLabel} Four.meme/Flap 已迁移代币，跳过 V3 授权查询`);
+        logger.debug(`${channelLabel} 使用 V2 pool，跳过 V3 授权查询`);
       }
 
       // 🚀 性能优化：检查授权是否正在进行中（修复问题2）
@@ -3535,15 +3538,6 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       const isSingleHop = v3Route.tokens.length === 2;
       const encodedPath = v3Route.encodedPath || (!isSingleHop ? encodeV3Path(v3Route.tokens, v3Route.fees) : undefined);
 
-      // 🐛 修复：判断最终输出代币是否是 WBNB
-      const finalOutputToken = v3Route.tokens[v3Route.tokens.length - 1].toLowerCase();
-      const wbnbAddress = CONTRACTS.WBNB.toLowerCase();
-      const isOutputWBNB = finalOutputToken === wbnbAddress;
-
-      // 如果输出是 WBNB，recipient 设为 smartRouter，后续需要 unwrap
-      // 如果输出是其他代币（如 USD1），recipient 直接设为用户地址
-      const swapRecipient = isOutputWBNB ? smartRouterAddress : account.address;
-
       const swapCallData = isSingleHop
         ? encodeFunctionData({
             abi: smartRouterAbi,
@@ -3552,7 +3546,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
               tokenIn: v3Route.tokens[0],
               tokenOut: v3Route.tokens[1],
               fee: v3Route.fees[0],
-              recipient: swapRecipient,
+              recipient: smartRouterAddress,
               amountIn: amountToSell,
               amountOutMinimum: amountOutMin,
               sqrtPriceLimitX96: 0n
@@ -3563,25 +3557,20 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             functionName: 'exactInput',
             args: [{
               path: encodedPath,
-              recipient: swapRecipient,
+              recipient: smartRouterAddress,
               amountIn: amountToSell,
               amountOutMinimum: amountOutMin
             }]
           });
 
-      // 只有输出是 WBNB 时才需要 unwrap
-      const calls = isOutputWBNB
-        ? [
-            swapCallData,
-            encodeFunctionData({
-              abi: smartRouterAbi,
-              functionName: 'unwrapWETH9',
-              args: [amountOutMin, account.address]
-            })
-          ]
-        : [swapCallData];
+      const unwrapCallData = encodeFunctionData({
+        abi: smartRouterAbi,
+        functionName: 'unwrapWETH9',
+        args: [amountOutMin, account.address]
+      });
+      const calls = [swapCallData, unwrapCallData];
 
-      logger.debug(`${channelLabel} 开始发送 V3 卖出交易... (输出: ${isOutputWBNB ? 'WBNB->BNB' : '非BNB代币'})`);
+      logger.debug(`${channelLabel} 开始发送 V3 卖出交易...`);
       const sendV3Sell = (nonce?: number) =>
         sendContractTransaction({
           walletClient,
