@@ -502,7 +502,9 @@ export function createBatchQueryHandlers(deps: BatchQueryDependencies) {
               route: {
                 platform: route.platform,
                 readyForPancake: route.readyForPancake,
-                channelId: route.preferredChannel
+                channelId: route.preferredChannel,
+                quoteToken: route.quoteToken,  // 🐛 修复：添加 quoteToken
+                metadata: route.metadata  // 🐛 修复：添加 metadata（包含 pancakeVersion）
               }
             };
           } catch (error: any) {
