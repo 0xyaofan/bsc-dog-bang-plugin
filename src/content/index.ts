@@ -688,7 +688,7 @@ function syncTokenContextFromCurrentPage(force = false) {
         const walletAddress = walletStatusResponse.data.address;
 
         // 使用聚合接口一次性获取所有信息（包括路由）
-        const tokenInfo = await FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress);
+        const tokenInfo: any = await FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress);
 
         if (tokenInfo?.success && tokenInfo.route?.channelId) {
           preferredChannelId = tokenInfo.route.channelId;
