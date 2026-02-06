@@ -11,6 +11,7 @@
 import '../shared/sw-polyfills.js';
 import { logger } from '../shared/logger.js';
 import { PerformanceTimer, perf } from '../shared/performance.js';
+import { rpcQueue } from '../shared/rpc-queue.js';
 import {
   WALLET_CONFIG,
   NETWORK_CONFIG,
@@ -4051,18 +4052,26 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
   const normalizedTokenAddress = normalizeAddressValue(tokenAddress);
   const normalizedWalletAddress = normalizeAddressValue(walletAddress);
 
-  const balanceValue = await cacheCall(
+  // 使用 RPC 队列来限制余额查询频率
+  // 余额查询是非关键操作，使用 low 优先级
+  const queueKey = `balance:${normalizedTokenAddress}:${normalizedWalletAddress}`;
+  const balanceValue = await rpcQueue.enqueue(
+    queueKey,
     () =>
-      executeWithRetry(async () =>
-        publicClient.readContract({
-          address: tokenAddress,
-          abi: ERC20_ABI,
-          functionName: 'balanceOf',
-          args: [walletAddress]
-        })
+      cacheCall(
+        () =>
+          executeWithRetry(async () =>
+            publicClient.readContract({
+              address: tokenAddress,
+              abi: ERC20_ABI,
+              functionName: 'balanceOf',
+              args: [walletAddress]
+            })
+          ),
+        `token-info-balance:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
+        TOKEN_INFO_CACHE_TTL
       ),
-    `token-info-balance:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
-    TOKEN_INFO_CACHE_TTL
+    'low' // 余额查询使用低优先级
   );
 
   const result: TokenInfoResult = {
@@ -4073,32 +4082,39 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
   };
 
   if (needApproval) {
-    const [pancakeAllowance, fourAllowance, flapAllowance] = await cacheCall(
+    // 授权查询也使用队列，但优先级稍高
+    const allowanceQueueKey = `allowance:${normalizedTokenAddress}:${normalizedWalletAddress}`;
+    const [pancakeAllowance, fourAllowance, flapAllowance] = await rpcQueue.enqueue(
+      allowanceQueueKey,
       () =>
-        executeWithRetry(async () =>
-          Promise.all([
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [walletAddress, CONTRACTS.PANCAKE_ROUTER]
-            }),
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [walletAddress, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
-            }),
-            publicClient.readContract({
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [walletAddress, CONTRACTS.FLAP_PORTAL]
-            })
-          ])
+        cacheCall(
+          () =>
+            executeWithRetry(async () =>
+              Promise.all([
+                publicClient.readContract({
+                  address: tokenAddress,
+                  abi: ERC20_ABI,
+                  functionName: 'allowance',
+                  args: [walletAddress, CONTRACTS.PANCAKE_ROUTER]
+                }),
+                publicClient.readContract({
+                  address: tokenAddress,
+                  abi: ERC20_ABI,
+                  functionName: 'allowance',
+                  args: [walletAddress, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
+                }),
+                publicClient.readContract({
+                  address: tokenAddress,
+                  abi: ERC20_ABI,
+                  functionName: 'allowance',
+                  args: [walletAddress, CONTRACTS.FLAP_PORTAL]
+                })
+              ])
+            ),
+          `token-allowances:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
+          TOKEN_INFO_CACHE_TTL
         ),
-      `token-allowances:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
-      TOKEN_INFO_CACHE_TTL
+      'normal' // 授权查询使用普通优先级
     );
 
     result.allowances = {
