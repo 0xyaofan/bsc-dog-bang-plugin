@@ -461,3 +461,169 @@ export async function queryTokenFullInfo(
 ) {
   return frontendAdapter.query('token_full_info', { tokenAddress, walletAddress }, options);
 }
+
+// ========== 其他前端请求封装 ==========
+
+/**
+ * 获取钱包状态
+ */
+export async function getWalletStatus(tokenAddress?: string) {
+  return chrome.runtime.sendMessage({
+    action: 'get_wallet_status',
+    data: { tokenAddress }
+  });
+}
+
+/**
+ * 获取代币信息
+ * @deprecated 推荐使用 queryTokenFullInfo 聚合接口
+ */
+export async function getTokenInfo(tokenAddress: string, needApproval: boolean = false) {
+  return chrome.runtime.sendMessage({
+    action: 'get_token_info',
+    data: { tokenAddress, needApproval }
+  });
+}
+
+/**
+ * 获取代币路由
+ */
+export async function getTokenRoute(tokenAddress: string, force: boolean = false) {
+  return chrome.runtime.sendMessage({
+    action: 'get_token_route',
+    data: { tokenAddress, force }
+  });
+}
+
+/**
+ * 检查代币授权
+ */
+export async function checkTokenApproval(tokenAddress: string, spenderAddress: string) {
+  return chrome.runtime.sendMessage({
+    action: 'check_token_approval',
+    data: { tokenAddress, spenderAddress }
+  });
+}
+
+/**
+ * 授权代币
+ */
+export async function approveToken(
+  tokenAddress: string,
+  spenderAddress: string,
+  amount?: string,
+  options?: { maxPriorityFeePerGas?: string; maxFeePerGas?: string }
+) {
+  return chrome.runtime.sendMessage({
+    action: 'approve_token',
+    data: { tokenAddress, spenderAddress, amount, ...options }
+  });
+}
+
+/**
+ * 撤销代币授权
+ */
+export async function revokeTokenApproval(tokenAddress: string, spenderAddress: string) {
+  return chrome.runtime.sendMessage({
+    action: 'revoke_token_approval',
+    data: { tokenAddress, spenderAddress }
+  });
+}
+
+/**
+ * 买入代币
+ */
+export async function buyToken(params: {
+  tokenAddress: string;
+  amount: string;
+  slippage?: number;
+  maxPriorityFeePerGas?: string;
+  maxFeePerGas?: string;
+  channelId?: string;
+}) {
+  return chrome.runtime.sendMessage({
+    action: 'buy_token',
+    data: params
+  });
+}
+
+/**
+ * 卖出代币
+ */
+export async function sellToken(params: {
+  tokenAddress: string;
+  percentage: number;
+  slippage?: number;
+  maxPriorityFeePerGas?: string;
+  maxFeePerGas?: string;
+  channelId?: string;
+}) {
+  return chrome.runtime.sendMessage({
+    action: 'sell_token',
+    data: params
+  });
+}
+
+/**
+ * 估算卖出金额
+ */
+export async function estimateSellAmount(
+  tokenAddress: string,
+  percentage: number,
+  channelId?: string
+) {
+  return chrome.runtime.sendMessage({
+    action: 'estimate_sell_amount',
+    data: { tokenAddress, percentage, channelId }
+  });
+}
+
+/**
+ * 预加载代币余额
+ */
+export async function prefetchTokenBalance(tokenAddress: string) {
+  return chrome.runtime.sendMessage({
+    action: 'prefetch_token_balance',
+    data: { tokenAddress }
+  });
+}
+
+/**
+ * 预加载授权状态
+ */
+export async function prefetchApprovalStatus(tokenAddress: string) {
+  return chrome.runtime.sendMessage({
+    action: 'prefetch_approval_status',
+    data: { tokenAddress }
+  });
+}
+
+/**
+ * 预加载路由
+ */
+export async function prefetchRoute(tokenAddress: string) {
+  return chrome.runtime.sendMessage({
+    action: 'prefetch_route',
+    data: { tokenAddress }
+  });
+}
+
+/**
+ * 显示通知
+ */
+export async function showNotification(title: string, message: string) {
+  return chrome.runtime.sendMessage({
+    action: 'show_notification',
+    data: { title, message }
+  });
+}
+
+/**
+ * 获取缓存信息（调试用）
+ */
+export async function getCacheInfo() {
+  return chrome.runtime.sendMessage({
+    action: 'get_cache_info',
+    data: {}
+  });
+}

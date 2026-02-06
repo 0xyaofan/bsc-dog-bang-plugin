@@ -373,6 +373,98 @@ const [balance, allowance] = await Promise.all([
 
 ## 维护指南
 
+### 前端对接层提供的所有接口
+
+#### 1. 查询类接口（支持批量和缓存）
+
+**聚合查询接口（推荐）**：
+```typescript
+queryTokenFullInfo(tokenAddress, walletAddress, options?)
+// 一次性返回：余额、授权、元数据、路由
+```
+
+**独立查询接口**：
+```typescript
+queryBalance(tokenAddress, walletAddress, options?)
+queryAllowance(tokenAddress, walletAddress, spenderAddress, options?)
+queryMetadata(tokenAddress, fields, options?)
+queryRoute(tokenAddress, force?, options?)
+queryApprovalStatus(tokenAddress, walletAddress, spenderAddress, options?)
+```
+
+#### 2. 钱包管理接口
+
+```typescript
+getWalletStatus(tokenAddress?)
+// 获取钱包状态（地址、余额等）
+```
+
+#### 3. 代币信息接口
+
+```typescript
+getTokenInfo(tokenAddress, needApproval?)
+// 已废弃，推荐使用 queryTokenFullInfo
+
+getTokenRoute(tokenAddress, force?)
+// 获取代币路由信息
+```
+
+#### 4. 授权管理接口
+
+```typescript
+checkTokenApproval(tokenAddress, spenderAddress)
+// 检查代币授权
+
+approveToken(tokenAddress, spenderAddress, amount?, options?)
+// 授权代币
+
+revokeTokenApproval(tokenAddress, spenderAddress)
+// 撤销代币授权
+```
+
+#### 5. 交易接口
+
+```typescript
+buyToken({ tokenAddress, amount, slippage?, ... })
+// 买入代币
+
+sellToken({ tokenAddress, percentage, slippage?, ... })
+// 卖出代币
+
+estimateSellAmount(tokenAddress, percentage, channelId?)
+// 估算卖出金额
+```
+
+#### 6. 预加载接口
+
+```typescript
+prefetchTokenBalance(tokenAddress)
+// 预加载代币余额
+
+prefetchApprovalStatus(tokenAddress)
+// 预加载授权状态
+
+prefetchRoute(tokenAddress)
+// 预加载路由信息
+```
+
+#### 7. 工具接口
+
+```typescript
+showNotification(title, message)
+// 显示通知
+
+getCacheInfo()
+// 获取缓存信息（调试用）
+```
+
+### 使用建议
+
+1. **页面切换/初始加载**：使用 `queryTokenFullInfo` 聚合接口
+2. **快速轮询余额**：使用 `queryBalance` + 低优先级
+3. **交易前查询**：使用独立接口 + 高优先级 + immediate
+4. **预加载**：使用 `prefetch*` 系列接口
+
 ### 添加新的查询类型
 
 1. 在 `frontend-adapter.ts` 中添加查询类型：
