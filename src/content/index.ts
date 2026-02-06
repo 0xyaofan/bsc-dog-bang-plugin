@@ -14,11 +14,97 @@ import {
   loadUserSettings,
   onUserSettingsChange
 } from '../shared/user-settings.js';
+import * as FrontendAdapter from '../shared/frontend-adapter.js';
 
 declare global {
   interface Window {
     __DOG_BANG_SIDE_PANEL_MODE__?: boolean;
   }
+}
+
+// ========== 前端对接层辅助函数 ==========
+
+/**
+ * 包装 safeSendMessage，优先使用前端对接层
+ * 逐步迁移到前端对接层，保持向后兼容
+ */
+async function sendMessageViaAdapter(message: any) {
+  const { action, data } = message;
+
+  // 优先使用前端对接层的接口
+  switch (action) {
+    case 'get_wallet_status':
+      return FrontendAdapter.getWalletStatus(data?.tokenAddress);
+
+    case 'get_token_info':
+      return FrontendAdapter.getTokenInfo(data.tokenAddress, data.needApproval);
+
+    case 'get_token_route':
+      return FrontendAdapter.getTokenRoute(data.tokenAddress, data.force);
+
+    case 'check_token_approval':
+      // 需要转换 channel 为 spenderAddress
+      const channelConfig = CHANNELS[data.channel];
+      if (channelConfig?.spenderAddress) {
+        return FrontendAdapter.checkTokenApproval(data.tokenAddress, channelConfig.spenderAddress);
+      }
+      break;
+
+    case 'approve_token':
+      // 需要转换 channel 为 spenderAddress
+      const approveChannelConfig = CHANNELS[data.channel];
+      if (approveChannelConfig?.spenderAddress) {
+        return FrontendAdapter.approveToken(
+          data.tokenAddress,
+          approveChannelConfig.spenderAddress,
+          data.amount,
+          {
+            maxPriorityFeePerGas: data.maxPriorityFeePerGas,
+            maxFeePerGas: data.maxFeePerGas
+          }
+        );
+      }
+      break;
+
+    case 'revoke_token_approval':
+      // 需要转换 channel 为 spenderAddress
+      const revokeChannelConfig = CHANNELS[data.channel];
+      if (revokeChannelConfig?.spenderAddress) {
+        return FrontendAdapter.revokeTokenApproval(data.tokenAddress, revokeChannelConfig.spenderAddress);
+      }
+      break;
+
+    case 'buy_token':
+      return FrontendAdapter.buyToken(data);
+
+    case 'sell_token':
+      return FrontendAdapter.sellToken(data);
+
+    case 'estimate_sell_amount':
+      return FrontendAdapter.estimateSellAmount(data.tokenAddress, data.percentage, data.channelId);
+
+    case 'prefetch_token_balance':
+      return FrontendAdapter.prefetchTokenBalance(data.tokenAddress);
+
+    case 'prefetch_approval_status':
+      return FrontendAdapter.prefetchApprovalStatus(data.tokenAddress);
+
+    case 'prefetch_route':
+      return FrontendAdapter.prefetchRoute(data.tokenAddress);
+
+    case 'show_notification':
+      return FrontendAdapter.showNotification(data.title, data.message);
+
+    case 'get_cache_info':
+      return FrontendAdapter.getCacheInfo();
+
+    default:
+      // 未迁移的接口，回退到原始方法
+      return safeSendMessage(message);
+  }
+
+  // 如果没有匹配到，回退到原始方法
+  return safeSendMessage(message);
 }
 
 const SIDE_PANEL_TOKEN_STORAGE_KEY = 'dogBangLastTokenContext';
@@ -590,7 +676,7 @@ function syncTokenContextFromCurrentPage(force = false) {
 
     let preferredChannelId: string | undefined;
     try {
-      const response = await safeSendMessage({
+      const response = await sendMessageViaAdapter({
         action: 'get_token_route',
         data: { tokenAddress }
       });
@@ -602,22 +688,22 @@ function syncTokenContextFromCurrentPage(force = false) {
       // 这样用户点击买入时，数据已经缓存好了
       Promise.all([
         // 预加载代币余额
-        safeSendMessage({
+        sendMessageViaAdapter({
           action: 'prefetch_token_balance',
           data: { tokenAddress }
-        }).catch(() => {}), // 静默失败
+        }).catch(() => {}),
 
         // 预加载授权状态（如果启用了切换页面授权）
-        safeSendMessage({
+        sendMessageViaAdapter({
           action: 'prefetch_approval_status',
           data: { tokenAddress }
-        }).catch(() => {}), // 静默失败
+        }).catch(() => {}),
 
         // 🚀 新增：预加载交易路由（买入优先，卖出并发）
-        safeSendMessage({
+        sendMessageViaAdapter({
           action: 'prefetch_route',
           data: { tokenAddress }
-        }).catch(() => {}) // 静默失败
+        }).catch(() => {})
       ]).catch(() => {}); // 整体静默失败，不影响主流程
 
     } catch (error) {
@@ -994,7 +1080,7 @@ function stopFastPolling() {
  */
 async function updateTokenBalance(tokenAddress: string): Promise<string | null> {
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'get_token_info',
       data: {
         tokenAddress,
@@ -1035,11 +1121,11 @@ async function updateTokenBalance(tokenAddress: string): Promise<string | null> 
  */
 async function updateTokenAllowances(tokenAddress: string, channel?: string): Promise<void> {
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'get_token_info',
       data: {
         tokenAddress,
-        needApproval: true  // 获取授权信息
+        needApproval: true
       }
     });
 
@@ -1082,11 +1168,11 @@ async function loadTokenInfo(tokenAddress) {
   try {
     logger.debug('[Dog Bang] 从 background 获取代币信息');
 
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'get_token_info',
       data: {
         tokenAddress,
-        needApproval: true  // 获取授权信息，用于卖出时的性能优化
+        needApproval: true
       }
     });
 
@@ -1136,7 +1222,7 @@ async function loadTokenApprovalStatus(tokenAddress: string, channel?: string): 
 
     logger.debug('[Dog Bang] 查询授权状态:', { tokenAddress, channel: currentChannel });
 
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'check_token_approval',
       data: {
         tokenAddress,
@@ -1229,7 +1315,7 @@ async function handleManualApprove() {
   showStatus('正在授权...', 'info');
 
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'approve_token',
       data: {
         tokenAddress,
@@ -1276,7 +1362,7 @@ async function handleRevokeApproval() {
   showStatus('正在撤销授权...', 'info');
 
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'revoke_token_approval',
       data: {
         tokenAddress,
@@ -1330,7 +1416,7 @@ async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
   updateTokenApprovalDisplay(false, true, undefined, 'approve');
 
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'approve_token',
       data: {
         tokenAddress,
@@ -1378,7 +1464,7 @@ async function loadTokenRoute(tokenAddress: string, options: { force?: boolean }
     return;
   }
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'get_token_route',
       data: {
         tokenAddress,
@@ -1492,7 +1578,7 @@ async function handleBuy(tokenAddress) {
     const messageSendStart = perf.now();
 
     // 买入不需要传递代币信息,后端会自己查询(有缓存)
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'buy_token',
       data: {
         tokenAddress,
@@ -1663,7 +1749,7 @@ async function handleSell(tokenAddress) {
     const messageSendStart = perf.now();
 
     // 直接发送请求给 background，background 会处理所有数据获取
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'sell_token',
       data: {
         tokenAddress,
@@ -1767,7 +1853,7 @@ async function handleSell(tokenAddress) {
 // ========== 优化的钱包状态加载 ==========
 async function loadWalletStatus() {
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'get_wallet_status',
       data: {
         tokenAddress: currentTokenAddress  // 只传递代币地址,让后端决定是否查询
@@ -2057,7 +2143,7 @@ async function refreshSellEstimate() {
   const requestId = ++sellEstimateRequestId;
 
   try {
-    const response = await safeSendMessage({
+    const response = await sendMessageViaAdapter({
       action: 'estimate_sell_amount',
       data: {
         tokenAddress: currentTokenAddress,
@@ -2822,7 +2908,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
           const gasInput = floatingWindow.querySelector('[data-setting="buy-gas"]') as HTMLInputElement;
           const gasPrice = parseFloat(gasInput?.value || '1');
 
-          const response = await safeSendMessage({
+          const response = await sendMessageViaAdapter({
             action: 'buy_token',
             data: {
               tokenAddress: currentTokenAddress,
@@ -2865,7 +2951,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             await updateTokenBalance(currentTokenAddress);
           }
 
-          const response = await safeSendMessage({
+          const response = await sendMessageViaAdapter({
             action: 'sell_token',
             data: {
               tokenAddress: currentTokenAddress,
@@ -3058,7 +3144,7 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
   // 更新余额显示
   const updateFloatingBalances = async () => {
     try {
-      const response = await safeSendMessage({
+      const response = await sendMessageViaAdapter({
         action: 'get_wallet_status',
         data: {
           tokenAddress: currentTokenAddress
@@ -3334,7 +3420,7 @@ async function requestTokenApproval(tokenAddress?: string | null, channel?: stri
       // 显示授权中状态
       updateTokenApprovalDisplay(false, true, undefined, 'approve');
 
-      const response = await safeSendMessage({
+      const response = await sendMessageViaAdapter({
         action: 'approve_token',
         data: {
           tokenAddress,
