@@ -27,7 +27,7 @@ const PANCAKE_FACTORY = '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73';
 const BSC_RPC = 'https://api.zan.top/node/v1/bsc/mainnet/9ca4f22e10234d7ab736c8a8dc2911a6/';
 
 // 已迁移的代币地址
-const TOKEN_ADDRESS = '0xf74548802f4c700315f019fde17178b392ee4444';
+const TOKEN_ADDRESS = '0x7f0c0db02609b7acd5ed60dc81a1208b15144444';
 
 // 创建客户端
 const client = createPublicClient({

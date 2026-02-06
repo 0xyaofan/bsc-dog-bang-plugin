@@ -1,6 +1,6 @@
 import type { Address } from 'viem';
 import { calculateRatio as calculateRatioSDK } from './pancake-sdk-utils.js';
-import { CONTRACTS, PANCAKE_FACTORY_ABI } from './trading-config.js';
+import { CONTRACTS, PANCAKE_FACTORY_ABI, PANCAKE_V3_FACTORY_ABI } from './trading-config.js';
 import { getFourQuoteTokenList } from './channel-config.js';
 import { logger } from './logger.js';
 import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
@@ -81,9 +81,9 @@ function cleanupRouteCache(): void {
 
 // Pair 地址缓存 - 避免重复查询同一个代币的 Pancake pair
 // key: tokenAddress (lowercase)
-// value: { pairAddress, quoteToken, timestamp }
+// value: { pairAddress, quoteToken, version, timestamp }
 // 永久缓存：Pancake pair 一旦创建就不会改变
-const pancakePairCache = new Map<string, { pairAddress: string; quoteToken: string; timestamp: number }>();
+const pancakePairCache = new Map<string, { pairAddress: string; quoteToken: string; version: 'v2' | 'v3'; timestamp: number }>();
 
 function isZeroAddress(value?: string | null) {
   if (typeof value !== 'string') {
@@ -141,6 +141,7 @@ type PancakePairCheckResult = {
   hasLiquidity: boolean;
   quoteToken?: string;
   pairAddress?: string;
+  version?: 'v2' | 'v3'; // 🐛 修复：记录 pair 的协议版本
 };
 
 export type RouteFetchResult = {
@@ -157,6 +158,7 @@ export type RouteFetchResult = {
     flapStateReader?: string;
     pancakeQuoteToken?: string;
     pancakePairAddress?: string;
+    pancakeVersion?: 'v2' | 'v3'; // 🐛 修复：记录 PancakeSwap 版本
     pancakePreferredMode?: 'v2' | 'v3';
   };
   notes?: string;
@@ -221,6 +223,10 @@ function mergePancakeMetadata(
   if (pairInfo.pairAddress) {
     next.pancakePairAddress = pairInfo.pairAddress;
   }
+  // 🐛 修复：记录 PancakeSwap 版本
+  if (pairInfo.version) {
+    next.pancakeVersion = pairInfo.version;
+  }
   return next;
 }
 
@@ -239,7 +245,8 @@ async function checkPancakePair(
     return {
       hasLiquidity: true,
       quoteToken: cached.quoteToken,
-      pairAddress: cached.pairAddress
+      pairAddress: cached.pairAddress,
+      version: cached.version
     };
   }
 
@@ -248,6 +255,7 @@ async function checkPancakePair(
   if (quoteToken && typeof quoteToken === 'string') {
     const normalizedQuote = quoteToken.toLowerCase();
     if (normalizedQuote && normalizedQuote !== ZERO_ADDRESS) {
+      // 先尝试 V2 pair
       try {
         const pair = (await publicClient.readContract({
           address: CONTRACTS.PANCAKE_FACTORY,
@@ -260,21 +268,58 @@ async function checkPancakePair(
           const result = {
             hasLiquidity: true,
             quoteToken: normalizedQuote,
-            pairAddress: pair
+            pairAddress: pair,
+            version: 'v2' as const
           };
           // 缓存查询结果
           pancakePairCache.set(cacheKey, {
             pairAddress: pair,
             quoteToken: normalizedQuote,
+            version: 'v2',
             timestamp: now
           });
           return result;
         }
       } catch (error) {
-        // 查询失败，继续执行兜底逻辑
+        // V2 查询失败，继续尝试 V3
       }
 
-      // 如果明确的quoteToken没有找到pair，直接返回失败
+      // 🐛 修复：V2 没有找到 pair，尝试查找 V3 pool
+      // V3 使用 PoolFactory.getPool(tokenA, tokenB, fee) 查询
+      // 常见的 fee 级别：100 (0.01%), 500 (0.05%), 2500 (0.25%), 10000 (1%)
+      const v3Fees = [500, 2500, 10000, 100]; // 按常用程度排序
+      for (const fee of v3Fees) {
+        try {
+          const pool = (await publicClient.readContract({
+            address: CONTRACTS.PANCAKE_V3_FACTORY,
+            abi: PANCAKE_V3_FACTORY_ABI,
+            functionName: 'getPool',
+            args: [tokenAddress, normalizedQuote as Address, fee]
+          })) as string;
+
+          if (typeof pool === 'string' && pool !== ZERO_ADDRESS) {
+            const result = {
+              hasLiquidity: true,
+              quoteToken: normalizedQuote,
+              pairAddress: pool,
+              version: 'v3' as const
+            };
+            // 缓存查询结果
+            pancakePairCache.set(cacheKey, {
+              pairAddress: pool,
+              quoteToken: normalizedQuote,
+              version: 'v3',
+              timestamp: now
+            });
+            logger.debug(`[Route] 找到 V3 pool (fee=${fee}):`, pool);
+            return result;
+          }
+        } catch (error) {
+          // 继续尝试下一个 fee 级别
+        }
+      }
+
+      // 如果明确的quoteToken在 V2 和 V3 都没有找到pair，直接返回失败
       // 不再尝试其他候选（因为Four.meme不会换quote token）
       return { hasLiquidity: false };
     }
@@ -324,13 +369,14 @@ async function checkPancakePair(
   const results = await Promise.all(pairPromises);
   for (const result of results) {
     if (result && result.hasLiquidity) {
-      // 缓存查询结果
+      // 缓存查询结果（兜底逻辑只查询 V2）
       pancakePairCache.set(cacheKey, {
         pairAddress: result.pairAddress,
         quoteToken: result.quoteToken,
+        version: 'v2',
         timestamp: now
       });
-      return result;
+      return { ...result, version: 'v2' as const };
     }
   }
 
@@ -438,17 +484,19 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
         pancakePair = {
           hasLiquidity: true,
           quoteToken: normalizedQuote,
-          pairAddress: pairAddress
+          pairAddress: pairAddress,
+          version: 'v2' // Four.meme helper 返回的是 V2 pair
         };
+      } else {
+        // 🐛 修复：getPancakePair 返回零地址，通过 Factory 查找 V2/V3 pair
+        logger.debug(`[Route] getPancakePair 返回零地址，尝试通过 Factory 查找 pair`);
+        pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
       }
     } catch (error) {
-      // getPancakePair 调用失败，回退到使用 quoteToken
+      // getPancakePair 调用失败，回退到通过 Factory 查找
+      logger.debug(`[Route] getPancakePair 调用失败，尝试通过 Factory 查找 pair:`, error);
       if (normalizedQuote) {
-        pancakePair = {
-          hasLiquidity: true,
-          quoteToken: normalizedQuote,
-          pairAddress: undefined
-        };
+        pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
       }
     }
   }
