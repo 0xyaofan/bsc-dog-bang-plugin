@@ -358,8 +358,10 @@ const [balance, allowance] = await Promise.all([
 
 ### Phase 1：基础设施（已完成）
 - ✅ 创建前端对接层 (`frontend-adapter.ts`)
-- ✅ 创建批量查询处理器 (`batch-query-handlers.ts`)
+- ✅ 在 background/index.ts 中实现批量查询处理器
 - ✅ 在 background 中注册批量查询接口
+
+**说明**：批量查询处理器直接在 `index.ts` 中实现，而不是单独的文件，这样可以直接访问模块级变量（`publicClient`、`walletAccount`、`ERC20_ABI` 等）。
 
 ### Phase 2：迁移现有代码
 - ⏳ 迁移 content script 使用前端对接层
@@ -479,17 +481,29 @@ this.queryHandlers.set('new_query_type', async (requests) => {
 });
 ```
 
-3. 在 `batch-query-handlers.ts` 中实现后端处理：
+3. 在 `background/index.ts` 中实现后端处理：
 ```typescript
-export async function handleBatchQueryNewType({ queries }) {
+async function handleBatchQueryNewType({ queries }: { queries: any[] }) {
   // 使用 MultiCall 批量查询
-  // 返回结果
+  // 可以直接访问 publicClient、walletAccount、ERC20_ABI 等变量
+  const contracts = queries.map(q => ({
+    address: q.tokenAddress,
+    abi: ERC20_ABI,
+    functionName: 'someFunction',
+    args: [q.param]
+  }));
+
+  const results = await publicClient.multicall({ contracts });
+  // 处理并返回结果
 }
 ```
 
 4. 在 background 中注册接口：
 ```typescript
-ACTION_HANDLER_MAP['batch_query_new_type'] = handleBatchQueryNewType;
+const ACTION_HANDLER_MAP = {
+  // ...
+  batch_query_new_type: handleBatchQueryNewType
+};
 ```
 
 ### 调整批次配置
