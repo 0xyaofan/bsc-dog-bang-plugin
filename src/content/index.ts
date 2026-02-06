@@ -1509,6 +1509,9 @@ async function loadTokenRoute(tokenAddress: string, options: { force?: boolean }
   }
 }
 
+// 用于跟踪上一次的路由状态，检测迁移变化
+let previousTokenRoute: any = null;
+
 function applyTokenRouteToUI(route: any) {
   if (!route) {
     return;
@@ -1529,6 +1532,25 @@ function applyTokenRouteToUI(route: any) {
     statusEl.textContent = `${channelName} · ${stateLabel}`;
   }
 
+  // 🐛 修复：检测代币迁移完成，主动触发 PancakeSwap 授权
+  // 当代币从未迁移变为已迁移时，preferredChannel 会从 'four'/'flap' 变为 'pancake'
+  // 此时需要主动授权 PancakeSwap Router，避免用户交易时再授权
+  const hasMigrated = previousTokenRoute &&
+                      !previousTokenRoute.readyForPancake &&
+                      route.readyForPancake &&
+                      route.preferredChannel === 'pancake';
+
+  if (hasMigrated && currentTokenAddress && userSettings?.trading?.autoApproveMode) {
+    logger.debug('[Dog Bang] 检测到代币迁移完成，主动授权 PancakeSwap');
+    // 异步执行，不阻塞 UI 更新
+    autoApproveToken(currentTokenAddress, 'pancake').catch((error) => {
+      logger.debug('[Dog Bang] 迁移后自动授权失败:', error);
+    });
+  }
+
+  // 保存当前路由状态，用于下次比较
+  previousTokenRoute = route;
+
   if (!userChannelOverride && route.preferredChannel) {
     const channelSelector = document.getElementById('channel-selector') as HTMLSelectElement | null;
     if (channelSelector && channelSelector.value !== route.preferredChannel) {
@@ -1539,7 +1561,7 @@ function applyTokenRouteToUI(route: any) {
   }
 
   setRouteLock(route.lockReason || null, route.lockType || null);
-  
+
   // Update floating window settings display if it exists
   if (globalUpdateSettingsDisplay) {
     globalUpdateSettingsDisplay();
