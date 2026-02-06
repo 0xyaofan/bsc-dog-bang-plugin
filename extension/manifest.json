@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BSC 打狗棒",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "Binance Smart Chain 代币交易插件，直接与Four/Flap/Luna/PancakeSwap等合约交互。",
 
   "permissions": [

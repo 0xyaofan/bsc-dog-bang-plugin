@@ -14,6 +14,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [1.1.8] - 2026-02-06
+
+### Fixed
+- **Four.meme USD1 路由优化** - 修复非 BNB 筹集代币路由效率低下的问题
+  - 优先使用 `routeInfo.quoteToken` 而不是 undefined 的 `quoteToken` 参数
+  - 确保 QuoteToken 路径优化逻辑正确执行
+  - 路径尝试次数从 26 次降至 1 次
+  - 交易耗时从 1291ms 降至约 50ms，性能提升 96%
+
+### Performance
+- **对象池优化** - 实现 PerformanceTimer 对象池，避免重复创建
+  - 添加状态重置逻辑，防止日志污染
+  - 减少内存分配和 GC 压力
+- **缓存优化** - 添加多项缓存机制提升性能
+  - Chain Config 缓存：避免重复创建链配置对象
+  - Fee Candidates 缓存：预计算并冻结费用候选数组
+  - Fallback Client 缓存：复用 RPC 客户端实例
+- **钱包锁定轮询优化** - 降低钱包锁定时的后端调用频率
+  - Content Script：从 5 秒降至 30 秒（降低 83%）
+  - Floating Window：完全停止轮询（降低 100%）
+  - Route Cache：跳过刷新操作
+
+### Changed
+- **代码结构优化** - 重构批量查询处理器到独立文件
+  - 使用依赖注入模式提升可测试性
+  - 文件职责更加分明
+  - 减少 index.ts 文件复杂度
+
+### Documentation
+- 新增 [Four.meme USD1 路由修复文档](docs/four-meme-usd1-routing-fix.md)
+- 新增 [对象池优化文档](docs/object-pooling-optimization.md)
+- 新增 [单例状态修复文档](docs/singleton-state-fix.md)
+- 新增 [钱包锁定轮询优化文档](docs/wallet-lock-polling-optimization.md)
+- 新增 [UI 生命周期管理文档](docs/ui-lifecycle-management.md)
+
+
 ## [1.1.7] - 2026-02-04
 
 ### Fixed
@@ -403,6 +439,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.8` - Four.meme USD1 routing & performance optimization (2026-02-06)
+- `1.1.7` - Route optimization & cache improvements (2026-02-04)
 - `1.1.6` - Sell performance & token switch fix (2025-01-27)
 - `1.1.5` - Trading performance optimization (2025-01-26)
 - `1.1.4` - Light/Dark theme system & UI optimization (2025-01-22)
@@ -415,6 +453,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.7 to 1.1.8
+
+1. Download version 1.1.8 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. Four.meme USD1 代币路由优化自动生效
+5. 对象池和缓存优化自动启用
+6. 钱包锁定时后端调用频率自动降低
 
 ### From 1.1.5 to 1.1.6
 
@@ -498,7 +545,9 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.6...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.8...HEAD
+[1.1.8]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.8
+[1.1.7]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.7
 [1.1.6]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.6
 [1.1.5]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.5
 [1.1.4]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.4
