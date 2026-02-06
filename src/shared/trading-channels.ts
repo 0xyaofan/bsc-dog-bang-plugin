@@ -2667,34 +2667,49 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       logger.debug(`${channelLabel} RouteInfo: null/undefined`);
     }
 
-    // 🚀 Four.meme & Flap 优化：已迁移代币的池子都在 Pancake V2 上，跳过 V3 查询
+    // 🚀 Four.meme & Flap 优化：根据路由元数据中的版本信息选择 V2 或 V3
     // 注意：BNB 筹集币种的 quoteToken 是 undefined，所以不检查 quoteToken
     if (routeInfo?.readyForPancake && (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap')) {
-      // Four.meme 已迁移代币：所有池子都在 V2（包括 BNB 和非 BNB 筹集币种）
-      // Flap 已迁移代币：所有池子都在 V2（包括 BNB 和非 BNB 筹集币种）
       const platformName = routeInfo.platform === 'four' ? 'Four.meme' : 'Flap';
-      logger.info(`${channelLabel} 🚀 ${platformName} 已迁移代币，直接使用 V2 路径（跳过 V3）`);
+      const pancakeVersion = routeInfo.metadata?.pancakeVersion || 'v2'; // 默认 V2
+
+      logger.info(`${channelLabel} 🚀 ${platformName} 已迁移代币，使用 ${pancakeVersion.toUpperCase()} 路径`);
 
       try {
-        // 直接查询 V2 路径，跳过 V3
-        // 🐛 修复：优先使用 routeInfo.quoteToken，因为它包含了代币的筹集币种信息
+        // 🐛 修复：根据路由元数据中的版本信息选择 V2 或 V3
         const effectiveQuoteToken = routeInfo.quoteToken || quoteToken;
-        const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, effectiveQuoteToken, routeInfo);
-        if (result && result.amountOut > 0n) {
-          logger.perf(`${channelLabel} ✅ ${platformName} V2 路径成功，耗时: ${Date.now() - startTime}ms`);
-          // 缓存路由，标记为 V2
-          updateTokenTradeHint(tokenAddress, channelId, direction, {
-            routerAddress: contractAddress,
-            path: result.path,
-            mode: 'v2'
-          });
-          updateRouteLoadingStatus(tokenAddress, direction, 'success');
-          return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+
+        if (pancakeVersion === 'v3') {
+          // 使用 V3 路径
+          const result = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
+          if (result && result.amountOut > 0n) {
+            logger.perf(`${channelLabel} ✅ ${platformName} V3 路径成功，耗时: ${Date.now() - startTime}ms`);
+            updateTokenTradeHint(tokenAddress, channelId, direction, {
+              routerAddress: contractAddress,
+              path: result.tokens,
+              fees: result.fees,
+              mode: 'v3'
+            });
+            updateRouteLoadingStatus(tokenAddress, direction, 'success');
+            return { kind: 'v3', route: result, amountOut: result.amountOut };
+          }
+        } else {
+          // 使用 V2 路径
+          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, effectiveQuoteToken, routeInfo);
+          if (result && result.amountOut > 0n) {
+            logger.perf(`${channelLabel} ✅ ${platformName} V2 路径成功，耗时: ${Date.now() - startTime}ms`);
+            updateTokenTradeHint(tokenAddress, channelId, direction, {
+              routerAddress: contractAddress,
+              path: result.path,
+              mode: 'v2'
+            });
+            updateRouteLoadingStatus(tokenAddress, direction, 'success');
+            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+          }
         }
       } catch (error) {
         // 🐛 修复：Four.meme/Flap 已迁移代币失败后直接抛出错误
-        // 不要 fallback 到 V3 查询，因为这些代币只在 V2
-        logger.error(`${channelLabel} ${platformName} V2 路径失败: ${error?.message || error}`);
+        logger.error(`${channelLabel} ${platformName} ${pancakeVersion.toUpperCase()} 路径失败: ${error?.message || error}`);
         updateRouteLoadingStatus(tokenAddress, direction, 'failed');
         throw new Error(`${platformName} 已迁移代币交易失败: ${error?.message || error}`);
       }
