@@ -198,8 +198,9 @@ if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel
     const isAggregatorEnabled = userSettings?.aggregator?.enabled === true;
     const quoteToken = currentTokenRoute?.quoteToken;
     const isNonBnbQuote = quoteToken && quoteToken !== '0x0000000000000000000000000000000000000000';
-    const isFourOrFlap = effectiveChannel === 'four' || effectiveChannel === 'flap';
-    const needsDualApproval = isAggregatorEnabled && isNonBnbQuote && isFourOrFlap;
+    // 注意：只有 Four.meme 需要聚合器，Flap Portal 内置了自动兑换功能
+    const isFour = effectiveChannel === 'four' || effectiveChannel === 'xmode';
+    const needsDualApproval = isAggregatorEnabled && isNonBnbQuote && isFour;
 
     if (needsDualApproval) {
       // 双重授权：代币 + QuoteToken
@@ -232,7 +233,9 @@ if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel
 
 1. **启用自定义聚合器**：`userSettings.aggregator.enabled === true`
 2. **非 BNB 筹集币种**：`quoteToken !== '0x0000...'`
-3. **Four.meme 或 Flap 通道**：`channel === 'four' || channel === 'flap'`
+3. **Four.meme 通道**：`channel === 'four' || channel === 'xmode'`（**不包括 Flap**）
+
+**重要说明**：Flap Portal 合约内置了自动兑换功能（Token → QuoteToken → BNB），因此 Flap 代币只需要单次授权给 Flap Portal，不需要额外授权 QuoteToken 给聚合器
 
 ### 授权流程
 
@@ -301,7 +304,7 @@ if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel
 3. 后端卖出：检查授权 → 已授权 → 直接卖出
 ```
 
-### 场景 3：非 BNB 筹集币种（启用聚合器）
+### 场景 3：非 BNB 筹集币种（Four.meme + 启用聚合器）
 
 ```
 1. 用户点击卖出
@@ -314,11 +317,23 @@ if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel
    - 直接卖出（无需等待授权）
 ```
 
+### 场景 3b：非 BNB 筹集币种（Flap）
+
+```
+1. 用户点击卖出
+2. 前端单次预授权：
+   - 代币 → Flap Portal 合约
+3. 后端卖出：
+   - 检查代币授权 → 已授权
+   - Flap Portal 内置自动兑换（Token → QuoteToken → BNB）
+   - 直接卖出（无需 QuoteToken 授权）
+```
+
 ### 场景 4：代币迁移
 
 ```
 1. 用户停留在代币页面
-2. 代币从 Four.meme 迁移到 PancakeSwap
+2. 代币从 Four.meme/Flap 迁移到 PancakeSwap
 3. 系统检测到 readyForPancake 变为 true
 4. 主动授权：代币 → PancakeSwap Router
 5. 用户后续交易无需再授权
@@ -334,8 +349,8 @@ if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel
 |------|-------------|------|
 | `pancake` | `CONTRACTS.PANCAKE_ROUTER` | PancakeSwap 交易 |
 | `four` / `xmode` | `CONTRACTS.FOUR_TOKEN_MANAGER_V2` | Four.meme 交易 |
-| `flap` | `CONTRACTS.FLAP_PORTAL` | Flap 交易 |
-| `aggregator` | `userSettings.aggregator.contractAddress` | 自定义聚合器 |
+| `flap` | `CONTRACTS.FLAP_PORTAL` | Flap 交易（内置自动兑换） |
+| `aggregator` | `userSettings.aggregator.contractAddress` | 自定义聚合器（仅 Four.meme 需要） |
 
 ### 2. 授权检查逻辑
 
@@ -433,10 +448,11 @@ sellAutoApproveCache.add(sellApprovalKey);
 ### 功能测试
 
 - [ ] Four.meme BNB 筹集代币：买入 → 卖出无需授权
-- [ ] Four.meme USD1 筹集代币（启用聚合器）：买入 → 卖出无需授权
-- [ ] Four.meme USD1 筹集代币（未启用聚合器）：买入 → 卖出无需授权
+- [ ] Four.meme USD1 筹集代币（启用聚合器）：买入 → 卖出无需授权（双重预授权）
+- [ ] Four.meme USD1 筹集代币（未启用聚合器）：买入 → 卖出无需授权（单次授权）
+- [ ] Flap BNB 筹集代币：买入 → 卖出无需授权
+- [ ] Flap USD1 筹集代币：买入 → 卖出无需授权（单次授权，Flap Portal 内置自动兑换）
 - [ ] 代币迁移：停留页面 → 迁移完成 → 自动授权 PancakeSwap
-- [ ] Flap 代币：同样受益于优化
 
 ### 性能测试
 
@@ -464,13 +480,15 @@ sellAutoApproveCache.add(sellApprovalKey);
 
 1. 前端授权使用 `currentTokenRoute.preferredChannel`，与后端保持一致
 2. 检测迁移状态变化，主动触发 PancakeSwap 授权
-3. 实现批量授权接口，支持双重预授权
+3. 实现批量授权接口，支持双重预授权（仅 Four.meme）
+4. 正确区分 Four.meme（需要聚合器）和 Flap（内置自动兑换）
 
 ### 效果
 
 - ✅ 授权正确的合约
 - ✅ 代币迁移时自动授权
-- ✅ 非 BNB 筹集币种完整预授权
+- ✅ Four.meme 非 BNB 筹集币种完整预授权（双重授权）
+- ✅ Flap 非 BNB 筹集币种单次授权（内置自动兑换）
 - ✅ 提升交易速度和用户体验
 
 ---
