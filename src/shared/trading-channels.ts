@@ -3534,6 +3534,16 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       const amountOutMin = amountOutMinBase > 0n ? amountOutMinBase : 1n;
       const isSingleHop = v3Route.tokens.length === 2;
       const encodedPath = v3Route.encodedPath || (!isSingleHop ? encodeV3Path(v3Route.tokens, v3Route.fees) : undefined);
+
+      // 🐛 修复：判断最终输出代币是否是 WBNB
+      const finalOutputToken = v3Route.tokens[v3Route.tokens.length - 1].toLowerCase();
+      const wbnbAddress = CONTRACTS.WBNB.toLowerCase();
+      const isOutputWBNB = finalOutputToken === wbnbAddress;
+
+      // 如果输出是 WBNB，recipient 设为 smartRouter，后续需要 unwrap
+      // 如果输出是其他代币（如 USD1），recipient 直接设为用户地址
+      const swapRecipient = isOutputWBNB ? smartRouterAddress : account.address;
+
       const swapCallData = isSingleHop
         ? encodeFunctionData({
             abi: smartRouterAbi,
@@ -3542,7 +3552,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
               tokenIn: v3Route.tokens[0],
               tokenOut: v3Route.tokens[1],
               fee: v3Route.fees[0],
-              recipient: smartRouterAddress,
+              recipient: swapRecipient,
               amountIn: amountToSell,
               amountOutMinimum: amountOutMin,
               sqrtPriceLimitX96: 0n
@@ -3553,19 +3563,25 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
             functionName: 'exactInput',
             args: [{
               path: encodedPath,
-              recipient: smartRouterAddress,
+              recipient: swapRecipient,
               amountIn: amountToSell,
               amountOutMinimum: amountOutMin
             }]
           });
-      const unwrapCallData = encodeFunctionData({
-        abi: smartRouterAbi,
-        functionName: 'unwrapWETH9',
-        args: [amountOutMin, account.address]
-      });
-      const calls = [swapCallData, unwrapCallData];
 
-      logger.debug(`${channelLabel} 开始发送 V3 卖出交易...`);
+      // 只有输出是 WBNB 时才需要 unwrap
+      const calls = isOutputWBNB
+        ? [
+            swapCallData,
+            encodeFunctionData({
+              abi: smartRouterAbi,
+              functionName: 'unwrapWETH9',
+              args: [amountOutMin, account.address]
+            })
+          ]
+        : [swapCallData];
+
+      logger.debug(`${channelLabel} 开始发送 V3 卖出交易... (输出: ${isOutputWBNB ? 'WBNB->BNB' : '非BNB代币'})`);
       const sendV3Sell = (nonce?: number) =>
         sendContractTransaction({
           walletClient,
