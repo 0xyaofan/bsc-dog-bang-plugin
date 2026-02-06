@@ -2689,6 +2689,7 @@ async function handlePrefetchRoute({ tokenAddress }: { tokenAddress?: string } =
 
 /**
  * 批量查询余额
+ * 优化：使用缓存机制，避免重复查询
  */
 async function handleBatchQueryBalance({ queries }: { queries: any[] }) {
   const fnStart = perf.now();
@@ -2699,28 +2700,72 @@ async function handleBatchQueryBalance({ queries }: { queries: any[] }) {
       throw new Error('Client not initialized');
     }
 
-    // 使用 MultiCall 批量查询
-    const contracts = queries.map(q => ({
-      address: q.tokenAddress,
-      abi: ERC20_ABI,
-      functionName: 'balanceOf',
-      args: [q.walletAddress || walletAccount.address]
-    }));
+    const cacheScope = getCacheScope();
 
-    const results = await publicClient.multicall({ contracts });
+    // 分离缓存命中和未命中的查询
+    const results: any[] = [];
+    const uncachedQueries: { index: number; query: any }[] = [];
 
-    // 处理结果
-    const balances = results.map((result: any, index: number) => {
-      if (result.status === 'failure') {
-        logger.warn(`[BatchQuery] 余额查询失败 [${index}]:`, result.error);
-        return { success: false, error: result.error, balance: '0' };
+    for (let i = 0; i < queries.length; i++) {
+      const query = queries[i];
+      const effectiveWallet = query.walletAddress || walletAccount.address;
+      const normalizedToken = normalizeAddressValue(query.tokenAddress);
+      const normalizedWallet = normalizeAddressValue(effectiveWallet);
+
+      // 尝试从缓存读取
+      const cacheKey = `token-info-balance:${cacheScope}:${normalizedToken}:${normalizedWallet}`;
+      const cached = tokenInfoCache.get(cacheKey);
+
+      if (cached && Date.now() - cached.updatedAt < TOKEN_INFO_CACHE_TTL) {
+        results[i] = { success: true, balance: cached.data.balance };
+        logger.debug(`[BatchQuery] 余额缓存命中 [${i}]`);
+      } else {
+        results[i] = null; // 占位
+        uncachedQueries.push({ index: i, query });
       }
-      return { success: true, balance: result.result.toString() };
-    });
+    }
 
-    logger.debug(`[BatchQuery] ✅ 批量查询余额完成 (${perf.measure(fnStart).toFixed(2)}ms)`);
+    // 批量查询未缓存的数据
+    if (uncachedQueries.length > 0) {
+      logger.debug(`[BatchQuery] 需要查询 ${uncachedQueries.length} 个未缓存的余额`);
 
-    return { success: true, data: balances };
+      const contracts = uncachedQueries.map(({ query }) => ({
+        address: query.tokenAddress,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [query.walletAddress || walletAccount.address]
+      }));
+
+      const multicallResults = await publicClient.multicall({ contracts });
+
+      // 处理结果并写入缓存
+      uncachedQueries.forEach(({ index, query }, i) => {
+        const result = multicallResults[i];
+        const effectiveWallet = query.walletAddress || walletAccount.address;
+        const normalizedToken = normalizeAddressValue(query.tokenAddress);
+        const normalizedWallet = normalizeAddressValue(effectiveWallet);
+
+        if (result.status === 'failure') {
+          logger.warn(`[BatchQuery] 余额查询失败 [${index}]:`, result.error);
+          results[index] = { success: false, error: result.error, balance: '0' };
+        } else {
+          const balance = result.result.toString();
+          results[index] = { success: true, balance };
+
+          // 写入缓存
+          const cacheKey = `token-info-balance:${cacheScope}:${normalizedToken}:${normalizedWallet}`;
+          tokenInfoCache.set(cacheKey, {
+            data: { symbol: '', decimals: 18, totalSupply: '0', balance },
+            updatedAt: Date.now(),
+            hasAllowances: false
+          });
+        }
+      });
+    }
+
+    logger.debug(`[BatchQuery] ✅ 批量查询余额完成 (${perf.measure(fnStart).toFixed(2)}ms, 缓存命中: ${queries.length - uncachedQueries.length}/${queries.length})`);
+
+    return { success: true, data: results };
   } catch (error) {
     logger.error('[BatchQuery] 批量查询余额失败:', error);
     return { success: false, error: error.message };
@@ -2729,6 +2774,7 @@ async function handleBatchQueryBalance({ queries }: { queries: any[] }) {
 
 /**
  * 批量查询授权
+ * 优化：使用缓存机制，避免重复查询
  */
 async function handleBatchQueryAllowance({ queries }: { queries: any[] }) {
   const fnStart = perf.now();
@@ -2739,28 +2785,97 @@ async function handleBatchQueryAllowance({ queries }: { queries: any[] }) {
       throw new Error('Client not initialized');
     }
 
-    // 使用 MultiCall 批量查询
-    const contracts = queries.map(q => ({
-      address: q.tokenAddress,
-      abi: ERC20_ABI,
-      functionName: 'allowance',
-      args: [q.walletAddress || walletAccount.address, q.spenderAddress]
-    }));
+    const cacheScope = getCacheScope();
 
-    const results = await publicClient.multicall({ contracts });
+    // 分离缓存命中和未命中的查询
+    const results: any[] = [];
+    const uncachedQueries: { index: number; query: any }[] = [];
 
-    // 处理结果
-    const allowances = results.map((result: any, index: number) => {
-      if (result.status === 'failure') {
-        logger.warn(`[BatchQuery] 授权查询失败 [${index}]:`, result.error);
-        return { success: false, error: result.error, allowance: '0' };
+    for (let i = 0; i < queries.length; i++) {
+      const query = queries[i];
+      const effectiveWallet = query.walletAddress || walletAccount.address;
+      const normalizedToken = normalizeAddressValue(query.tokenAddress);
+      const normalizedWallet = normalizeAddressValue(effectiveWallet);
+
+      // 尝试从缓存读取
+      const cacheKey = `token-allowance:${cacheScope}:${normalizedToken}:${normalizedWallet}:${query.spenderAddress}`;
+      const cached = tokenInfoCache.get(cacheKey);
+
+      if (cached && Date.now() - cached.updatedAt < TOKEN_INFO_CACHE_TTL && cached.data.allowances) {
+        // 从 allowances 对象中提取对应的授权值
+        const allowanceKey = Object.keys(cached.data.allowances).find(key =>
+          cached.data.allowances[key] !== undefined
+        );
+        const allowance = allowanceKey ? cached.data.allowances[allowanceKey] : '0';
+        results[i] = { success: true, allowance };
+        logger.debug(`[BatchQuery] 授权缓存命中 [${i}]`);
+      } else {
+        results[i] = null; // 占位
+        uncachedQueries.push({ index: i, query });
       }
-      return { success: true, allowance: result.result.toString() };
-    });
+    }
 
-    logger.debug(`[BatchQuery] ✅ 批量查询授权完成 (${perf.measure(fnStart).toFixed(2)}ms)`);
+    // 批量查询未缓存的数据
+    if (uncachedQueries.length > 0) {
+      logger.debug(`[BatchQuery] 需要查询 ${uncachedQueries.length} 个未缓存的授权`);
 
-    return { success: true, data: allowances };
+      const contracts = uncachedQueries.map(({ query }) => ({
+        address: query.tokenAddress,
+        abi: ERC20_ABI,
+        functionName: 'allowance',
+        args: [query.walletAddress || walletAccount.address, query.spenderAddress]
+      }));
+
+      const multicallResults = await publicClient.multicall({ contracts });
+
+      // 处理结果并写入缓存
+      uncachedQueries.forEach(({ index, query }, i) => {
+        const result = multicallResults[i];
+        const effectiveWallet = query.walletAddress || walletAccount.address;
+        const normalizedToken = normalizeAddressValue(query.tokenAddress);
+        const normalizedWallet = normalizeAddressValue(effectiveWallet);
+
+        if (result.status === 'failure') {
+          logger.warn(`[BatchQuery] 授权查询失败 [${index}]:`, result.error);
+          results[index] = { success: false, error: result.error, allowance: '0' };
+        } else {
+          const allowance = result.result.toString();
+          results[index] = { success: true, allowance };
+
+          // 写入缓存
+          const cacheKey = `token-allowance:${cacheScope}:${normalizedToken}:${normalizedWallet}:${query.spenderAddress}`;
+
+          // 根据 spenderAddress 确定 allowance key
+          let allowanceKey = 'pancake';
+          if (query.spenderAddress === CONTRACTS.FOUR_TOKEN_MANAGER_V2) {
+            allowanceKey = 'four';
+          } else if (query.spenderAddress === CONTRACTS.FLAP_PORTAL) {
+            allowanceKey = 'flap';
+          }
+
+          tokenInfoCache.set(cacheKey, {
+            data: {
+              symbol: '',
+              decimals: 18,
+              totalSupply: '0',
+              balance: '0',
+              allowances: {
+                pancake: allowanceKey === 'pancake' ? allowance : '0',
+                four: allowanceKey === 'four' ? allowance : '0',
+                flap: allowanceKey === 'flap' ? allowance : '0',
+                xmode: allowanceKey === 'four' ? allowance : '0'
+              }
+            },
+            updatedAt: Date.now(),
+            hasAllowances: true
+          });
+        }
+      });
+    }
+
+    logger.debug(`[BatchQuery] ✅ 批量查询授权完成 (${perf.measure(fnStart).toFixed(2)}ms, 缓存命中: ${queries.length - uncachedQueries.length}/${queries.length})`);
+
+    return { success: true, data: results };
   } catch (error) {
     logger.error('[BatchQuery] 批量查询授权失败:', error);
     return { success: false, error: error.message };
@@ -2769,6 +2884,7 @@ async function handleBatchQueryAllowance({ queries }: { queries: any[] }) {
 
 /**
  * 批量查询元数据
+ * 优化：使用现有的 ensureTokenMetadata 函数（包含缓存逻辑）
  */
 async function handleBatchQueryMetadata({ queries }: { queries: any[] }) {
   const fnStart = perf.now();
@@ -2779,41 +2895,36 @@ async function handleBatchQueryMetadata({ queries }: { queries: any[] }) {
       throw new Error('Client not initialized');
     }
 
-    // 构建所有需要查询的合约调用
-    const contracts: any[] = [];
-    const queryMap: { queryIndex: number; field: string }[] = [];
+    // 使用现有的 ensureTokenMetadata 函数，它已经包含了缓存逻辑
+    const results = await Promise.all(
+      queries.map(async (query) => {
+        try {
+          const fields = query.fields || ['symbol', 'decimals', 'totalSupply'];
+          const needSymbol = fields.includes('symbol');
+          const needTotalSupply = fields.includes('totalSupply');
 
-    queries.forEach((query, queryIndex) => {
-      const fields = query.fields || ['symbol', 'decimals', 'totalSupply'];
-      fields.forEach((field: string) => {
-        contracts.push({
-          address: query.tokenAddress,
-          abi: ERC20_ABI,
-          functionName: field
-        });
-        queryMap.push({ queryIndex, field });
-      });
-    });
+          // 复用现有的缓存逻辑
+          const metadata = await ensureTokenMetadata(query.tokenAddress, {
+            needSymbol,
+            needTotalSupply
+          });
 
-    // 使用 MultiCall 批量查询
-    const results = await publicClient.multicall({ contracts });
+          const data: any = {};
+          if (fields.includes('symbol')) data.symbol = metadata.symbol;
+          if (fields.includes('decimals')) data.decimals = metadata.decimals;
+          if (fields.includes('totalSupply')) data.totalSupply = metadata.totalSupply?.toString();
 
-    // 组装结果
-    const metadata: any[] = queries.map(() => ({ success: true, data: {} }));
-
-    results.forEach((result: any, index: number) => {
-      const { queryIndex, field } = queryMap[index];
-      if (result.status === 'failure') {
-        logger.warn(`[BatchQuery] 元数据查询失败 [${queryIndex}.${field}]:`, result.error);
-        metadata[queryIndex].data[field] = null;
-      } else {
-        metadata[queryIndex].data[field] = result.result;
-      }
-    });
+          return { success: true, data };
+        } catch (error) {
+          logger.warn(`[BatchQuery] 元数据查询失败:`, error);
+          return { success: false, error: error.message, data: {} };
+        }
+      })
+    );
 
     logger.debug(`[BatchQuery] ✅ 批量查询元数据完成 (${perf.measure(fnStart).toFixed(2)}ms)`);
 
-    return { success: true, data: metadata };
+    return { success: true, data: results };
   } catch (error) {
     logger.error('[BatchQuery] 批量查询元数据失败:', error);
     return { success: false, error: error.message };
@@ -2822,6 +2933,7 @@ async function handleBatchQueryMetadata({ queries }: { queries: any[] }) {
 
 /**
  * 批量检查授权状态
+ * 优化：使用缓存机制，避免重复查询
  */
 async function handleBatchCheckApproval({ queries }: { queries: any[] }) {
   const fnStart = perf.now();
@@ -2832,55 +2944,140 @@ async function handleBatchCheckApproval({ queries }: { queries: any[] }) {
       throw new Error('Client not initialized');
     }
 
-    // 使用 MultiCall 批量查询授权和余额
-    const contracts: any[] = [];
-    queries.forEach(q => {
-      // 查询授权
-      contracts.push({
-        address: q.tokenAddress,
-        abi: ERC20_ABI,
-        functionName: 'allowance',
-        args: [q.walletAddress || walletAccount.address, q.spenderAddress]
-      });
-      // 查询余额
-      contracts.push({
-        address: q.tokenAddress,
-        abi: ERC20_ABI,
-        functionName: 'balanceOf',
-        args: [q.walletAddress || walletAccount.address]
-      });
-    });
+    const cacheScope = getCacheScope();
 
-    const results = await publicClient.multicall({ contracts });
+    // 分离缓存命中和未命中的查询
+    const results: any[] = [];
+    const uncachedQueries: { index: number; query: any }[] = [];
 
-    // 处理结果
-    const approvalStatus = queries.map((_query: any, index: number) => {
-      const allowanceResult = results[index * 2];
-      const balanceResult = results[index * 2 + 1];
+    for (let i = 0; i < queries.length; i++) {
+      const query = queries[i];
+      const effectiveWallet = query.walletAddress || walletAccount.address;
+      const normalizedToken = normalizeAddressValue(query.tokenAddress);
+      const normalizedWallet = normalizeAddressValue(effectiveWallet);
 
-      if (allowanceResult.status === 'failure' || balanceResult.status === 'failure') {
-        return {
-          success: false,
-          error: 'Query failed',
-          needApproval: true
+      // 尝试从缓存读取余额和授权
+      const balanceCacheKey = `token-info-balance:${cacheScope}:${normalizedToken}:${normalizedWallet}`;
+      const allowanceCacheKey = `token-allowance:${cacheScope}:${normalizedToken}:${normalizedWallet}:${query.spenderAddress}`;
+
+      const balanceCached = tokenInfoCache.get(balanceCacheKey);
+      const allowanceCached = tokenInfoCache.get(allowanceCacheKey);
+
+      const balanceValid = balanceCached && Date.now() - balanceCached.updatedAt < TOKEN_INFO_CACHE_TTL;
+      const allowanceValid = allowanceCached && Date.now() - allowanceCached.updatedAt < TOKEN_INFO_CACHE_TTL;
+
+      if (balanceValid && allowanceValid) {
+        const balance = BigInt(balanceCached.data.balance);
+        const allowanceKey = Object.keys(allowanceCached.data.allowances || {}).find(key =>
+          allowanceCached.data.allowances[key] !== undefined
+        );
+        const allowance = allowanceKey ? BigInt(allowanceCached.data.allowances[allowanceKey]) : 0n;
+        const needApproval = allowance < balance;
+
+        results[i] = {
+          success: true,
+          allowance: allowance.toString(),
+          balance: balance.toString(),
+          needApproval
         };
+        logger.debug(`[BatchQuery] 授权状态缓存命中 [${i}]`);
+      } else {
+        results[i] = null; // 占位
+        uncachedQueries.push({ index: i, query });
       }
+    }
 
-      const allowance = allowanceResult.result as bigint;
-      const balance = balanceResult.result as bigint;
-      const needApproval = allowance < balance;
+    // 批量查询未缓存的数据
+    if (uncachedQueries.length > 0) {
+      logger.debug(`[BatchQuery] 需要查询 ${uncachedQueries.length} 个未缓存的授权状态`);
 
-      return {
-        success: true,
-        allowance: allowance.toString(),
-        balance: balance.toString(),
-        needApproval
-      };
-    });
+      const contracts: any[] = [];
+      uncachedQueries.forEach(({ query }) => {
+        const effectiveWallet = query.walletAddress || walletAccount.address;
+        // 查询授权
+        contracts.push({
+          address: query.tokenAddress,
+          abi: ERC20_ABI,
+          functionName: 'allowance',
+          args: [effectiveWallet, query.spenderAddress]
+        });
+        // 查询余额
+        contracts.push({
+          address: query.tokenAddress,
+          abi: ERC20_ABI,
+          functionName: 'balanceOf',
+          args: [effectiveWallet]
+        });
+      });
 
-    logger.debug(`[BatchQuery] ✅ 批量检查授权状态完成 (${perf.measure(fnStart).toFixed(2)}ms)`);
+      const multicallResults = await publicClient.multicall({ contracts });
 
-    return { success: true, data: approvalStatus };
+      // 处理结果并写入缓存
+      uncachedQueries.forEach(({ index, query }, i) => {
+        const allowanceResult = multicallResults[i * 2];
+        const balanceResult = multicallResults[i * 2 + 1];
+        const effectiveWallet = query.walletAddress || walletAccount.address;
+        const normalizedToken = normalizeAddressValue(query.tokenAddress);
+        const normalizedWallet = normalizeAddressValue(effectiveWallet);
+
+        if (allowanceResult.status === 'failure' || balanceResult.status === 'failure') {
+          results[index] = {
+            success: false,
+            error: 'Query failed',
+            needApproval: true
+          };
+        } else {
+          const allowance = allowanceResult.result as bigint;
+          const balance = balanceResult.result as bigint;
+          const needApproval = allowance < balance;
+
+          results[index] = {
+            success: true,
+            allowance: allowance.toString(),
+            balance: balance.toString(),
+            needApproval
+          };
+
+          // 写入缓存
+          const balanceCacheKey = `token-info-balance:${cacheScope}:${normalizedToken}:${normalizedWallet}`;
+          const allowanceCacheKey = `token-allowance:${cacheScope}:${normalizedToken}:${normalizedWallet}:${query.spenderAddress}`;
+
+          // 根据 spenderAddress 确定 allowance key
+          let allowanceKey = 'pancake';
+          if (query.spenderAddress === CONTRACTS.FOUR_TOKEN_MANAGER_V2) {
+            allowanceKey = 'four';
+          } else if (query.spenderAddress === CONTRACTS.FLAP_PORTAL) {
+            allowanceKey = 'flap';
+          }
+
+          tokenInfoCache.set(balanceCacheKey, {
+            data: { symbol: '', decimals: 18, totalSupply: '0', balance: balance.toString() },
+            updatedAt: Date.now(),
+            hasAllowances: false
+          });
+          tokenInfoCache.set(allowanceCacheKey, {
+            data: {
+              symbol: '',
+              decimals: 18,
+              totalSupply: '0',
+              balance: '0',
+              allowances: {
+                pancake: allowanceKey === 'pancake' ? allowance.toString() : '0',
+                four: allowanceKey === 'four' ? allowance.toString() : '0',
+                flap: allowanceKey === 'flap' ? allowance.toString() : '0',
+                xmode: allowanceKey === 'four' ? allowance.toString() : '0'
+              }
+            },
+            updatedAt: Date.now(),
+            hasAllowances: true
+          });
+        }
+      });
+    }
+
+    logger.debug(`[BatchQuery] ✅ 批量检查授权状态完成 (${perf.measure(fnStart).toFixed(2)}ms, 缓存命中: ${queries.length - uncachedQueries.length}/${queries.length})`);
+
+    return { success: true, data: results };
   } catch (error) {
     logger.error('[BatchQuery] 批量检查授权状态失败:', error);
     return { success: false, error: error.message };
@@ -2890,14 +3087,16 @@ async function handleBatchCheckApproval({ queries }: { queries: any[] }) {
 /**
  * 获取代币完整信息（聚合接口）
  * 一次性返回：余额、授权（3个合约）、元数据、路由等
+ *
+ * 优化：复用现有的缓存机制，避免重复查询
  */
 async function handleGetTokenFullInfo({ queries }: { queries: any[] }) {
   const fnStart = perf.now();
   logger.debug(`[TokenFullInfo] 批量查询代币完整信息: ${queries.length} 个请求`);
 
   try {
-    if (!publicClient || !walletAccount) {
-      throw new Error('Client not initialized');
+    if (!walletAccount) {
+      throw new Error('Wallet not loaded');
     }
 
     const results = await Promise.all(
@@ -2906,90 +3105,44 @@ async function handleGetTokenFullInfo({ queries }: { queries: any[] }) {
         const effectiveWallet = walletAddress || walletAccount.address;
 
         try {
-          // 构建 MultiCall 合约调用
-          const contracts: any[] = [
-            // 1. 余额
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'balanceOf',
-              args: [effectiveWallet]
-            },
-            // 2-4. 授权（3个合约）
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [effectiveWallet, CONTRACTS.PANCAKE_ROUTER]
-            },
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [effectiveWallet, CONTRACTS.FOUR_TOKEN_MANAGER_V2]
-            },
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'allowance',
-              args: [effectiveWallet, CONTRACTS.FLAP_PORTAL]
-            },
-            // 5-7. 元数据
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'symbol'
-            },
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'decimals'
-            },
-            {
-              address: tokenAddress,
-              abi: ERC20_ABI,
-              functionName: 'totalSupply'
-            }
-          ];
+          // 复用现有的 fetchTokenInfoData 函数（包含缓存逻辑）
+          const tokenInfoStart = perf.now();
 
-          // 使用 MultiCall 一次性查询所有链上数据
-          const multicallStart = perf.now();
-          const multicallResults = await publicClient.multicall({ contracts });
-          logger.debug(`[TokenFullInfo] MultiCall 完成 (${perf.measure(multicallStart).toFixed(2)}ms)`);
+          // 先检查缓存
+          const cached = readCachedTokenInfo(tokenAddress, effectiveWallet, true);
+          const tokenInfo = cached || await fetchTokenInfoData(tokenAddress, effectiveWallet, true);
 
-          // 解析结果
-          const balance = multicallResults[0].status === 'success' ? multicallResults[0].result.toString() : '0';
-          const pancakeAllowance = multicallResults[1].status === 'success' ? multicallResults[1].result.toString() : '0';
-          const fourAllowance = multicallResults[2].status === 'success' ? multicallResults[2].result.toString() : '0';
-          const flapAllowance = multicallResults[3].status === 'success' ? multicallResults[3].result.toString() : '0';
-          const symbol = multicallResults[4].status === 'success' ? multicallResults[4].result : '';
-          const decimals = multicallResults[5].status === 'success' ? Number(multicallResults[5].result) : 18;
-          const totalSupply = multicallResults[6].status === 'success' ? multicallResults[6].result.toString() : '0';
+          // 如果不是缓存结果，写入缓存
+          if (!cached) {
+            writeCachedTokenInfo(tokenAddress, effectiveWallet, tokenInfo);
+          }
+
+          logger.debug(`[TokenFullInfo] 代币信息查询完成 (${perf.measure(tokenInfoStart).toFixed(2)}ms, 缓存: ${!!cached})`);
 
           // 查询路由信息（使用缓存）
           const routeStart = perf.now();
-          const route = await fetchRouteWithFallback(tokenAddress, false);
+          const route = await fetchRouteWithFallback(publicClient, tokenAddress, 'unknown');
           logger.debug(`[TokenFullInfo] 路由查询完成 (${perf.measure(routeStart).toFixed(2)}ms)`);
 
           return {
             success: true,
             tokenAddress,
             walletAddress: effectiveWallet,
-            balance,
-            allowances: {
-              pancake: pancakeAllowance,
-              four: fourAllowance,
-              flap: flapAllowance
+            balance: tokenInfo.balance,
+            allowances: tokenInfo.allowances || {
+              pancake: '0',
+              four: '0',
+              flap: '0'
             },
             metadata: {
-              symbol,
-              decimals,
-              totalSupply
+              symbol: tokenInfo.symbol,
+              decimals: tokenInfo.decimals,
+              totalSupply: tokenInfo.totalSupply
             },
             route: {
               platform: route.platform,
               readyForPancake: route.readyForPancake,
-              channelId: route.channelId
+              channelId: route.preferredChannel
             }
           };
         } catch (error) {

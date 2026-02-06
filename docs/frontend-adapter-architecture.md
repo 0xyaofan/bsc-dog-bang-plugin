@@ -81,7 +81,13 @@ const route = await queryRoute(token);
 const info = await queryTokenFullInfo(token, wallet);
 // 返回：{ balance, allowances: { pancake, four, flap }, metadata, route }
 // 只需调用 1 次方法，1 次 RPC 调用（MultiCall）
+// 自动使用缓存，避免重复查询
 ```
+
+**缓存优化**：
+- 复用现有的 `fetchTokenInfoData` 和 `ensureTokenMetadata` 缓存逻辑
+- 缓存 TTL：根据 `TOKEN_INFO_CACHE_TTL` 配置
+- 缓存命中时直接返回，无需查询链上数据
 
 ### 1. 自动批量合并
 
