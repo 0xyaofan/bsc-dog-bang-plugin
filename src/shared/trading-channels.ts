@@ -2685,7 +2685,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           if (result && result.amountOut > 0n) {
             logger.perf(`${channelLabel} ✅ ${platformName} V3 路径成功，耗时: ${Date.now() - startTime}ms`);
             updateTokenTradeHint(tokenAddress, channelId, direction, {
-              routerAddress: contractAddress,
+              routerAddress: smartRouterAddress,  // 🐛 修复：V3 使用 Smart Router 地址
               path: result.tokens,
               fees: result.fees,
               mode: 'v3'
