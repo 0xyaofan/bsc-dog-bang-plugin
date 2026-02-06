@@ -675,6 +675,7 @@ function syncTokenContextFromCurrentPage(force = false) {
     }
 
     let preferredChannelId: string | undefined;
+    let pancakeVersion: string | undefined;
     try {
       // 🚀 优化：使用聚合接口一次性获取所有信息
       // 页面切换时需要：路由、余额、授权、元数据
@@ -692,7 +693,8 @@ function syncTokenContextFromCurrentPage(force = false) {
 
         if (tokenInfo?.success && tokenInfo.route?.channelId) {
           preferredChannelId = tokenInfo.route.channelId;
-          logger.debug('[Dog Bang] 聚合接口获取到完整信息，路由:', preferredChannelId);
+          pancakeVersion = tokenInfo.route?.metadata?.pancakeVersion;  // 🐛 修复：提取 pancakeVersion
+          logger.debug('[Dog Bang] 聚合接口获取到完整信息，路由:', preferredChannelId, 'version:', pancakeVersion);
         } else {
           // 聚合接口失败，回退到单独查询路由
           logger.debug('[Dog Bang] 聚合接口失败，回退到单独查询路由');
@@ -702,6 +704,7 @@ function syncTokenContextFromCurrentPage(force = false) {
           });
           if (response && response.success && response.data?.preferredChannel) {
             preferredChannelId = response.data.preferredChannel;
+            pancakeVersion = response.data?.metadata?.pancakeVersion;  // 🐛 修复：提取 pancakeVersion
           }
         }
       } else {
@@ -712,6 +715,7 @@ function syncTokenContextFromCurrentPage(force = false) {
         });
         if (response && response.success && response.data?.preferredChannel) {
           preferredChannelId = response.data.preferredChannel;
+          pancakeVersion = response.data?.metadata?.pancakeVersion;  // 🐛 修复：提取 pancakeVersion
         }
       }
 
@@ -729,9 +733,10 @@ function syncTokenContextFromCurrentPage(force = false) {
 
     // 🚀 新增：页面切换时执行自动授权检查
     // 等待用户设置加载完成后再执行
+    // 🐛 修复：传递 pancakeVersion 信息
     tradingSettingsReady.then(() => {
       logger.debug('[Dog Bang] 页面切换，检查是否需要自动授权');
-      autoApproveOnSwitch(tokenAddress, preferredChannelId);
+      autoApproveOnSwitch(tokenAddress, preferredChannelId, pancakeVersion);
     }).catch(error => {
       logger.error('[Dog Bang] 加载用户设置失败:', error);
     });
@@ -1415,7 +1420,7 @@ async function handleRevokeApproval() {
 }
 
 // 切换时自动授权（如果配置开启）
-async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
+async function autoApproveOnSwitch(tokenAddress: string, channel?: string, pancakeVersion?: string) {
   const settings = userSettings || DEFAULT_USER_SETTINGS;
   const autoApproveMode = settings.trading.autoApproveMode;
 
@@ -1430,7 +1435,7 @@ async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
   const channelSelector = panelElement?.querySelector('#channel-selector') as HTMLSelectElement | null;
   const currentChannel = channel || channelSelector?.value || 'pancake';
 
-  logger.debug('[Dog Bang] 执行切换时自动授权:', { tokenAddress, channel: currentChannel });
+  logger.debug('[Dog Bang] 执行切换时自动授权:', { tokenAddress, channel: currentChannel, pancakeVersion });
 
   // 🐛 修复：不检查授权状态，直接发送授权请求
   // background 的 ensureTokenApproval 会自动判断是否需要授权
@@ -1442,7 +1447,8 @@ async function autoApproveOnSwitch(tokenAddress: string, channel?: string) {
       action: 'approve_token',
       data: {
         tokenAddress,
-        channel: currentChannel
+        channel: currentChannel,
+        pancakeVersion  // 🐛 修复：传递 pancakeVersion
       }
     });
 
