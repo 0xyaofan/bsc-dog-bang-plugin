@@ -676,6 +676,31 @@ function syncTokenContextFromCurrentPage(force = false) {
 
     let preferredChannelId: string | undefined;
     try {
+      // 🚀 优化：使用聚合接口一次性获取所有信息
+      // 页面切换时需要：路由、余额、授权、元数据
+      // 使用聚合接口减少消息传递和 RPC 调用
+      const walletStatusResponse = await sendMessageViaAdapter({
+        action: 'get_wallet_status',
+        data: {}
+      });
+
+      if (walletStatusResponse?.success && walletStatusResponse.data?.address) {
+        const walletAddress = walletStatusResponse.data.address;
+
+        // 使用聚合接口预加载所有代币信息（不阻塞主流程）
+        FrontendAdapter.queryTokenFullInfo(tokenAddress, walletAddress)
+          .then(tokenInfo => {
+            if (tokenInfo?.success && tokenInfo.route?.channelId) {
+              preferredChannelId = tokenInfo.route.channelId;
+              logger.debug('[Dog Bang] 聚合接口获取到路由:', preferredChannelId);
+            }
+          })
+          .catch(error => {
+            logger.debug('[Dog Bang] 聚合接口预加载失败:', error);
+          });
+      }
+
+      // 同时查询路由（用于立即获取 preferredChannelId）
       const response = await sendMessageViaAdapter({
         action: 'get_token_route',
         data: { tokenAddress }
@@ -683,28 +708,6 @@ function syncTokenContextFromCurrentPage(force = false) {
       if (response && response.success && response.data?.preferredChannel) {
         preferredChannelId = response.data.preferredChannel;
       }
-
-      // 预加载优化：在后台预加载余额、授权和路由信息（不阻塞主流程）
-      // 这样用户点击买入时，数据已经缓存好了
-      Promise.all([
-        // 预加载代币余额
-        sendMessageViaAdapter({
-          action: 'prefetch_token_balance',
-          data: { tokenAddress }
-        }).catch(() => {}),
-
-        // 预加载授权状态（如果启用了切换页面授权）
-        sendMessageViaAdapter({
-          action: 'prefetch_approval_status',
-          data: { tokenAddress }
-        }).catch(() => {}),
-
-        // 🚀 新增：预加载交易路由（买入优先，卖出并发）
-        sendMessageViaAdapter({
-          action: 'prefetch_route',
-          data: { tokenAddress }
-        }).catch(() => {})
-      ]).catch(() => {}); // 整体静默失败，不影响主流程
 
     } catch (error) {
       logger.debug('[Dog Bang] 同步默认通道失败:', error);
