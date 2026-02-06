@@ -3876,17 +3876,34 @@ function handleTokenBalancePush(data, options: { fromPending?: boolean } = {}) {
       }
     }
 
-    // 更新主面板余额显示
+    // 🐛 修复：先格式化余额，再更新显示，避免显示原始数据
+    // 计算格式化后的余额
+    let formattedBalance = data.balance;
+    if (data.balance !== undefined && currentTokenInfo?.decimals) {
+      try {
+        const balance = BigInt(data.balance);
+        const decimals = currentTokenInfo.decimals;
+        const decimalsBigInt = BigInt(decimals);
+        const divisor = 10n ** decimalsBigInt;
+        const integerPart = balance / divisor;
+        formattedBalance = integerPart.toString();
+      } catch (error) {
+        logger.debug('[Dog Bang] PUSH: 格式化余额失败，使用原始值:', error);
+      }
+    }
+
+    // 更新主面板余额显示（使用格式化后的值）
     if (tokenBalanceEl && data.balance !== undefined) {
-      tokenBalanceEl.textContent = data.balance;
+      tokenBalanceEl.textContent = formattedBalance;
     }
 
-    // 更新浮动窗口余额显示
+    // 更新浮动窗口余额显示（使用格式化后的值）
     if (floatingTokenBalanceEl && data.balance !== undefined) {
-      floatingTokenBalanceEl.textContent = data.balance;
-      logger.debug('[Dog Bang] PUSH: 更新浮动窗口余额显示');
+      floatingTokenBalanceEl.textContent = formattedBalance;
+      logger.debug('[Dog Bang] PUSH: 更新浮动窗口余额显示 (格式化)');
     }
 
+    // updateTokenBalanceDisplay 会再次格式化并更新，确保一致性
     updateTokenBalanceDisplay(currentTokenAddress);
     logger.debug('[Dog Bang] PUSH: 代币余额已更新');
     scheduleSellEstimate();
