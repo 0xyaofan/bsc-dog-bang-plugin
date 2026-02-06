@@ -276,10 +276,10 @@ const [balance, allowance] = await Promise.all([
 
 ## 实施计划
 
-### Phase 1：基础设施（当前）
+### Phase 1：基础设施（已完成）
 - ✅ 创建前端对接层 (`frontend-adapter.ts`)
 - ✅ 创建批量查询处理器 (`batch-query-handlers.ts`)
-- ⏳ 在 background 中注册批量查询接口
+- ✅ 在 background 中注册批量查询接口
 
 ### Phase 2：迁移现有代码
 - ⏳ 迁移 content script 使用前端对接层
