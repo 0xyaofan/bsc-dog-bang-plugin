@@ -1768,23 +1768,23 @@ async function handleSell(tokenAddress) {
 
   // 🐛 修复：使用路由信息中的 preferredChannel 而不是 DOM 的 channel-selector
   // 因为后端会根据 routeInfo.preferredChannel 自动选择通道，前端应该与后端保持一致
-  // 🚀 优化：非 BNB 筹集币种 + 自定义聚合器需要双重授权
+  // 🚀 优化：Four.meme 非 BNB 筹集币种 + 自定义聚合器需要双重授权
+  // 注意：Flap 不需要聚合器，因为 Flap Portal 合约内置了自动兑换功能
   if (userSettings?.trading?.autoApproveMode === 'sell' && tokenAddress && channel) {
     const effectiveChannel = currentTokenRoute?.preferredChannel || channel;
     const sellApprovalKey = `${tokenAddress.toLowerCase()}:${effectiveChannel}`;
 
     if (!sellAutoApproveCache.has(sellApprovalKey)) {
-      // 检测是否需要双重授权（非 BNB 筹集币种 + 自定义聚合器）
+      // 检测是否需要双重授权（仅 Four.meme 非 BNB 筹集币种 + 自定义聚合器）
       const isAggregatorEnabled = userSettings?.aggregator?.enabled === true;
       const quoteToken = currentTokenRoute?.quoteToken;
       const isNonBnbQuote = quoteToken && quoteToken !== '0x0000000000000000000000000000000000000000';
-      const isFourOrFlap = effectiveChannel === 'four' || effectiveChannel === 'flap';
-      const needsDualApproval = isAggregatorEnabled && isNonBnbQuote && isFourOrFlap;
+      const isFour = effectiveChannel === 'four' || effectiveChannel === 'xmode';
+      const needsDualApproval = isAggregatorEnabled && isNonBnbQuote && isFour;
 
       if (needsDualApproval) {
-        // 双重授权：代币 + QuoteToken
-        logger.debug('[Dog Bang] 非 BNB 筹集币种，执行双重预授权');
-        const aggregatorAddress = userSettings.aggregator.contractAddress;
+        // 双重授权：代币 + QuoteToken（仅 Four.meme）
+        logger.debug('[Dog Bang] Four.meme 非 BNB 筹集币种，执行双重预授权');
 
         // 使用批量授权接口
         await sendMessageViaAdapter({
@@ -1799,7 +1799,7 @@ async function handleSell(tokenAddress) {
           logger.debug('[Dog Bang] 双重预授权失败:', error);
         });
       } else {
-        // 单次授权
+        // 单次授权（Flap 或 Four.meme BNB 筹集）
         await autoApproveToken(tokenAddress, effectiveChannel);
       }
 
