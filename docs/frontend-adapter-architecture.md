@@ -561,4 +561,410 @@ const ACTION_HANDLER_MAP = {
 ---
 
 **创建日期**: 2026-02-06
-**版本**: 1.0
+**版本**: 1.1
+**最后更新**: 2026-02-06
+
+---
+
+## 设计模式详解
+
+### 1. 适配器模式 (Adapter Pattern)
+
+**目的**：将前端接口适配到后端接口，解耦前后端依赖。
+
+**实现**：
+```typescript
+// 前端接口（简单、直观）
+queryBalance(tokenAddress, walletAddress)
+
+// 后端接口（复杂、底层）
+chrome.runtime.sendMessage({
+  action: 'batch_query_balance',
+  data: { queries: [...] }
+})
+
+// FrontendAdapter 作为适配器
+class FrontendAdapter {
+  async query(type, params, options) {
+    // 1. 转换前端请求到后端格式
+    // 2. 批处理、去重、优先级处理
+    // 3. 返回结果给前端
+  }
+}
+```
+
+**优势**：
+- ✅ 前端代码简洁，不需要了解后端实现细节
+- ✅ 后端可以自由重构，不影响前端
+- ✅ 统一的错误处理和重试逻辑
+
+### 2. 批处理模式 (Batching Pattern)
+
+**目的**：合并多个请求，减少网络往返次数。
+
+**实现**：
+```typescript
+// 请求队列
+private pendingQueries: Map<QueryType, QueryRequest[]> = new Map();
+
+// 批处理定时器
+private batchTimers: Map<QueryType, number> = new Map();
+
+// 调度批处理
+private scheduleBatch(type: QueryType) {
+  if (this.batchTimers.has(type)) return;
+
+  const config = this.batchConfigs.get(type);
+  const timer = setTimeout(() => {
+    this.executeBatch(type);
+  }, config.maxWaitTime);
+
+  this.batchTimers.set(type, timer);
+}
+
+// 执行批处理
+private async executeBatch(type: QueryType) {
+  const queue = this.pendingQueries.get(type);
+  const handler = this.queryHandlers.get(type);
+  const results = await handler(queue);
+
+  queue.forEach((request, index) => {
+    request.resolve(results[index]);
+  });
+}
+```
+
+**优势**：
+- ✅ 减少 RPC 调用次数（3次 → 1次）
+- ✅ 降低节点限流风险
+- ✅ 提升整体性能
+
+### 3. 策略模式 (Strategy Pattern)
+
+**目的**：不同类型的查询使用不同的处理策略。
+
+**实现**：
+```typescript
+// 查询处理器映射
+private queryHandlers: Map<QueryType, (requests: QueryRequest[]) => Promise<any[]>>
+
+// 注册不同的处理策略
+this.queryHandlers.set('balance', async (requests) => {
+  return this.handleBalanceQueries(requests);
+});
+
+this.queryHandlers.set('allowance', async (requests) => {
+  return this.handleAllowanceQueries(requests);
+});
+
+this.queryHandlers.set('token_full_info', async (requests) => {
+  return this.handleTokenFullInfoQueries(requests);
+});
+
+// 统一调用
+const handler = this.queryHandlers.get(type);
+const results = await handler(queue);
+```
+
+**优势**：
+- ✅ 易于扩展新的查询类型
+- ✅ 每种查询可以有独立的优化策略
+- ✅ 代码结构清晰
+
+### 4. 单例模式 (Singleton Pattern)
+
+**目的**：全局共享一个 FrontendAdapter 实例，避免重复创建。
+
+**实现**：
+```typescript
+// 创建单例
+class FrontendAdapter {
+  // ...
+}
+
+// 导出单例
+export const frontendAdapter = new FrontendAdapter();
+
+// 便捷方法（使用单例）
+export async function queryBalance(tokenAddress, walletAddress, options) {
+  return frontendAdapter.query('balance', { tokenAddress, walletAddress }, options);
+}
+```
+
+**优势**：
+- ✅ 全局共享批处理队列
+- ✅ 统一的请求去重
+- ✅ 节省内存
+
+### 5. 观察者模式 (Observer Pattern)
+
+**目的**：多个调用者等待同一个查询结果。
+
+**实现**：
+```typescript
+// 检查是否有相同的查询正在等待
+const existingQuery = this.findExistingQuery(type, queryId);
+if (existingQuery) {
+  // 多个调用者共享同一个 Promise
+  return new Promise((resolve, reject) => {
+    existingQuery.resolve = resolve;
+    existingQuery.reject = reject;
+  });
+}
+```
+
+**优势**：
+- ✅ 避免重复查询
+- ✅ 多个调用者自动等待同一个结果
+- ✅ 节省 RPC 调用
+
+## 性能优化技巧
+
+### 1. 批处理窗口优化
+
+**原则**：平衡响应速度和批处理效果
+
+```typescript
+// 关键查询：短窗口（20-50ms）
+['token_full_info', { maxWaitTime: 20, maxBatchSize: 5 }]
+
+// 普通查询：中等窗口（50ms）
+['balance', { maxWaitTime: 50, maxBatchSize: 10 }]
+
+// 低优先级：长窗口（100ms）
+['route', { maxWaitTime: 100, maxBatchSize: 5 }]
+```
+
+**建议**：
+- 用户交互触发的查询：20-50ms
+- 自动刷新的查询：50-100ms
+- 预加载查询：100-200ms
+
+### 2. 请求去重优化
+
+**原则**：使用查询 ID 识别重复请求
+
+```typescript
+// 生成唯一的查询 ID
+private generateQueryId(type: QueryType, params: any): string {
+  return `${type}:${JSON.stringify(params)}`;
+}
+
+// 示例
+// queryBalance('0x123...', '0xabc...') → 'balance:{"tokenAddress":"0x123...","walletAddress":"0xabc..."}'
+```
+
+**注意**：
+- 参数顺序会影响去重（使用稳定的参数顺序）
+- 对象参数需要序列化（使用 JSON.stringify）
+
+### 3. 优先级队列优化
+
+**原则**：关键查询立即执行，普通查询批处理
+
+```typescript
+// 交易前的关键查询
+const balance = await queryBalance(token, wallet, {
+  priority: 'high',
+  immediate: true  // 立即执行，不等待批处理
+});
+
+// 显示更新的查询
+const balance = await queryBalance(token, wallet, {
+  priority: 'normal'  // 等待批处理
+});
+```
+
+### 4. 聚合查询优化
+
+**原则**：一次查询获取所有相关数据
+
+```typescript
+// ❌ 不推荐：多次查询
+const balance = await queryBalance(token, wallet);
+const allowance = await queryAllowance(token, wallet, spender);
+const metadata = await queryMetadata(token, ['symbol', 'decimals']);
+const route = await queryRoute(token);
+
+// ✅ 推荐：聚合查询
+const info = await queryTokenFullInfo(token, wallet);
+// 包含：balance, allowances, metadata, route
+```
+
+## 常见问题和解决方案
+
+### Q1: 批处理延迟导致响应慢？
+
+**问题**：等待批处理窗口（50ms）导致用户感觉慢。
+
+**解决**：
+```typescript
+// 关键查询使用高优先级
+const balance = await queryBalance(token, wallet, {
+  priority: 'high',
+  immediate: true
+});
+```
+
+### Q2: 查询结果不一致？
+
+**问题**：短时间内多次查询，结果可能来自不同的批次。
+
+**解决**：
+```typescript
+// 使用 Promise.all 确保同一批次
+const [balance, allowance] = await Promise.all([
+  queryBalance(token, wallet),
+  queryAllowance(token, wallet, spender)
+]);
+```
+
+### Q3: 如何调试批处理？
+
+**问题**：不知道查询是否被批处理。
+
+**解决**：
+```typescript
+// 查看统计信息
+const stats = frontendAdapter.getStats();
+console.log(stats);
+// { balance: { pending: 2, hasTimer: true }, ... }
+
+// 查看日志
+// [FrontendAdapter] 添加到队列: balance (队列长度: 3)
+// [FrontendAdapter] 执行批处理: balance (3 个请求)
+// [FrontendAdapter] ✅ 批处理完成: balance (150ms)
+```
+
+### Q4: 批处理失败怎么办？
+
+**问题**：批处理中的某个查询失败，影响其他查询。
+
+**解决**：
+```typescript
+// 后端使用 try-catch 包装每个查询
+const results = await Promise.all(
+  queries.map(async (query) => {
+    try {
+      return await processQuery(query);
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  })
+);
+```
+
+## 最佳实践总结
+
+### ✅ 推荐做法
+
+1. **页面切换时使用聚合查询**
+   ```typescript
+   const info = await queryTokenFullInfo(token, wallet);
+   ```
+
+2. **交易前使用高优先级查询**
+   ```typescript
+   const balance = await queryBalance(token, wallet, { priority: 'high', immediate: true });
+   ```
+
+3. **使用 Promise.all 并行查询**
+   ```typescript
+   const [balance, allowance] = await Promise.all([
+     queryBalance(token, wallet),
+     queryAllowance(token, wallet, spender)
+   ]);
+   ```
+
+4. **避免在循环中查询**
+   ```typescript
+   // ❌ 不推荐
+   for (const token of tokens) {
+     const balance = await queryBalance(token, wallet);
+   }
+
+   // ✅ 推荐
+   const balances = await Promise.all(
+     tokens.map(token => queryBalance(token, wallet))
+   );
+   ```
+
+### ❌ 避免做法
+
+1. **不要绕过 FrontendAdapter 直接调用后端**
+   ```typescript
+   // ❌ 不推荐
+   chrome.runtime.sendMessage({ action: 'get_token_info', ... });
+
+   // ✅ 推荐
+   queryTokenFullInfo(token, wallet);
+   ```
+
+2. **不要滥用高优先级**
+   ```typescript
+   // ❌ 不推荐：所有查询都用高优先级
+   queryBalance(token, wallet, { priority: 'high' });
+
+   // ✅ 推荐：只在必要时使用
+   queryBalance(token, wallet, { priority: 'normal' });
+   ```
+
+3. **不要短时间内重复查询**
+   ```typescript
+   // ❌ 不推荐
+   const balance1 = await queryBalance(token, wallet);
+   const balance2 = await queryBalance(token, wallet);  // 重复
+
+   // ✅ 推荐：缓存结果
+   const balance = await queryBalance(token, wallet);
+   ```
+
+## 监控和调试
+
+### 性能监控
+
+```typescript
+// 获取统计信息
+const stats = frontendAdapter.getStats();
+console.log('待处理查询:', stats);
+
+// 输出示例：
+// {
+//   balance: { pending: 0, hasTimer: false },
+//   allowance: { pending: 2, hasTimer: true },
+//   metadata: { pending: 0, hasTimer: false }
+// }
+```
+
+### 日志级别
+
+```typescript
+// 调试日志
+logger.debug('[FrontendAdapter] 添加到队列: balance (队列长度: 3)');
+logger.debug('[FrontendAdapter] 查询去重: balance balance:{"tokenAddress":"0x123..."}');
+
+// 性能日志
+logger.perf('[FrontendAdapter] ✅ 批处理完成: balance (150ms)');
+
+// 错误日志
+logger.error('[FrontendAdapter] ❌ 批处理失败: balance', error);
+```
+
+### 清理资源
+
+```typescript
+// 页面卸载时清理
+window.addEventListener('beforeunload', () => {
+  frontendAdapter.clear();  // 清空所有待处理的请求
+});
+```
+
+## 相关文件
+
+- `src/shared/frontend-adapter.ts` - FrontendAdapter 实现
+- `src/background/batch-query-handlers.ts` - 后端批量查询处理器
+- `src/content/index.ts` - 前端使用示例
+- `src/shared/retry-helper.ts` - 重试工具函数
+- `src/shared/cache-manager.ts` - 缓存管理器
+- `docs/cache-manager-migration.md` - 缓存迁移指南
+

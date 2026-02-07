@@ -12,6 +12,7 @@ import '../shared/sw-polyfills.js';
 import { logger } from '../shared/logger.js';
 import { PerformanceTimer, perf, getPerformanceTimer, releasePerformanceTimer } from '../shared/performance.js';
 import { rpcQueue } from '../shared/rpc-queue.js';
+import { retry, isRpcError } from '../shared/retry-helper.js';
 import {
   WALLET_CONFIG,
   NETWORK_CONFIG,
@@ -2288,36 +2289,17 @@ function initializeBatchQueryHandlers() {
   logger.debug('[Background] 批量查询处理器已初始化');
 }
 
-// RPC 调用包装器 - 自动重试并切换节点
+// RPC 调用包装器 - 使用统一的重试工具
 async function executeWithRetry(asyncFunc, maxRetries = 2) {
-  let lastError;
-
-  for (let i = 0; i <= maxRetries; i++) {
-    try {
-      return await asyncFunc();
-    } catch (error) {
-      lastError = error;
-      const errorMsg = error.message || error.toString();
-
-      // 检查是否是 RPC 节点错误（401, 429, 503 等）
-      if (errorMsg.includes('401') || errorMsg.includes('429') ||
-          errorMsg.includes('503') || errorMsg.includes('SERVER_ERROR')) {
-
-        logger.warn(`[Background] RPC 错误 (尝试 ${i + 1}/${maxRetries + 1}):`, errorMsg);
-
-        // 如果还有重试次数，切换节点
-        if (i < maxRetries) {
-          await createClients(true);  // 切换到下一个节点
-          continue;
-        }
-      }
-
-      // 其他错误直接抛出
-      throw error;
-    }
-  }
-
-  throw lastError;
+  return retry(asyncFunc, {
+    maxRetries,
+    shouldRetry: isRpcError,
+    onRetry: async (attempt, error) => {
+      logger.warn(`[Background] RPC 错误，切换节点 (尝试 ${attempt}/${maxRetries + 1})`);
+      await createClients(true);  // 切换到下一个节点
+    },
+    logTag: 'Background'
+  });
 }
 
 // 加载钱包
