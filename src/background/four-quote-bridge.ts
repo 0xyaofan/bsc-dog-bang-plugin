@@ -64,7 +64,9 @@ const V3_DIRECT_QUOTE_TOKENS = new Set(
     CONTRACTS.UNITED_STABLES_U,
     CONTRACTS.USDT,
     CONTRACTS.BUSD,
-    CONTRACTS.CAKE
+    CONTRACTS.CAKE,
+    CONTRACTS.KGST,
+    CONTRACTS.lisUSD
   ]
     .filter((token): token is string => Boolean(token))
     .map((token) => token.toLowerCase())

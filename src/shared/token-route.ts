@@ -550,18 +550,22 @@ async function checkPancakePair(
   // 兜底逻辑：只在quoteToken未知时才遍历所有候选
   // 适用场景：Four.meme未返回quoteToken，或返回空值
   const candidates: string[] = [];
+
+  // 优先添加 Four.meme 的报价代币（包括 KGST, lisUSD 等）
+  getFourQuoteTokenList().forEach((token) => {
+    const normalized = token.toLowerCase();
+    if (!candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  });
+
+  // 然后添加标准报价代币
   [CONTRACTS.WBNB, CONTRACTS.BUSD, CONTRACTS.USDT, CONTRACTS.ASTER, CONTRACTS.USD1, CONTRACTS.UNITED_STABLES_U].forEach((token) => {
     if (token) {
       const normalized = token.toLowerCase();
       if (!candidates.includes(normalized)) {
         candidates.push(normalized);
       }
-    }
-  });
-  getFourQuoteTokenList().forEach((token) => {
-    const normalized = token.toLowerCase();
-    if (!candidates.includes(normalized)) {
-      candidates.push(normalized);
     }
   });
 
@@ -575,24 +579,65 @@ async function checkPancakePair(
         args: [tokenAddress, candidate as Address]
       })) as string;
       if (typeof pair === 'string' && pair !== ZERO_ADDRESS) {
-        // 检查流动性
-        const hasEnoughLiquidity = await checkPairLiquidity(
-          publicClient,
-          pair,
-          tokenAddress,
-          candidate
-        );
+        // 查询储备量以获取流动性信息
+        try {
+          const reserves = await publicClient.readContract({
+            address: pair as Address,
+            abi: PAIR_ABI,
+            functionName: 'getReserves'
+          });
 
-        if (!hasEnoughLiquidity) {
-          logger.warn('[checkPancakePair] 候选配对流动性不足，跳过:', { pair, quoteToken: candidate });
+          const [token0, token1] = await Promise.all([
+            publicClient.readContract({
+              address: pair as Address,
+              abi: PAIR_ABI,
+              functionName: 'token0'
+            }),
+            publicClient.readContract({
+              address: pair as Address,
+              abi: PAIR_ABI,
+              functionName: 'token1'
+            })
+          ]);
+
+          // 确定报价代币的储备量
+          const normalizedToken0 = (token0 as string).toLowerCase();
+          const normalizedToken1 = (token1 as string).toLowerCase();
+          const normalizedCandidate = candidate.toLowerCase();
+
+          let quoteReserve: bigint;
+          if (normalizedToken0 === normalizedCandidate) {
+            quoteReserve = reserves[0] as bigint;
+          } else if (normalizedToken1 === normalizedCandidate) {
+            quoteReserve = reserves[1] as bigint;
+          } else {
+            logger.warn('[checkPancakePair] 报价代币不匹配，跳过:', { pair, candidate });
+            return null;
+          }
+
+          // 获取最小流动性阈值
+          const threshold = MIN_LIQUIDITY_THRESHOLDS[normalizedCandidate] || MIN_LIQUIDITY_THRESHOLDS.default;
+
+          if (quoteReserve < threshold) {
+            logger.warn('[checkPancakePair] 候选配对流动性不足，跳过:', {
+              pair,
+              quoteToken: candidate,
+              quoteReserve: quoteReserve.toString(),
+              threshold: threshold.toString()
+            });
+            return null;
+          }
+
+          return {
+            hasLiquidity: true,
+            quoteToken: candidate,
+            pairAddress: pair,
+            liquidityAmount: quoteReserve // 保存流动性用于比较
+          };
+        } catch (error) {
+          logger.error('[checkPancakePair] 查询储备量失败:', error);
           return null;
         }
-
-        return {
-          hasLiquidity: true,
-          quoteToken: candidate,
-          pairAddress: pair
-        };
       }
       return null;
     } catch {
@@ -600,20 +645,40 @@ async function checkPancakePair(
     }
   });
 
-  // 等待所有查询完成，返回第一个有效结果
+  // 等待所有查询完成，选择流动性最大的配对
   const results = await Promise.all(pairPromises);
-  for (const result of results) {
-    if (result && result.hasLiquidity) {
-      // 缓存查询结果（兜底逻辑只查询 V2）
-      pancakePairCache.set(cacheKey, {
-        pairAddress: result.pairAddress,
-        quoteToken: result.quoteToken,
-        version: 'v2',
-        timestamp: now
-      });
-      return { ...result, version: 'v2' as const };
-    }
+  const validResults = results.filter((r): r is NonNullable<typeof r> => r !== null && r.hasLiquidity);
+
+  if (validResults.length === 0) {
+    return { hasLiquidity: false };
   }
+
+  // 选择流动性最大的配对
+  const bestResult = validResults.reduce((best, current) => {
+    return current.liquidityAmount > best.liquidityAmount ? current : best;
+  });
+
+  logger.info('[checkPancakePair] 选择流动性最大的配对:', {
+    pairAddress: bestResult.pairAddress,
+    quoteToken: bestResult.quoteToken,
+    liquidity: bestResult.liquidityAmount.toString(),
+    totalCandidates: validResults.length
+  });
+
+  // 缓存查询结果（兜底逻辑只查询 V2）
+  pancakePairCache.set(cacheKey, {
+    pairAddress: bestResult.pairAddress,
+    quoteToken: bestResult.quoteToken,
+    version: 'v2',
+    timestamp: now
+  });
+
+  return {
+    hasLiquidity: true,
+    quoteToken: bestResult.quoteToken,
+    pairAddress: bestResult.pairAddress,
+    version: 'v2' as const
+  };
 
   return { hasLiquidity: false };
 }
