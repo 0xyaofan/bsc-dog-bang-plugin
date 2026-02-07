@@ -570,6 +570,12 @@ async function checkPancakePair(
   });
 
   // 并发查询所有候选token
+  logger.debug('[checkPancakePair] 开始查询候选配对:', {
+    tokenAddress,
+    candidatesCount: candidates.length,
+    candidates: candidates.slice(0, 10) // 记录前10个候选
+  });
+
   const pairPromises = candidates.map(async (candidate) => {
     try {
       const pair = (await publicClient.readContract({
@@ -578,7 +584,10 @@ async function checkPancakePair(
         functionName: 'getPair',
         args: [tokenAddress, candidate as Address]
       })) as string;
+
       if (typeof pair === 'string' && pair !== ZERO_ADDRESS) {
+        logger.debug('[checkPancakePair] 找到配对:', { candidate, pair });
+
         // 查询储备量以获取流动性信息
         try {
           const reserves = await publicClient.readContract({
@@ -628,6 +637,12 @@ async function checkPancakePair(
             return null;
           }
 
+          logger.info('[checkPancakePair] 找到流动性充足的配对:', {
+            pair,
+            quoteToken: candidate,
+            quoteReserve: quoteReserve.toString()
+          });
+
           return {
             hasLiquidity: true,
             quoteToken: candidate,
@@ -635,12 +650,15 @@ async function checkPancakePair(
             liquidityAmount: quoteReserve // 保存流动性用于比较
           };
         } catch (error) {
-          logger.error('[checkPancakePair] 查询储备量失败:', error);
+          logger.error('[checkPancakePair] 查询储备量失败:', { candidate, pair, error });
           return null;
         }
+      } else {
+        logger.debug('[checkPancakePair] 配对不存在:', { candidate });
       }
       return null;
-    } catch {
+    } catch (error) {
+      logger.error('[checkPancakePair] 查询配对失败:', { candidate, error });
       return null;
     }
   });
@@ -650,6 +668,11 @@ async function checkPancakePair(
   const validResults = results.filter((r): r is NonNullable<typeof r> => r !== null && r.hasLiquidity);
 
   if (validResults.length === 0) {
+    logger.warn('[checkPancakePair] 没有找到流动性充足的配对:', {
+      tokenAddress,
+      totalCandidates: candidates.length,
+      candidates: candidates.slice(0, 5) // 只记录前5个候选
+    });
     return { hasLiquidity: false };
   }
 
@@ -679,8 +702,6 @@ async function checkPancakePair(
     pairAddress: bestResult.pairAddress,
     version: 'v2' as const
   };
-
-  return { hasLiquidity: false };
 }
 
 function calculateRatio(current: bigint, target: bigint): number {
