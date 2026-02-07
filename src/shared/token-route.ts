@@ -650,7 +650,12 @@ async function checkPancakePair(
             liquidityAmount: quoteReserve // 保存流动性用于比较
           };
         } catch (error) {
-          logger.error('[checkPancakePair] 查询储备量失败:', { candidate, pair, error });
+          logger.error('[checkPancakePair] 查询储备量失败:', {
+            candidate,
+            pair,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined
+          });
           return null;
         }
       } else {
@@ -658,7 +663,26 @@ async function checkPancakePair(
       }
       return null;
     } catch (error) {
-      logger.error('[checkPancakePair] 查询配对失败:', { candidate, error });
+      const errorMsg = error instanceof Error ? error.message : String(error);
+
+      // 检查是否是 Service Worker import 错误
+      if (errorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+        logger.warn('[checkPancakePair] Service Worker 限制，跳过流动性检查，假设配对存在');
+        // 对于 Service Worker 限制，我们假设配对可能存在
+        // 返回一个标记，表示需要跳过流动性检查
+        return {
+          hasLiquidity: true,
+          quoteToken: candidate,
+          pairAddress: 'unknown', // 标记为未知
+          liquidityAmount: BigInt(1e20) // 给一个高流动性值，确保不会被过滤
+        };
+      }
+
+      logger.error('[checkPancakePair] 查询配对失败:', {
+        candidate,
+        error: errorMsg,
+        stack: error instanceof Error ? error.stack : undefined
+      });
       return null;
     }
   });
@@ -676,8 +700,24 @@ async function checkPancakePair(
     return { hasLiquidity: false };
   }
 
+  // 过滤掉 pairAddress 为 'unknown' 的结果（Service Worker 限制导致的）
+  const validPairsWithAddress = validResults.filter(r => r.pairAddress !== 'unknown');
+
+  // 如果所有结果都是 'unknown'，说明遇到了 Service Worker 限制
+  // 在这种情况下，我们返回 hasLiquidity: true，但不指定具体的配对
+  // 让交易系统使用其他机制（如路径缓存）来处理
+  if (validPairsWithAddress.length === 0) {
+    logger.warn('[checkPancakePair] Service Worker 限制，无法查询配对，返回通用结果');
+    return {
+      hasLiquidity: true,
+      quoteToken: undefined,
+      pairAddress: undefined,
+      version: 'v2' as const
+    };
+  }
+
   // 选择流动性最大的配对
-  const bestResult = validResults.reduce((best, current) => {
+  const bestResult = validPairsWithAddress.reduce((best, current) => {
     return current.liquidityAmount > best.liquidityAmount ? current : best;
   });
 
@@ -685,7 +725,7 @@ async function checkPancakePair(
     pairAddress: bestResult.pairAddress,
     quoteToken: bestResult.quoteToken,
     liquidity: bestResult.liquidityAmount.toString(),
-    totalCandidates: validResults.length
+    totalCandidates: validPairsWithAddress.length
   });
 
   // 缓存查询结果（兜底逻辑只查询 V2）
