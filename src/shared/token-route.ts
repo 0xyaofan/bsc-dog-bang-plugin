@@ -286,6 +286,17 @@ function cleanupRouteCache(): void {
 // 永久缓存：Pancake pair 一旦创建就不会改变
 const pancakePairCache = new Map<string, { pairAddress: string; quoteToken: string; version: 'v2' | 'v3'; timestamp: number }>();
 
+// 特殊代币的配对映射 - 用于绕过 Service Worker 限制
+// 当 RPC 查询因为 Service Worker 限制失败时，使用这些预定义的配对
+const SPECIAL_PAIR_MAPPINGS: Record<string, { pairAddress: string; quoteToken: string; version: 'v2' | 'v3' }> = {
+  // KDOG/KGST 配对
+  '0x3753dd32cbc376ce6efd85f334b7289ae6d004af': {
+    pairAddress: '0x14C90904dD8868c8E748e42D092250Ec17f748d1',
+    quoteToken: '0x94be0bbA8E1E303fE998c9360B57b826F1A4f828', // KGST
+    version: 'v2'
+  }
+};
+
 function isZeroAddress(value?: string | null) {
   if (typeof value !== 'string') {
     return false;
@@ -438,6 +449,32 @@ async function checkPancakePair(
 ): Promise<PancakePairCheckResult> {
   const normalizedToken = tokenAddress.toLowerCase();
   const now = Date.now(); // 用于记录缓存时间戳（用于清理策略，非TTL）
+
+  // 检查特殊配对映射（用于绕过 Service Worker 限制）
+  const specialPair = SPECIAL_PAIR_MAPPINGS[normalizedToken];
+  if (specialPair) {
+    logger.info('[checkPancakePair] 使用预定义的特殊配对:', {
+      tokenAddress: normalizedToken,
+      pairAddress: specialPair.pairAddress,
+      quoteToken: specialPair.quoteToken,
+      version: specialPair.version
+    });
+
+    // 缓存特殊配对
+    pancakePairCache.set(normalizedToken, {
+      pairAddress: specialPair.pairAddress,
+      quoteToken: specialPair.quoteToken,
+      version: specialPair.version,
+      timestamp: now
+    });
+
+    return {
+      hasLiquidity: true,
+      quoteToken: specialPair.quoteToken,
+      pairAddress: specialPair.pairAddress,
+      version: specialPair.version
+    };
+  }
 
   // 检查缓存：如果之前查询过该代币，直接返回缓存结果（永久缓存）
   const cacheKey = `${normalizedToken}`;
