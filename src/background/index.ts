@@ -13,6 +13,7 @@ import { logger } from '../shared/logger.js';
 import { PerformanceTimer, perf, getPerformanceTimer, releasePerformanceTimer } from '../shared/performance.js';
 import { rpcQueue } from '../shared/rpc-queue.js';
 import { retry, isRpcError } from '../shared/retry-helper.js';
+import { CacheManager } from '../shared/cache-manager.js';
 import {
   WALLET_CONFIG,
   NETWORK_CONFIG,
@@ -886,11 +887,11 @@ onUserSettingsChange((settings) => {
 const TOKEN_METADATA_TTL = 5 * 60 * 1000; // 5分钟缓存
 const BALANCE_CACHE_TTL = 1500;
 const TOKEN_INFO_CACHE_TTL = 2000;
+// 🚀 优化：移除 updatedAt，CacheManager 自动管理时间戳
 type TokenMetadata = {
   decimals?: number;
   symbol?: string;
   totalSupply?: bigint;
-  updatedAt: number;
 };
 type TokenInfoResult = {
   symbol: string;
@@ -909,7 +910,15 @@ type TokenInfoCacheEntry = {
   updatedAt: number;
   hasAllowances: boolean;
 };
-const tokenMetadataCache = new Map<string, TokenMetadata>();
+
+// 🚀 优化：使用 CacheManager 替代 Map
+const tokenMetadataCache = new CacheManager<TokenMetadata>({
+  ttl: TOKEN_METADATA_TTL,
+  scope: 'token-metadata',
+  maxSize: 500,  // 最多缓存 500 个代币的元数据
+  cleanupInterval: 300000  // 5分钟清理一次过期缓存
+});
+
 const tokenInfoCache = new Map<string, TokenInfoCacheEntry>();
 type PendingTradeContext = {
   tokenAddress: string;
@@ -1463,17 +1472,10 @@ function getTokenMetadataKey(address: string) {
   return (address || '').toLowerCase();
 }
 
+// 🚀 优化：简化读取逻辑，CacheManager 自动处理 TTL
 function readTokenMetadataCache(address: string): TokenMetadata | null {
   const key = getTokenMetadataKey(address);
-  const cached = tokenMetadataCache.get(key);
-  if (!cached) {
-    return null;
-  }
-  if (Date.now() - cached.updatedAt > TOKEN_METADATA_TTL) {
-    tokenMetadataCache.delete(key);
-    return null;
-  }
-  return cached;
+  return tokenMetadataCache.get(key) || null;
 }
 
 async function ensureTokenMetadata(
@@ -1482,7 +1484,7 @@ async function ensureTokenMetadata(
 ): Promise<TokenMetadata> {
   const { needSymbol = false, needTotalSupply = false } = options;
   const key = getTokenMetadataKey(tokenAddress);
-  let cached = readTokenMetadataCache(tokenAddress) || { updatedAt: 0 };
+  let cached: TokenMetadata = readTokenMetadataCache(tokenAddress) || {};
   const missingFields: Array<'decimals' | 'symbol' | 'totalSupply'> = [];
 
   if (typeof cached.decimals !== 'number') {
@@ -1531,16 +1533,11 @@ async function ensureTokenMetadata(
       return data;
     });
 
-    cached = {
-      ...cached,
-      ...fetched,
-      updatedAt: Date.now()
-    };
-    tokenMetadataCache.set(key, cached);
-  } else {
-    cached.updatedAt = Date.now();
+    // 🚀 优化：合并数据并写入缓存，CacheManager 自动处理 TTL
+    cached = Object.assign({}, cached, fetched) as TokenMetadata;
     tokenMetadataCache.set(key, cached);
   }
+  // 🚀 优化：移除手动更新 updatedAt，CacheManager 自动处理
 
   return cached;
 }
