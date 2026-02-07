@@ -3032,7 +3032,7 @@ async function fetchWalletBalances(address: string, tokenAddress?: string): Prom
     `balance:${cacheScope}:${normalizedAddress}`,
     BALANCE_CACHE_TTL
   );
-  const bnbBalance = parseFloat(formatEther(balance)).toFixed(4);
+  const bnbBalance = parseFloat(formatEther(balance as bigint)).toFixed(4);
   const result: WalletBalancePayload = { bnbBalance };
 
   if (tokenAddress) {
@@ -3053,7 +3053,7 @@ async function fetchWalletBalances(address: string, tokenAddress?: string): Prom
         BALANCE_CACHE_TTL
       );
       const decimals = metadata.decimals ?? 18;
-      result.tokenBalance = parseFloat(formatUnits(tokenValue, decimals)).toFixed(4);
+      result.tokenBalance = parseFloat(formatUnits(tokenValue as bigint, decimals)).toFixed(4);
     } catch (error) {
       logger.error('[Background] Failed to get token balance:', error);
       result.tokenBalance = '0.00';
@@ -3769,7 +3769,7 @@ async function handleApproveToken({ tokenAddress, channel = 'pancake', pancakeVe
         abi: ERC20_ABI,
         functionName: 'allowance',
         args: [walletAccount.address, spenderAddress]
-      }));
+      })) as bigint;
       const metadata = await ensureTokenMetadata(tokenAddress, { needTotalSupply: true });
       const totalSupply = metadata.totalSupply ?? 0n;
 
@@ -4030,7 +4030,7 @@ async function handleCheckTokenApproval({ tokenAddress, channel = 'pancake' }) {
         abi: ERC20_ABI,
         functionName: 'allowance',
         args: [walletAccount.address, spenderAddress]
-      }));
+      })) as bigint;
       logger.debug('[Check Approval] 查询链上授权:', allowance.toString());
     }
 
@@ -4214,14 +4214,14 @@ async function fetchTokenInfoData(tokenAddress: string, walletAddress: string, n
               logger.warn(`[fetchTokenInfoData] Allowance query ${index} failed:`, r.error);
               return 0n;
             }
-            return r.result;
+            return r.result as bigint;
           });
         }),
       `token-allowances:${cacheScope}:${normalizedTokenAddress}:${normalizedWalletAddress}`,
       TOKEN_INFO_CACHE_TTL
     );
 
-    const [pancakeAllowance, fourAllowance, flapAllowance] = allowanceResults;
+    const [pancakeAllowance, fourAllowance, flapAllowance] = allowanceResults as bigint[];
 
     result.allowances = {
       pancake: pancakeAllowance.toString(),
