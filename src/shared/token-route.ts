@@ -796,12 +796,37 @@ function calculateRatio(current: bigint, target: bigint): number {
 }
 
 async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform: TokenPlatform): Promise<RouteFetchResult> {
-  const info = await publicClient.readContract({
-    address: CONTRACTS.FOUR_HELPER_V3 as Address,
-    abi: tokenManagerHelperAbi as any,
-    functionName: 'getTokenInfo',
-    args: [tokenAddress]
-  });
+  let info: any;
+  try {
+    info = await publicClient.readContract({
+      address: CONTRACTS.FOUR_HELPER_V3 as Address,
+      abi: tokenManagerHelperAbi as any,
+      functionName: 'getTokenInfo',
+      args: [tokenAddress]
+    });
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    // 检查是否是 Service Worker import 错误
+    if (errorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+      logger.warn('[fetchFourRoute] Service Worker 限制，无法查询 Four.meme 代币信息');
+      // 对于 Four.meme 代币，如果无法查询信息，应该返回一个默认的未迁移状态
+      // 而不是让它 fallback 到 unknown 平台
+      const baseChannel: 'four' | 'xmode' = platform === 'xmode' ? 'xmode' : 'four';
+      return {
+        platform,
+        preferredChannel: baseChannel,
+        readyForPancake: false,
+        progress: 0,
+        migrating: false,
+        quoteToken: undefined,
+        metadata: {},
+        notes: 'Service Worker 限制，无法查询代币信息，假设未迁移'
+      };
+    }
+    // 其他错误继续抛出
+    throw error;
+  }
 
   const infoArray = Array.isArray(info) ? info : [];
   const rawLaunchTime = BigInt((info as any)?.launchTime ?? infoArray[6] ?? 0n);
@@ -896,10 +921,37 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
         pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
       }
     } catch (error) {
-      // getPancakePair 调用失败，回退到通过 Factory 查找
-      logger.debug(`[Route] getPancakePair 调用失败，尝试通过 Factory 查找 pair:`, error);
-      if (normalizedQuote) {
-        pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+
+      // 检查是否是 Service Worker import 错误
+      if (errorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+        logger.warn('[fetchFourRoute] Service Worker 限制，无法查询 getPancakePair');
+        // 对于已迁移的代币，如果无法查询 Pancake pair，尝试通过 Factory 查找
+        if (normalizedQuote) {
+          try {
+            pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
+          } catch (checkError) {
+            const checkErrorMsg = checkError instanceof Error ? checkError.message : String(checkError);
+            if (checkErrorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+              logger.warn('[fetchFourRoute] Service Worker 限制，无法通过 Factory 查找 pair，假设配对存在');
+              // 假设配对存在，让交易系统使用路径缓存
+              pancakePair = {
+                hasLiquidity: true,
+                quoteToken: normalizedQuote,
+                pairAddress: undefined,
+                version: 'v2'
+              };
+            } else {
+              throw checkError;
+            }
+          }
+        }
+      } else {
+        // 非 Service Worker 错误，回退到通过 Factory 查找
+        logger.debug(`[Route] getPancakePair 调用失败，尝试通过 Factory 查找 pair:`, error);
+        if (normalizedQuote) {
+          pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
+        }
       }
     }
   }
@@ -948,6 +1000,8 @@ const FLAP_STATE_READERS: FlapStateReader[] = [
 async function fetchFlapRoute(publicClient: any, tokenAddress: Address): Promise<RouteFetchResult> {
   let state: any = null;
   let stateReaderUsed: string | null = null;
+  let serviceWorkerError = false;
+
   for (const reader of FLAP_STATE_READERS) {
     try {
       const result = await publicClient.readContract({
@@ -963,10 +1017,31 @@ async function fetchFlapRoute(publicClient: any, tokenAddress: Address): Promise
       }
     } catch (error: any) {
       const msg = String(error?.message || error || '');
+
+      // 检查是否是 Service Worker import 错误
+      if (msg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+        serviceWorkerError = true;
+        logger.warn('[fetchFlapRoute] Service Worker 限制，无法查询 Flap 代币信息');
+        break;
+      }
+
       if (msg.includes('function selector')) {
         continue;
       }
     }
+  }
+
+  // 如果遇到 Service Worker 错误，返回默认的未迁移状态
+  if (serviceWorkerError) {
+    return {
+      platform: 'flap',
+      preferredChannel: 'flap',
+      readyForPancake: false,
+      progress: 0,
+      migrating: false,
+      metadata: {},
+      notes: 'Service Worker 限制，无法查询代币信息，假设未迁移'
+    };
   }
 
   if (!state || isStructEffectivelyEmpty(state)) {
@@ -1034,12 +1109,35 @@ async function fetchFlapRoute(publicClient: any, tokenAddress: Address): Promise
 }
 
 async function fetchLunaRoute(publicClient: any, tokenAddress: Address): Promise<RouteFetchResult> {
-  const info = await publicClient.readContract({
-    address: CONTRACTS.LUNA_FUN_LAUNCHPAD as Address,
-    abi: lunaLaunchpadAbi as any,
-    functionName: 'tokenInfo',
-    args: [tokenAddress]
-  });
+  let info: any;
+  try {
+    info = await publicClient.readContract({
+      address: CONTRACTS.LUNA_FUN_LAUNCHPAD as Address,
+      abi: lunaLaunchpadAbi as any,
+      functionName: 'tokenInfo',
+      args: [tokenAddress]
+    });
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+
+    // 检查是否是 Service Worker import 错误
+    if (errorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+      logger.warn('[fetchLunaRoute] Service Worker 限制，无法查询 Luna 代币信息');
+      // 对于 Luna 代币，如果无法查询信息，应该返回一个默认的未迁移状态
+      // Luna 代币总是使用 pancake 作为 preferredChannel
+      return {
+        platform: 'luna',
+        preferredChannel: 'pancake',
+        readyForPancake: false,
+        progress: 0,
+        migrating: false,
+        metadata: {},
+        notes: 'Service Worker 限制，无法查询代币信息，假设未迁移'
+      };
+    }
+    // 其他错误继续抛出
+    throw error;
+  }
 
   const infoArray = Array.isArray(info) ? info : [];
   const reportedToken =
