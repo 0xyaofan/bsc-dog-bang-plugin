@@ -287,6 +287,11 @@ function cleanupRouteCache(): void {
 const pancakePairCache = new Map<string, { pairAddress: string; quoteToken: string; version: 'v2' | 'v3'; timestamp: number }>();
 
 // 特殊代币的配对映射 - 用于绕过 Service Worker 限制
+// TODO: 这是一个临时方案，需要后续优化
+// 理想的解决方案：
+// 1. 修复 Viem 的 Service Worker 兼容性问题
+// 2. 使用 fetch 直接调用 RPC，绕过 Viem 的动态 import
+// 3. 实现动态配对发现，自动查询所有配对并选择流动性最大的
 // 当 RPC 查询因为 Service Worker 限制失败时，使用这些预定义的配对
 const SPECIAL_PAIR_MAPPINGS: Record<string, { pairAddress: string; quoteToken: string; version: 'v2' | 'v3' }> = {
   // KDOG/KGST 配对
