@@ -9,6 +9,207 @@ import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+// Pair ABI - 用于查询储备量
+const PAIR_ABI = [
+  {
+    inputs: [],
+    name: 'getReserves',
+    outputs: [
+      { internalType: 'uint112', name: 'reserve0', type: 'uint112' },
+      { internalType: 'uint112', name: 'reserve1', type: 'uint112' },
+      { internalType: 'uint32', name: 'blockTimestampLast', type: 'uint32' }
+    ],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'token0',
+    outputs: [{ internalType: 'address', name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'token1',
+    outputs: [{ internalType: 'address', name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function'
+  }
+] as const;
+
+// 最小流动性要求（以报价代币计）
+// 对于稳定币（USDT/BUSD/USDC/USD1）：至少 $100
+// 对于 WBNB：至少 0.2 BNB（约 $100）
+// 对于其他代币：至少 100 个代币
+const MIN_LIQUIDITY_THRESHOLDS = {
+  // 稳定币（18 decimals）
+  [CONTRACTS.USDT?.toLowerCase() ?? '']: BigInt(100 * 1e18),
+  [CONTRACTS.BUSD?.toLowerCase() ?? '']: BigInt(100 * 1e18),
+  [CONTRACTS.USDC?.toLowerCase() ?? '']: BigInt(100 * 1e18),
+  [CONTRACTS.USD1?.toLowerCase() ?? '']: BigInt(100 * 1e18),
+  // WBNB（18 decimals）
+  [CONTRACTS.WBNB?.toLowerCase() ?? '']: BigInt(0.2 * 1e18),
+  // 默认阈值
+  default: BigInt(100 * 1e18)
+};
+
+/**
+ * 检查配对的流动性是否足够
+ * @param publicClient Viem public client
+ * @param pairAddress 配对地址
+ * @param tokenAddress 目标代币地址
+ * @param quoteToken 报价代币地址
+ * @returns true 表示流动性足够，false 表示流动性不足
+ */
+async function checkPairLiquidity(
+  publicClient: any,
+  pairAddress: string,
+  tokenAddress: string,
+  quoteToken: string
+): Promise<boolean> {
+  try {
+    // 查询储备量
+    const reserves = await publicClient.readContract({
+      address: pairAddress as Address,
+      abi: PAIR_ABI,
+      functionName: 'getReserves'
+    });
+
+    // 查询 token0 和 token1
+    const [token0, token1] = await Promise.all([
+      publicClient.readContract({
+        address: pairAddress as Address,
+        abi: PAIR_ABI,
+        functionName: 'token0'
+      }),
+      publicClient.readContract({
+        address: pairAddress as Address,
+        abi: PAIR_ABI,
+        functionName: 'token1'
+      })
+    ]);
+
+    // 确定哪个是报价代币的储备量
+    const normalizedToken0 = (token0 as string).toLowerCase();
+    const normalizedToken1 = (token1 as string).toLowerCase();
+    const normalizedQuote = quoteToken.toLowerCase();
+    const normalizedTarget = tokenAddress.toLowerCase();
+
+    let quoteReserve: bigint;
+    if (normalizedToken0 === normalizedQuote) {
+      quoteReserve = reserves[0] as bigint;
+    } else if (normalizedToken1 === normalizedQuote) {
+      quoteReserve = reserves[1] as bigint;
+    } else {
+      logger.error('[checkPairLiquidity] 报价代币不匹配:', {
+        pairAddress,
+        token0,
+        token1,
+        quoteToken
+      });
+      return false;
+    }
+
+    // 获取最小流动性阈值
+    const threshold = MIN_LIQUIDITY_THRESHOLDS[normalizedQuote] || MIN_LIQUIDITY_THRESHOLDS.default;
+
+    // 检查流动性是否足够
+    const hasEnoughLiquidity = quoteReserve >= threshold;
+
+    if (!hasEnoughLiquidity) {
+      logger.warn('[checkPairLiquidity] 流动性不足:', {
+        pairAddress,
+        quoteToken,
+        quoteReserve: quoteReserve.toString(),
+        threshold: threshold.toString(),
+        ratio: Number(quoteReserve) / Number(threshold)
+      });
+    } else {
+      logger.debug('[checkPairLiquidity] 流动性充足:', {
+        pairAddress,
+        quoteToken,
+        quoteReserve: quoteReserve.toString()
+      });
+    }
+
+    return hasEnoughLiquidity;
+  } catch (error) {
+    logger.error('[checkPairLiquidity] 查询流动性失败:', error);
+    return false;
+  }
+}
+
+// V3 Pool ABI - 用于查询流动性
+const V3_POOL_ABI = [
+  {
+    inputs: [],
+    name: 'liquidity',
+    outputs: [{ internalType: 'uint128', name: '', type: 'uint128' }],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'token0',
+    outputs: [{ internalType: 'address', name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function'
+  },
+  {
+    inputs: [],
+    name: 'token1',
+    outputs: [{ internalType: 'address', name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function'
+  }
+] as const;
+
+// V3 池子最小流动性阈值（liquidity 值）
+// V3 的 liquidity 是 sqrt(amount0 * amount1)，所以阈值需要相应调整
+const MIN_V3_LIQUIDITY = BigInt(1e10); // 约等于 sqrt(100 * 1e18 * 100 * 1e18) 的数量级
+
+/**
+ * 检查 V3 池子的流动性是否足够
+ * @param publicClient Viem public client
+ * @param poolAddress 池子地址
+ * @returns true 表示流动性足够，false 表示流动性不足
+ */
+async function checkV3PoolLiquidity(
+  publicClient: any,
+  poolAddress: string
+): Promise<boolean> {
+  try {
+    // 查询 V3 池子的流动性
+    const liquidity = await publicClient.readContract({
+      address: poolAddress as Address,
+      abi: V3_POOL_ABI,
+      functionName: 'liquidity'
+    }) as bigint;
+
+    const hasEnoughLiquidity = liquidity >= MIN_V3_LIQUIDITY;
+
+    if (!hasEnoughLiquidity) {
+      logger.warn('[checkV3PoolLiquidity] V3 池子流动性不足:', {
+        poolAddress,
+        liquidity: liquidity.toString(),
+        threshold: MIN_V3_LIQUIDITY.toString(),
+        ratio: Number(liquidity) / Number(MIN_V3_LIQUIDITY)
+      });
+    } else {
+      logger.debug('[checkV3PoolLiquidity] V3 池子流动性充足:', {
+        poolAddress,
+        liquidity: liquidity.toString()
+      });
+    }
+
+    return hasEnoughLiquidity;
+  } catch (error) {
+    logger.error('[checkV3PoolLiquidity] 查询 V3 流动性失败:', error);
+    return false;
+  }
+}
+
 // 路由信息缓存 - 支持多代币永久缓存
 // key: tokenAddress (lowercase)
 // value: { route, timestamp, migrationStatus }
@@ -265,20 +466,33 @@ async function checkPancakePair(
         })) as string;
 
         if (typeof pair === 'string' && pair !== ZERO_ADDRESS) {
-          const result = {
-            hasLiquidity: true,
-            quoteToken: normalizedQuote,
-            pairAddress: pair,
-            version: 'v2' as const
-          };
-          // 缓存查询结果
-          pancakePairCache.set(cacheKey, {
-            pairAddress: pair,
-            quoteToken: normalizedQuote,
-            version: 'v2',
-            timestamp: now
-          });
-          return result;
+          // 检查流动性
+          const hasEnoughLiquidity = await checkPairLiquidity(
+            publicClient,
+            pair,
+            tokenAddress,
+            normalizedQuote
+          );
+
+          if (!hasEnoughLiquidity) {
+            logger.warn('[checkPancakePair] V2 配对流动性不足，跳过:', pair);
+            // 流动性不足，不缓存，继续尝试 V3
+          } else {
+            const result = {
+              hasLiquidity: true,
+              quoteToken: normalizedQuote,
+              pairAddress: pair,
+              version: 'v2' as const
+            };
+            // 缓存查询结果
+            pancakePairCache.set(cacheKey, {
+              pairAddress: pair,
+              quoteToken: normalizedQuote,
+              version: 'v2',
+              timestamp: now
+            });
+            return result;
+          }
         }
       } catch (error) {
         // V2 查询失败，继续尝试 V3
@@ -298,6 +512,14 @@ async function checkPancakePair(
           })) as string;
 
           if (typeof pool === 'string' && pool !== ZERO_ADDRESS) {
+            // 检查 V3 池子流动性
+            const hasEnoughLiquidity = await checkV3PoolLiquidity(publicClient, pool);
+
+            if (!hasEnoughLiquidity) {
+              logger.warn(`[checkPancakePair] V3 池子流动性不足 (fee=${fee})，跳过:`, pool);
+              continue; // 尝试下一个 fee 级别
+            }
+
             const result = {
               hasLiquidity: true,
               quoteToken: normalizedQuote,
@@ -353,6 +575,19 @@ async function checkPancakePair(
         args: [tokenAddress, candidate as Address]
       })) as string;
       if (typeof pair === 'string' && pair !== ZERO_ADDRESS) {
+        // 检查流动性
+        const hasEnoughLiquidity = await checkPairLiquidity(
+          publicClient,
+          pair,
+          tokenAddress,
+          candidate
+        );
+
+        if (!hasEnoughLiquidity) {
+          logger.warn('[checkPancakePair] 候选配对流动性不足，跳过:', { pair, quoteToken: candidate });
+          return null;
+        }
+
         return {
           hasLiquidity: true,
           quoteToken: candidate,

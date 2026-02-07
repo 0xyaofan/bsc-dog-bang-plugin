@@ -13,7 +13,9 @@ const BUILTIN_FOUR_QUOTE_TOKENS: FourQuoteTokenEntry[] = [
   { address: CONTRACTS.USDC ?? '', label: 'USDC' },
   { address: CONTRACTS.USD1 ?? '', label: 'USD1' },
   { address: CONTRACTS.ASTER ?? '', label: 'ASTER' },
-  { address: CONTRACTS.UNITED_STABLES_U ?? '', label: 'United Stables (U)' }
+  { address: CONTRACTS.UNITED_STABLES_U ?? '', label: 'United Stables (U)' },
+  { address: CONTRACTS.KGST ?? '', label: 'KGST' },
+  { address: CONTRACTS.lisUSD ?? '', label: 'lisUSD' }
 ].filter((entry) => Boolean(entry.address));
 
 const BASE_BRIDGE_TOKENS = [
