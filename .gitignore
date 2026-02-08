@@ -6,6 +6,9 @@ dist/
 # Build outputs
 extension/dist/
 
+# Test coverage
+coverage/
+
 # Release files
 release/
 *.zip
