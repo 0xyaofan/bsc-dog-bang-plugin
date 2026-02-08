@@ -856,26 +856,53 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
 
     // 只有在已迁移时才检查 Pancake
     if (liquidityAddedFromArray) {
-      const pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteCandidate as Address);
-      if (pancakePair.hasLiquidity) {
-        logger.info(`[Route] 代币已迁移，切换到 Pancake`);
-        return {
-          platform,
-          preferredChannel: 'pancake',
-          readyForPancake: true,
-          progress: 1,
-          migrating: false,
-          metadata: mergePancakeMetadata(undefined, pancakePair),
-          notes: 'Four.meme helper 返回空数据但代币已迁移，切换 Pancake'
-        };
+      try {
+        const pancakePair = await checkPancakePair(publicClient, tokenAddress, quoteCandidate as Address);
+        if (pancakePair.hasLiquidity) {
+          logger.info(`[Route] 代币已迁移，切换到 Pancake`);
+          return {
+            platform,
+            preferredChannel: 'pancake',
+            readyForPancake: true,
+            progress: 1,
+            migrating: false,
+            metadata: mergePancakeMetadata(undefined, pancakePair),
+            notes: 'Four.meme helper 返回空数据但代币已迁移，切换 Pancake'
+          };
+        }
+      } catch (checkError) {
+        const checkErrorMsg = checkError instanceof Error ? checkError.message : String(checkError);
+        if (checkErrorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+          logger.warn('[fetchFourRoute] Service Worker 限制，无法检查 Pancake pair，假设已迁移');
+          // Service Worker 限制，假设已迁移并有流动性
+          return {
+            platform,
+            preferredChannel: 'pancake',
+            readyForPancake: true,
+            progress: 1,
+            migrating: false,
+            metadata: {},
+            notes: 'Service Worker 限制，Four.meme helper 返回空数据，假设已迁移'
+          };
+        }
+        // 其他错误继续抛出
+        throw checkError;
       }
     }
 
     // 未迁移或 Pancake 无流动性
-    // 抛出特殊错误，让上层直接跳到 unknown 平台（Pancake）
-    const error = new Error('Four.meme helper 未返回有效数据');
-    (error as any).skipToUnknown = true; // 标记：跳过其他发射台，直接使用 Pancake
-    throw error;
+    // 返回未迁移状态，使用 Four.meme 合约
+    const baseChannel: 'four' | 'xmode' = platform === 'xmode' ? 'xmode' : 'four';
+    return {
+      platform,
+      preferredChannel: baseChannel,
+      readyForPancake: false,
+      progress: 0,
+      migrating: false,
+      quoteToken: undefined,
+      metadata: {},
+      notes: 'Four.meme helper 返回空数据且未迁移，使用 Four.meme 合约'
+    };
   }
 
   let liquidityAdded = Boolean(info?.liquidityAdded ?? infoArray[11]);
@@ -918,7 +945,23 @@ async function fetchFourRoute(publicClient: any, tokenAddress: Address, platform
       } else {
         // 🐛 修复：getPancakePair 返回零地址，通过 Factory 查找 V2/V3 pair
         logger.debug(`[Route] getPancakePair 返回零地址，尝试通过 Factory 查找 pair`);
-        pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
+        try {
+          pancakePair = await checkPancakePair(publicClient, tokenAddress, normalizedQuote as Address);
+        } catch (checkError) {
+          const checkErrorMsg = checkError instanceof Error ? checkError.message : String(checkError);
+          if (checkErrorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+            logger.warn('[fetchFourRoute] Service Worker 限制，无法通过 Factory 查找 pair，假设配对存在');
+            // 假设配对存在，让交易系统使用路径缓存
+            pancakePair = {
+              hasLiquidity: true,
+              quoteToken: normalizedQuote,
+              pairAddress: undefined,
+              version: 'v2'
+            };
+          } else {
+            throw checkError;
+          }
+        }
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -1045,17 +1088,36 @@ async function fetchFlapRoute(publicClient: any, tokenAddress: Address): Promise
   }
 
   if (!state || isStructEffectivelyEmpty(state)) {
-    const fallbackPair = await checkPancakePair(publicClient, tokenAddress);
-    if (fallbackPair.hasLiquidity) {
-      return {
-        platform: 'unknown',
-        preferredChannel: 'pancake',
-        readyForPancake: true,
-        progress: 1,
-        migrating: false,
-        metadata: mergePancakeMetadata(undefined, fallbackPair),
-        notes: 'Flap Portal 无记录或返回空状态，自动切换 Pancake'
-      };
+    try {
+      const fallbackPair = await checkPancakePair(publicClient, tokenAddress);
+      if (fallbackPair.hasLiquidity) {
+        return {
+          platform: 'unknown',
+          preferredChannel: 'pancake',
+          readyForPancake: true,
+          progress: 1,
+          migrating: false,
+          metadata: mergePancakeMetadata(undefined, fallbackPair),
+          notes: 'Flap Portal 无记录或返回空状态，自动切换 Pancake'
+        };
+      }
+    } catch (checkError) {
+      const checkErrorMsg = checkError instanceof Error ? checkError.message : String(checkError);
+      if (checkErrorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+        logger.warn('[fetchFlapRoute] Service Worker 限制，无法检查 Pancake pair');
+        // Service Worker 限制，返回未迁移状态
+        return {
+          platform: 'flap',
+          preferredChannel: 'flap',
+          readyForPancake: false,
+          progress: 0,
+          migrating: false,
+          metadata: {},
+          notes: 'Service Worker 限制，Flap Portal 返回空状态，假设未迁移'
+        };
+      }
+      // 其他错误继续抛出
+      throw checkError;
     }
     throw new Error('Flap Portal 未返回有效数据');
   }
@@ -1154,17 +1216,36 @@ async function fetchLunaRoute(publicClient: any, tokenAddress: Address): Promise
     (normalizedReported && normalizedReported !== normalizedInput) ||
     (normalizedMeta && normalizedMeta !== normalizedInput);
   if (invalidLunaInfo) {
-    const fallbackPair = await checkPancakePair(publicClient, tokenAddress);
-    if (fallbackPair.hasLiquidity) {
-      return {
-        platform: 'luna',
-        preferredChannel: 'pancake',
-        readyForPancake: true,
-        progress: 1,
-        migrating: false,
-        metadata: mergePancakeMetadata(undefined, fallbackPair),
-        notes: 'Luna Launchpad 返回空数据，自动切换 Pancake'
-      };
+    try {
+      const fallbackPair = await checkPancakePair(publicClient, tokenAddress);
+      if (fallbackPair.hasLiquidity) {
+        return {
+          platform: 'luna',
+          preferredChannel: 'pancake',
+          readyForPancake: true,
+          progress: 1,
+          migrating: false,
+          metadata: mergePancakeMetadata(undefined, fallbackPair),
+          notes: 'Luna Launchpad 返回空数据，自动切换 Pancake'
+        };
+      }
+    } catch (checkError) {
+      const checkErrorMsg = checkError instanceof Error ? checkError.message : String(checkError);
+      if (checkErrorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+        logger.warn('[fetchLunaRoute] Service Worker 限制，无法检查 Pancake pair');
+        // Service Worker 限制，返回未迁移状态
+        return {
+          platform: 'luna',
+          preferredChannel: 'pancake',
+          readyForPancake: false,
+          progress: 0,
+          migrating: false,
+          metadata: {},
+          notes: 'Service Worker 限制，Luna Launchpad 返回空数据，假设未迁移'
+        };
+      }
+      // 其他错误继续抛出
+      throw checkError;
     }
     throw new Error('Luna Launchpad 未返回有效数据');
   }
