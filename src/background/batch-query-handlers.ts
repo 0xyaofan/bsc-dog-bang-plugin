@@ -21,6 +21,7 @@ export interface BatchQueryDependencies {
   getCacheScope: () => string;
   normalizeAddressValue: (address: string) => string;
   ensureTokenMetadata: (tokenAddress: string, options: any) => Promise<any>;
+  detectTokenPlatform: (tokenAddress: string) => string;
   fetchRouteWithFallback: (publicClient: any, tokenAddress: string, initialPlatform: string) => Promise<any>;
   readCachedTokenInfo: (tokenAddress: string, walletAddress: string, needAllowances: boolean) => any;
   writeCachedTokenInfo: (tokenAddress: string, walletAddress: string, data: any) => void;
@@ -41,6 +42,7 @@ export function createBatchQueryHandlers(deps: BatchQueryDependencies) {
     getCacheScope,
     normalizeAddressValue,
     ensureTokenMetadata,
+    detectTokenPlatform,
     fetchRouteWithFallback,
     readCachedTokenInfo,
     writeCachedTokenInfo,
@@ -481,7 +483,8 @@ export function createBatchQueryHandlers(deps: BatchQueryDependencies) {
 
             // 查询路由信息（使用缓存）
             const routeStart = perf.now();
-            const route = await fetchRouteWithFallback(publicClient, tokenAddress, 'unknown');
+            const platform = detectTokenPlatform(tokenAddress);
+            const route = await fetchRouteWithFallback(publicClient, tokenAddress, platform);
             logger.debug(`[TokenFullInfo] 路由查询完成 (${perf.measure(routeStart).toFixed(2)}ms)`);
 
             return {

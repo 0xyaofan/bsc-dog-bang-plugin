@@ -1347,16 +1347,21 @@ export async function fetchRouteWithFallback(
   tokenAddress: Address,
   initialPlatform: TokenPlatform
 ): Promise<RouteFetchResult> {
+  logger.debug(`[fetchRouteWithFallback] 开始查询路由: token=${tokenAddress.slice(0, 10)}, platform=${initialPlatform}`);
+
   // 1. 检查缓存
   const cached = getRouteCache(tokenAddress);
   if (cached) {
+    logger.debug(`[fetchRouteWithFallback] 找到缓存: platform=${cached.route.platform}, migrationStatus=${cached.migrationStatus}`);
     // 如果已迁移，使用永久缓存
     if (cached.migrationStatus === 'migrated') {
+      logger.debug(`[fetchRouteWithFallback] 使用已迁移缓存`);
       return cached.route;
     }
 
     // 如果未迁移，需要重新查询以检测是否已迁移
     // 这样可以及时发现代币的迁移状态变化
+    logger.debug(`[fetchRouteWithFallback] 未迁移代币，重新查询`);
   }
 
   // 2. 执行查询（无缓存或未迁移需要重新检查）
@@ -1370,11 +1375,14 @@ export async function fetchRouteWithFallback(
       continue;
     }
     tried.add(platform);
+    logger.debug(`[fetchRouteWithFallback] 尝试平台: ${platform}`);
     try {
       const route = await fetchTokenRouteState(publicClient, tokenAddress, platform);
+      logger.debug(`[fetchRouteWithFallback] 平台 ${platform} 返回: preferredChannel=${route.preferredChannel}, readyForPancake=${route.readyForPancake}`);
       // 完全信任平台返回的 preferredChannel
       lastValidRoute = route;
       if (!shouldFallbackRoute(route)) {
+        logger.debug(`[fetchRouteWithFallback] 使用平台 ${platform} 的路由`);
         // 3. 检查是否需要更新缓存
         if (shouldUpdateRouteCache(tokenAddress, cached, route)) {
           setRouteCache(tokenAddress, route);
@@ -1382,8 +1390,10 @@ export async function fetchRouteWithFallback(
         }
         return route;
       }
+      logger.debug(`[fetchRouteWithFallback] 平台 ${platform} 需要 fallback，继续尝试下一个`);
       // If Pancake has流动性才返回，否则尝试下一个平台
     } catch (error) {
+      logger.warn(`[fetchRouteWithFallback] 平台 ${platform} 查询失败:`, error);
       lastError = error;
       // 检查是否需要跳过其他发射台，直接使用 unknown（Pancake）
       if ((error as any)?.skipToUnknown) {
@@ -1405,6 +1415,7 @@ export async function fetchRouteWithFallback(
   }
 
   if (lastValidRoute) {
+    logger.debug(`[fetchRouteWithFallback] 使用最后一个有效路由: platform=${lastValidRoute.platform}`);
     // 缓存最后一个有效路由
     if (shouldUpdateRouteCache(tokenAddress, cached, lastValidRoute)) {
       setRouteCache(tokenAddress, lastValidRoute);
@@ -1414,10 +1425,12 @@ export async function fetchRouteWithFallback(
   }
 
   if (lastError) {
+    logger.warn(`[fetchRouteWithFallback] 所有平台都失败，抛出最后一个错误`);
     throw lastError;
   }
 
   // 默认返回
+  logger.warn(`[fetchRouteWithFallback] 没有有效路由，返回默认 unknown 路由`);
   const defaultRoute: RouteFetchResult = {
     platform: 'unknown',
     preferredChannel: 'pancake',
