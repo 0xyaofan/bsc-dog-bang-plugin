@@ -3,6 +3,7 @@ import { calculateRatio as calculateRatioSDK } from './pancake-sdk-utils.js';
 import { CONTRACTS, PANCAKE_FACTORY_ABI, PANCAKE_V3_FACTORY_ABI } from './trading-config.js';
 import { getFourQuoteTokenList } from './channel-config.js';
 import { logger } from './logger.js';
+import { routeTracer } from './route-tracer.js';
 import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
 import flapPortalAbi from '../../abis/flap-portal.json';
 import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
@@ -1347,21 +1348,32 @@ export async function fetchRouteWithFallback(
   tokenAddress: Address,
   initialPlatform: TokenPlatform
 ): Promise<RouteFetchResult> {
+  // 开始追踪
+  const traceId = routeTracer.startTrace(tokenAddress, initialPlatform);
+
   logger.debug(`[fetchRouteWithFallback] 开始查询路由: token=${tokenAddress.slice(0, 10)}, platform=${initialPlatform}`);
+  routeTracer.addStep(traceId, 'start', { tokenAddress, initialPlatform });
 
   // 1. 检查缓存
   const cached = getRouteCache(tokenAddress);
   if (cached) {
     logger.debug(`[fetchRouteWithFallback] 找到缓存: platform=${cached.route.platform}, migrationStatus=${cached.migrationStatus}`);
+    routeTracer.addStep(traceId, 'cache-hit', { platform: cached.route.platform, migrationStatus: cached.migrationStatus });
+
     // 如果已迁移，使用永久缓存
     if (cached.migrationStatus === 'migrated') {
       logger.debug(`[fetchRouteWithFallback] 使用已迁移缓存`);
+      routeTracer.addStep(traceId, 'use-migrated-cache');
+      routeTracer.endTrace(traceId, cached.route);
       return cached.route;
     }
 
     // 如果未迁移，需要重新查询以检测是否已迁移
     // 这样可以及时发现代币的迁移状态变化
     logger.debug(`[fetchRouteWithFallback] 未迁移代币，重新查询`);
+    routeTracer.addStep(traceId, 'cache-unmigrated-requery');
+  } else {
+    routeTracer.addStep(traceId, 'cache-miss');
   }
 
   // 2. 执行查询（无缓存或未迁移需要重新检查）
@@ -1370,45 +1382,70 @@ export async function fetchRouteWithFallback(
   let lastValidRoute: RouteFetchResult | null = null;
   let lastError: unknown = null;
 
+  routeTracer.addStep(traceId, 'build-probe-order', { order });
+
   for (const platform of order) {
     if (tried.has(platform)) {
       continue;
     }
     tried.add(platform);
     logger.debug(`[fetchRouteWithFallback] 尝试平台: ${platform}`);
+    routeTracer.addStep(traceId, `try-platform-${platform}`);
+
     try {
       const route = await fetchTokenRouteState(publicClient, tokenAddress, platform);
       logger.debug(`[fetchRouteWithFallback] 平台 ${platform} 返回: preferredChannel=${route.preferredChannel}, readyForPancake=${route.readyForPancake}`);
+      routeTracer.addStep(traceId, `platform-${platform}-success`, {
+        preferredChannel: route.preferredChannel,
+        readyForPancake: route.readyForPancake
+      });
+
       // 完全信任平台返回的 preferredChannel
       lastValidRoute = route;
       if (!shouldFallbackRoute(route)) {
         logger.debug(`[fetchRouteWithFallback] 使用平台 ${platform} 的路由`);
+        routeTracer.addStep(traceId, `use-platform-${platform}`);
+
         // 3. 检查是否需要更新缓存
         if (shouldUpdateRouteCache(tokenAddress, cached, route)) {
           setRouteCache(tokenAddress, route);
           cleanupRouteCache();
+          routeTracer.addStep(traceId, 'update-cache');
         }
+
+        routeTracer.endTrace(traceId, route);
         return route;
       }
       logger.debug(`[fetchRouteWithFallback] 平台 ${platform} 需要 fallback，继续尝试下一个`);
+      routeTracer.addStep(traceId, `platform-${platform}-fallback`);
       // If Pancake has流动性才返回，否则尝试下一个平台
     } catch (error) {
       logger.warn(`[fetchRouteWithFallback] 平台 ${platform} 查询失败:`, error);
+      routeTracer.addError(traceId, `platform-${platform}-error`, error as Error);
       lastError = error;
+
       // 检查是否需要跳过其他发射台，直接使用 unknown（Pancake）
       if ((error as any)?.skipToUnknown) {
         logger.info(`[Route] 模式匹配但获取信息失败，直接使用 Pancake`);
+        routeTracer.addStep(traceId, 'skip-to-unknown');
+
         // 直接跳到 unknown 平台
         try {
           const unknownRoute = await fetchTokenRouteState(publicClient, tokenAddress, 'unknown');
+          routeTracer.addStep(traceId, 'unknown-platform-success');
+
           if (shouldUpdateRouteCache(tokenAddress, cached, unknownRoute)) {
             setRouteCache(tokenAddress, unknownRoute);
             cleanupRouteCache();
+            routeTracer.addStep(traceId, 'update-cache');
           }
+
+          routeTracer.endTrace(traceId, unknownRoute);
           return unknownRoute;
         } catch (unknownError) {
           // unknown 平台也失败了，继续抛出原始错误
           logger.warn(`[Route] Pancake 查询也失败: ${unknownError?.message || unknownError}`);
+          routeTracer.addError(traceId, 'unknown-platform-error', unknownError as Error);
         }
       }
     }
@@ -1416,21 +1453,30 @@ export async function fetchRouteWithFallback(
 
   if (lastValidRoute) {
     logger.debug(`[fetchRouteWithFallback] 使用最后一个有效路由: platform=${lastValidRoute.platform}`);
+    routeTracer.addStep(traceId, 'use-last-valid-route', { platform: lastValidRoute.platform });
+
     // 缓存最后一个有效路由
     if (shouldUpdateRouteCache(tokenAddress, cached, lastValidRoute)) {
       setRouteCache(tokenAddress, lastValidRoute);
       cleanupRouteCache();
+      routeTracer.addStep(traceId, 'update-cache');
     }
+
+    routeTracer.endTrace(traceId, lastValidRoute);
     return lastValidRoute;
   }
 
   if (lastError) {
     logger.warn(`[fetchRouteWithFallback] 所有平台都失败，抛出最后一个错误`);
+    routeTracer.addError(traceId, 'all-platforms-failed', lastError as Error);
+    routeTracer.endTrace(traceId);
     throw lastError;
   }
 
   // 默认返回
   logger.warn(`[fetchRouteWithFallback] 没有有效路由，返回默认 unknown 路由`);
+  routeTracer.addStep(traceId, 'use-default-route');
+
   const defaultRoute: RouteFetchResult = {
     platform: 'unknown',
     preferredChannel: 'pancake',
@@ -1440,5 +1486,7 @@ export async function fetchRouteWithFallback(
   };
   setRouteCache(tokenAddress, defaultRoute);
   cleanupRouteCache();
+
+  routeTracer.endTrace(traceId, defaultRoute);
   return defaultRoute;
 }
