@@ -5,6 +5,7 @@
 ![BSC Dog Bang](https://img.shields.io/badge/BSC-Dog%20Bang-yellow?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue?style=for-the-badge)
+[![Tests](https://github.com/0xyaofan/bsc-dog-bang-plugin/actions/workflows/test.yml/badge.svg)](https://github.com/0xyaofan/bsc-dog-bang-plugin/actions/workflows/test.yml)
 
 一款专业的 Binance Smart Chain (BSC) Meme 代币交易 Chrome 插件
 
