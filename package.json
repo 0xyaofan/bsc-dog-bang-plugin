@@ -10,7 +10,8 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "prepare": "husky"
   },
   "keywords": [],
   "author": "0xyaofan",
@@ -22,6 +23,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react-swc": "^4.2.2",
     "@vitest/ui": "^4.0.18",
+    "husky": "^9.1.7",
     "typescript": "^5.9.3",
     "viem": "^2.43.1",
     "vite": "^7.2.4",
