@@ -97,6 +97,14 @@ export class PancakePairFinder {
     if (quoteToken && typeof quoteToken === 'string') {
       const normalizedQuote = quoteToken.toLowerCase();
 
+      // 检查是否为零地址
+      if (normalizedQuote === ZERO_ADDRESS.toLowerCase()) {
+        structuredLogger.warn('[PancakePairFinder] quoteToken 是零地址，跳过查询', {
+          tokenAddress: normalizedToken
+        });
+        return { hasLiquidity: false };
+      }
+
       try {
         // 并发查询 V2 和 V3（性能优化：减少 50% 查询时间）
         const [v2Result, v3Result] = await Promise.all([
