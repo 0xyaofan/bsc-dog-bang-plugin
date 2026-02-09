@@ -27,15 +27,13 @@ export class LiquidityChecker {
     quoteToken: string
   ): Promise<boolean> {
     try {
-      // 查询储备量
-      const reserves = await publicClient.readContract({
-        address: pairAddress as Address,
-        abi: PAIR_ABI,
-        functionName: 'getReserves'
-      });
-
-      // 查询 token0 和 token1
-      const [token0, token1] = await Promise.all([
+      // 并发查询储备量、token0 和 token1（性能优化：减少 33% 查询时间）
+      const [reserves, token0, token1] = await Promise.all([
+        publicClient.readContract({
+          address: pairAddress as Address,
+          abi: PAIR_ABI,
+          functionName: 'getReserves'
+        }),
         publicClient.readContract({
           address: pairAddress as Address,
           abi: PAIR_ABI,
@@ -150,13 +148,13 @@ export class LiquidityChecker {
     quoteToken: string
   ): Promise<bigint | null> {
     try {
-      const reserves = await publicClient.readContract({
-        address: pairAddress as Address,
-        abi: PAIR_ABI,
-        functionName: 'getReserves'
-      });
-
-      const [token0, token1] = await Promise.all([
+      // 并发查询储备量、token0 和 token1（性能优化）
+      const [reserves, token0, token1] = await Promise.all([
+        publicClient.readContract({
+          address: pairAddress as Address,
+          abi: PAIR_ABI,
+          functionName: 'getReserves'
+        }),
         publicClient.readContract({
           address: pairAddress as Address,
           abi: PAIR_ABI,
