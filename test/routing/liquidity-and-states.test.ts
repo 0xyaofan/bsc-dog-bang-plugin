@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fetchRouteWithFallback } from '../../src/shared/token-route';
+import { createRouteQueryService } from '../../src/shared/route-query/route-query-service';
+import { routeCacheManager } from '../../src/shared/route-query/route-cache-manager';
 
 describe('流动性检查测试', () => {
   let mockPublicClient: any;
+  let service: ReturnType<typeof createRouteQueryService>;
 
   beforeEach(() => {
     mockPublicClient = {
       readContract: vi.fn()
     };
+    service = createRouteQueryService(mockPublicClient);
+    // 清除缓存，避免测试间干扰
+    routeCacheManager.clearAll();
   });
 
   describe('PancakeSwap V2 流动性检查', () => {
@@ -31,7 +36,7 @@ describe('流动性检查测试', () => {
         '0x3753dd32cbc376ce6efd85f334b7289ae6d004af'
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route).toBeDefined();
       expect(route.platform).toBe('unknown');
@@ -59,7 +64,7 @@ describe('流动性检查测试', () => {
         '0x3753dd32cbc376ce6efd85f334b7289ae6d004af'
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route).toBeDefined();
       expect(route.platform).toBe('unknown');
@@ -73,7 +78,7 @@ describe('流动性检查测试', () => {
         '0x0000000000000000000000000000000000000000'
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route).toBeDefined();
       expect(route.platform).toBe('unknown');
@@ -104,7 +109,7 @@ describe('流动性检查测试', () => {
         '0x3753dd32cbc376ce6efd85f334b7289ae6d004af'
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route).toBeDefined();
       expect(route.platform).toBe('unknown');
@@ -119,7 +124,7 @@ describe('流动性检查测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route).toBeDefined();
       expect(route.platform).toBe('unknown');
@@ -137,7 +142,7 @@ describe('流动性检查测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route).toBeDefined();
       expect(route.platform).toBe('unknown');
@@ -148,28 +153,43 @@ describe('流动性检查测试', () => {
 
 describe('Four.meme 代币状态测试', () => {
   let mockPublicClient: any;
+  let service: ReturnType<typeof createRouteQueryService>;
 
   beforeEach(() => {
     mockPublicClient = {
       readContract: vi.fn()
     };
+    service = createRouteQueryService(mockPublicClient);
+    // 清除缓存，避免测试间干扰
+    routeCacheManager.clearAll();
   });
 
   describe('未迁移代币的不同阶段', () => {
     it('应该处理刚启动的代币（progress = 0）', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d7ffff';
 
-      mockPublicClient.readContract.mockResolvedValue({
-        liquidityAdded: false,
-        quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 0n,
-        maxOffers: 10000n,
-        funds: 0n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: false,
+            quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 0n,
+            maxOffers: 10000n,
+            funds: 0n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        if (params.functionName === 'getPair') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        return null;
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.progress).toBe(0);
@@ -179,17 +199,28 @@ describe('Four.meme 代币状态测试', () => {
     it('应该处理进行中的代币（0 < progress < 1）', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d7ffff';
 
-      mockPublicClient.readContract.mockResolvedValue({
-        liquidityAdded: false,
-        quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 5000n,
-        maxOffers: 10000n,
-        funds: 50000000000000000000n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: false,
+            quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 5000n,
+            maxOffers: 10000n,
+            funds: 50000000000000000000n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        if (params.functionName === 'getPair') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        return null;
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.progress).toBeGreaterThan(0);
@@ -200,17 +231,28 @@ describe('Four.meme 代币状态测试', () => {
     it('应该处理即将完成的代币（progress 接近 1）', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d7ffff';
 
-      mockPublicClient.readContract.mockResolvedValue({
-        liquidityAdded: false,
-        quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 9999n,
-        maxOffers: 10000n,
-        funds: 99999999999999999999n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: false,
+            quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 9999n,
+            maxOffers: 10000n,
+            funds: 99999999999999999999n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        if (params.functionName === 'getPair') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        return null;
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.progress).toBeGreaterThan(0.99);
@@ -223,17 +265,28 @@ describe('Four.meme 代币状态测试', () => {
     it('应该处理 WBNB 作为 quote token', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d7ffff';
 
-      mockPublicClient.readContract.mockResolvedValue({
-        liquidityAdded: false,
-        quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', // WBNB
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 5000n,
-        maxOffers: 10000n,
-        funds: 50000000000000000000n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: false,
+            quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', // WBNB
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 5000n,
+            maxOffers: 10000n,
+            funds: 50000000000000000000n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        if (params.functionName === 'getPair') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        return null;
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.quoteToken).toBe('0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c');
@@ -242,17 +295,28 @@ describe('Four.meme 代币状态测试', () => {
     it('应该处理 USDT 作为 quote token', async () => {
       const tokenAddress = '0x3e2a009d420512627a2791be63eeb04c94674444';
 
-      mockPublicClient.readContract.mockResolvedValue({
-        liquidityAdded: false,
-        quote: '0x55d398326f99059ff775485246999027b3197955', // USDT
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 5000n,
-        maxOffers: 10000n,
-        funds: 50000000000000000000n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: false,
+            quote: '0x55d398326f99059ff775485246999027b3197955', // USDT
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 5000n,
+            maxOffers: 10000n,
+            funds: 50000000000000000000n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        if (params.functionName === 'getPair') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        return null;
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.quoteToken).toBe('0x55d398326f99059ff775485246999027b3197955');
@@ -261,17 +325,28 @@ describe('Four.meme 代币状态测试', () => {
     it('应该处理 KGST 作为 quote token', async () => {
       const tokenAddress = '0x3e2a009d420512627a2791be63eeb04c94674444';
 
-      mockPublicClient.readContract.mockResolvedValue({
-        liquidityAdded: false,
-        quote: '0x94be0bbA8E1E303fE998c9360B57b826F1A4f828', // KGST
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 5000n,
-        maxOffers: 10000n,
-        funds: 50000000000000000000n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: false,
+            quote: '0x94be0bbA8E1E303fE998c9360B57b826F1A4f828', // KGST
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 5000n,
+            maxOffers: 10000n,
+            funds: 50000000000000000000n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        if (params.functionName === 'getPair') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        return null;
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.quoteToken).toBe('0x94be0bbA8E1E303fE998c9360B57b826F1A4f828');
@@ -282,23 +357,47 @@ describe('Four.meme 代币状态测试', () => {
     it('应该查询 Pancake pair 并返回正确信息', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d7ffff';
 
-      // 第一次调用：getTokenInfo - 已迁移
-      mockPublicClient.readContract.mockResolvedValueOnce({
-        liquidityAdded: true,
-        quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
-        launchTime: BigInt(Math.floor(Date.now() / 1000)),
-        offers: 10000n,
-        maxOffers: 10000n,
-        funds: 100000000000000000000n,
-        maxFunds: 100000000000000000000n
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        // Four helper getTokenInfo
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getTokenInfo') {
+          return {
+            liquidityAdded: true,
+            quote: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+            launchTime: BigInt(Math.floor(Date.now() / 1000)),
+            offers: 10000n,
+            maxOffers: 10000n,
+            funds: 100000000000000000000n,
+            maxFunds: 100000000000000000000n
+          };
+        }
+        // Four helper getPancakePair
+        if (params.address?.toLowerCase() === '0xf251f83e40a78868fcfa3fa4599dad6494e46034' && params.functionName === 'getPancakePair') {
+          return '0x1234567890123456789012345678901234567890';
+        }
+        // V2 Factory getPair
+        if (params.functionName === 'getPair') {
+          return '0x1234567890123456789012345678901234567890';
+        }
+        // V3 Factory getPool
+        if (params.functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        // Pair getReserves
+        if (params.functionName === 'getReserves') {
+          return [BigInt(200 * 1e18), BigInt(100 * 1e18), 0];
+        }
+        // Pair token0
+        if (params.functionName === 'token0') {
+          return '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
+        }
+        // Pair token1
+        if (params.functionName === 'token1') {
+          return tokenAddress;
+        }
+        return null;
       });
 
-      // 第二次调用：getPancakePair
-      mockPublicClient.readContract.mockResolvedValueOnce(
-        '0x1234567890123456789012345678901234567890'
-      );
-
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.preferredChannel).toBe('pancake');
@@ -310,11 +409,15 @@ describe('Four.meme 代币状态测试', () => {
 
 describe('Flap 和 Luna 平台测试', () => {
   let mockPublicClient: any;
+  let service: ReturnType<typeof createRouteQueryService>;
 
   beforeEach(() => {
     mockPublicClient = {
       readContract: vi.fn()
     };
+    service = createRouteQueryService(mockPublicClient);
+    // 清除缓存，避免测试间干扰
+    routeCacheManager.clearAll();
   });
 
   describe('Flap 平台', () => {
@@ -326,7 +429,7 @@ describe('Flap 和 Luna 平台测试', () => {
         launchTime: BigInt(Math.floor(Date.now() / 1000))
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'flap');
+      const route = await service.queryRoute(tokenAddress, 'flap');
 
       expect(route.platform).toBe('flap');
       expect(route.preferredChannel).toBe('flap');
@@ -339,7 +442,7 @@ describe('Flap 和 Luna 平台测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'flap');
+      const route = await service.queryRoute(tokenAddress, 'flap');
 
       expect(route.platform).toBe('flap');
       expect(route.preferredChannel).toBe('flap');
@@ -356,7 +459,7 @@ describe('Flap 和 Luna 平台测试', () => {
         launchTime: BigInt(Math.floor(Date.now() / 1000))
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'luna');
+      const route = await service.queryRoute(tokenAddress, 'luna');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -369,7 +472,7 @@ describe('Flap 和 Luna 平台测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'luna');
+      const route = await service.queryRoute(tokenAddress, 'luna');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();

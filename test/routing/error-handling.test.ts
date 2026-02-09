@@ -1,13 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fetchRouteWithFallback, detectTokenPlatform } from '../../src/shared/token-route';
+import { createRouteQueryService } from '../../src/shared/route-query/route-query-service';
+import { routeCacheManager } from '../../src/shared/route-query/route-cache-manager';
+import { detectTokenPlatform } from '../../src/shared/token-route';
 
 describe('错误处理和回退机制测试', () => {
   let mockPublicClient: any;
+  let service: ReturnType<typeof createRouteQueryService>;
 
   beforeEach(() => {
     mockPublicClient = {
       readContract: vi.fn()
     };
+    service = createRouteQueryService(mockPublicClient);
+    // 清除缓存，避免测试间干扰
+    routeCacheManager.clearAll();
   });
 
   describe('网络错误处理', () => {
@@ -18,7 +24,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('Network timeout')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       // 网络错误时，应该返回有效的路由信息
       expect(route).toBeDefined();
@@ -33,7 +39,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('RPC error: execution reverted')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -46,7 +52,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('Contract not found')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -59,7 +65,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('Gas estimation failed')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -74,7 +80,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route.platform).toBe('four');
       expect(route.preferredChannel).toBe('four');
@@ -89,7 +95,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'flap');
+      const route = await service.queryRoute(tokenAddress, 'flap');
 
       expect(route.platform).toBe('flap');
       expect(route.preferredChannel).toBe('flap');
@@ -104,7 +110,7 @@ describe('错误处理和回退机制测试', () => {
       );
 
       // Luna 没有特定地址模式，但我们显式传入 luna 平台
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'luna');
+      const route = await service.queryRoute(tokenAddress, 'luna');
 
       // 由于回退机制，可能会尝试其他平台
       expect(route).toBeDefined();
@@ -119,7 +125,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'unknown');
+      const route = await service.queryRoute(tokenAddress, 'unknown');
 
       expect(route.platform).toBe('unknown');
       expect(route.preferredChannel).toBe('pancake');
@@ -133,7 +139,7 @@ describe('错误处理和回退机制测试', () => {
 
       mockPublicClient.readContract.mockResolvedValue(null);
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -144,7 +150,7 @@ describe('错误处理和回退机制测试', () => {
 
       mockPublicClient.readContract.mockResolvedValue(undefined);
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -155,7 +161,7 @@ describe('错误处理和回退机制测试', () => {
 
       mockPublicClient.readContract.mockResolvedValue({});
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -174,7 +180,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: 'invalid' as any
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -195,7 +201,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: 100000000000000000000n
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -214,7 +220,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: 100000000000000000000n
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -239,7 +245,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: BigInt('1000000000000000000000000000000')
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -262,7 +268,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: 100000000000000000000n
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -284,7 +290,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: 100000000000000000000n
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -303,7 +309,7 @@ describe('错误处理和回退机制测试', () => {
         maxFunds: 0n
       });
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -325,7 +331,7 @@ describe('错误处理和回退机制测试', () => {
 
       const promises = tokens.map(token => {
         const platform = detectTokenPlatform(token);
-        return fetchRouteWithFallback(mockPublicClient, token, platform);
+        return service.queryRoute(token, platform);
       });
 
       const routes = await Promise.all(promises);
@@ -346,7 +352,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('import() is disallowed on ServiceWorkerGlobalScope')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       // 即使失败，也应该返回有效的路由信息
       expect(route).toBeDefined();
@@ -375,7 +381,7 @@ describe('错误处理和回退机制测试', () => {
         new Error('Network error')
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
@@ -401,7 +407,7 @@ describe('错误处理和回退机制测试', () => {
         '0x0000000000000000000000000000000000000000'
       );
 
-      const route = await fetchRouteWithFallback(mockPublicClient, tokenAddress, 'four');
+      const route = await service.queryRoute(tokenAddress, 'four');
 
       expect(route).toBeDefined();
       expect(route.platform).toBeDefined();
