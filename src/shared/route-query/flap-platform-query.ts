@@ -5,7 +5,7 @@
 import type { Address } from 'viem';
 import { CONTRACTS } from '../trading-config.js';
 import { structuredLogger } from '../structured-logger.js';
-import flapPortalAbi from '../../abis/flap-portal.json';
+import flapPortalAbi from '../../../abis/flap-portal.json';
 import { BasePlatformQuery } from './base-platform-query.js';
 import type { RouteFetchResult, PancakePairCheckResult } from './types.js';
 import { FLAP_STATE_READERS, ZERO_ADDRESS } from './constants.js';

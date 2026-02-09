@@ -6,7 +6,7 @@
 import type { Address } from 'viem';
 import { CONTRACTS } from '../trading-config.js';
 import { structuredLogger } from '../structured-logger.js';
-import tokenManagerHelperAbi from '../../abis/fourmeme/TokenManagerHelper3.abi.json';
+import tokenManagerHelperAbi from '../../../abis/fourmeme/TokenManagerHelper3.abi.json';
 import { BasePlatformQuery } from './base-platform-query.js';
 import type { RouteFetchResult, TokenPlatform, PancakePairCheckResult } from './types.js';
 import { ServiceWorkerError, isServiceWorkerError } from './errors.js';

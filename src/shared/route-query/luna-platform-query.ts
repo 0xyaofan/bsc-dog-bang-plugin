@@ -5,7 +5,7 @@
 import type { Address } from 'viem';
 import { CONTRACTS } from '../trading-config.js';
 import { structuredLogger } from '../structured-logger.js';
-import lunaLaunchpadAbi from '../../abis/luna-fun-launchpad.json';
+import lunaLaunchpadAbi from '../../../abis/luna-fun-launchpad.json';
 import { BasePlatformQuery } from './base-platform-query.js';
 import type { RouteFetchResult, PancakePairCheckResult } from './types.js';
 import { ZERO_ADDRESS } from './constants.js';
