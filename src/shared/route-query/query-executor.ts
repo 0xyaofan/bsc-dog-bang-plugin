@@ -6,7 +6,7 @@
 import type { Address } from 'viem';
 import { structuredLogger } from '../structured-logger.js';
 import { routeTracer } from '../route-tracer.js';
-import { withRetry, RETRY_STRATEGIES } from '../retry.js';
+import { withRetry } from '../retry.js';
 import type { TokenPlatform, RouteFetchResult } from './types.js';
 import { PLATFORM_FALLBACK_ORDER } from './constants.js';
 import { BasePlatformQuery } from './base-platform-query.js';
@@ -178,8 +178,10 @@ export class QueryExecutor {
         return await query.queryRoute(tokenAddress);
       },
       {
-        ...RETRY_STRATEGIES.onchain,
         maxAttempts: 2, // 减少重试次数，因为有 fallback
+        delayMs: 500,
+        backoff: 'exponential',
+        maxDelayMs: 2000,
         onRetry: (error, attempt) => {
           structuredLogger.warn('[QueryExecutor] 重试查询', {
             platform,
