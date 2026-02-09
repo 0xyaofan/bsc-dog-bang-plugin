@@ -311,11 +311,19 @@ export class PancakePairFinder {
         version: 'v2'
       };
     } catch (error) {
-      structuredLogger.error('[PancakePairFinder] 查询 V2 pair 失败', {
-        tokenAddress,
-        quoteToken,
-        error: error instanceof Error ? error.message : String(error)
-      });
+      // Service Worker 错误是预期的，使用 debug 级别
+      if (isServiceWorkerError(error)) {
+        structuredLogger.debug('[PancakePairFinder] Service Worker 限制，无法查询 V2 pair', {
+          tokenAddress,
+          quoteToken
+        });
+      } else {
+        structuredLogger.error('[PancakePairFinder] 查询 V2 pair 失败', {
+          tokenAddress,
+          quoteToken,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
       return null;
     }
   }
@@ -373,11 +381,19 @@ export class PancakePairFinder {
       const validResult = results.find(r => r !== null);
       return validResult || null;
     } catch (error) {
-      structuredLogger.error('[PancakePairFinder] 查询 V3 pool 失败', {
-        tokenAddress,
-        quoteToken,
-        error: error instanceof Error ? error.message : String(error)
-      });
+      // Service Worker 错误是预期的，使用 debug 级别
+      if (isServiceWorkerError(error)) {
+        structuredLogger.debug('[PancakePairFinder] Service Worker 限制，无法查询 V3 pool', {
+          tokenAddress,
+          quoteToken
+        });
+      } else {
+        structuredLogger.error('[PancakePairFinder] 查询 V3 pool 失败', {
+          tokenAddress,
+          quoteToken,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
       return null;
     }
   }
