@@ -2794,7 +2794,7 @@ async function processExtensionRequest(action: string, data: any = {}) {
   if (action === 'show_notification') {
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'icons/icon48.png',
+      iconUrl: 'icons/48x48.png',
       title: data?.title ?? 'BSC Dog Bang Trade Plugin',
       message: data?.message ?? ''
     });
@@ -4527,7 +4527,7 @@ function onTxConfirmed(data) {
 
   chrome.notifications.create({
     type: 'basic',
-    iconUrl: 'icons/icon48.png',
+    iconUrl: 'icons/48x48.png',
     title: isSuccess ? '✅ 交易成功' : isTimeout ? '⚠️ 交易未确认' : '❌ 交易失败',
     message: messageLines.join('\n')
   });
