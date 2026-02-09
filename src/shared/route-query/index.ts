@@ -72,12 +72,34 @@ export {
 // 基类
 export { BasePlatformQuery } from './base-platform-query.js';
 
-// TODO: 导出具体平台查询类（待实现）
-// export { FourPlatformQuery } from './four-platform-query.js';
-// export { FlapPlatformQuery } from './flap-platform-query.js';
-// export { LunaPlatformQuery } from './luna-platform-query.js';
-// export { DefaultPlatformQuery } from './default-platform-query.js';
+// 具体平台查询类
+export {
+  FourPlatformQuery,
+  createFourPlatformQuery
+} from './four-platform-query.js';
 
-// TODO: 导出查询执行器和服务（待实现）
-// export { QueryExecutor } from './query-executor.js';
-// export { RouteQueryService } from './route-query-service.js';
+export {
+  FlapPlatformQuery,
+  createFlapPlatformQuery
+} from './flap-platform-query.js';
+
+export {
+  LunaPlatformQuery,
+  createLunaPlatformQuery
+} from './luna-platform-query.js';
+
+export {
+  DefaultPlatformQuery,
+  createDefaultPlatformQuery
+} from './default-platform-query.js';
+
+// 查询执行器和服务
+export {
+  QueryExecutor,
+  createQueryExecutor
+} from './query-executor.js';
+
+export {
+  RouteQueryService,
+  createRouteQueryService
+} from './route-query-service.js';
