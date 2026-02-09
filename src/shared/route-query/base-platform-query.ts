@@ -5,6 +5,7 @@
 
 import type { Address } from 'viem';
 import { structuredLogger } from '../structured-logger.js';
+import { CONTRACTS } from '../trading-config.js';
 import type { RouteFetchResult, TokenPlatform, PancakePairCheckResult } from './types.js';
 import { ServiceWorkerError, isServiceWorkerError, toServiceWorkerError } from './errors.js';
 import { pancakePairFinder } from './pancake-pair-finder.js';
@@ -153,7 +154,6 @@ export abstract class BasePlatformQuery {
     const normalized = quoteToken.toLowerCase();
 
     // 从 CONTRACTS 获取 WBNB 地址
-    const { CONTRACTS } = require('../trading-config.js');
     const wbnb = CONTRACTS.WBNB?.toLowerCase();
 
     if (!normalized || !wbnb) {

@@ -105,27 +105,39 @@ describe('路由查询服务测试', () => {
     it('应该缓存已迁移代币的查询结果', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d74444';
 
+      // Mock Four.meme helper 返回已迁移状态
       mockPublicClient.readContract
         .mockResolvedValueOnce({
           liquidityAdded: true,
           offers: BigInt(100),
-          funds: BigInt(100)
+          funds: BigInt(100),
+          maxOffers: BigInt(100),
+          maxFunds: BigInt(100),
+          quoteToken: '0x55d398326f99059ff775485246999027b3197955'
         })
-        .mockResolvedValueOnce('0xpairaddress')
-        .mockResolvedValueOnce([BigInt(200 * 1e18), BigInt(100 * 1e18), 0])
-        .mockResolvedValueOnce('0x55d398326f99059ff775485246999027b3197955')
-        .mockResolvedValueOnce(tokenAddress);
+        // Mock Pancake V2 查询
+        .mockResolvedValueOnce('0xpairaddress') // getPair
+        .mockResolvedValueOnce([BigInt(200 * 1e18), BigInt(100 * 1e18), 0]) // getReserves
+        .mockResolvedValueOnce('0x55d398326f99059ff775485246999027b3197955') // token0
+        .mockResolvedValueOnce(tokenAddress) // token1
+        // Mock Pancake V3 查询（并发）
+        .mockResolvedValueOnce('0x0000000000000000000000000000000000000000') // V3 pool 500
+        .mockResolvedValueOnce('0x0000000000000000000000000000000000000000') // V3 pool 2500
+        .mockResolvedValueOnce('0x0000000000000000000000000000000000000000'); // V3 pool 10000
 
       // 第一次查询
       const result1 = await service.queryRoute(tokenAddress);
       expect(result1.readyForPancake).toBe(true);
 
+      // 记录第一次查询后的调用次数
+      const callsAfterFirstQuery = mockPublicClient.readContract.mock.calls.length;
+
       // 第二次查询应该使用缓存
       const result2 = await service.queryRoute(tokenAddress);
       expect(result2).toEqual(result1);
 
-      // 应该只调用一次 readContract
-      expect(mockPublicClient.readContract).toHaveBeenCalledTimes(5);
+      // 第二次查询不应该增加调用次数（使用缓存）
+      expect(mockPublicClient.readContract.mock.calls.length).toBe(callsAfterFirstQuery);
     });
 
     it('应该对未迁移代币使用短期缓存', async () => {
@@ -150,27 +162,39 @@ describe('路由查询服务测试', () => {
     it('应该清除指定代币的缓存', async () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d74444';
 
+      // Mock Four.meme helper 返回已迁移状态
       mockPublicClient.readContract
         .mockResolvedValue({
           liquidityAdded: true,
           offers: BigInt(100),
-          funds: BigInt(100)
+          funds: BigInt(100),
+          maxOffers: BigInt(100),
+          maxFunds: BigInt(100),
+          quoteToken: '0x55d398326f99059ff775485246999027b3197955'
         })
+        // Mock Pancake V2 查询
         .mockResolvedValue('0xpairaddress')
         .mockResolvedValue([BigInt(200 * 1e18), BigInt(100 * 1e18), 0])
         .mockResolvedValue('0x55d398326f99059ff775485246999027b3197955')
-        .mockResolvedValue(tokenAddress);
+        .mockResolvedValue(tokenAddress)
+        // Mock Pancake V3 查询
+        .mockResolvedValue('0x0000000000000000000000000000000000000000')
+        .mockResolvedValue('0x0000000000000000000000000000000000000000')
+        .mockResolvedValue('0x0000000000000000000000000000000000000000');
 
       // 第一次查询
       await service.queryRoute(tokenAddress);
+      const callsAfterFirst = mockPublicClient.readContract.mock.calls.length;
 
       // 清除缓存
       service.clearCache(tokenAddress);
 
       // 第二次查询应该重新查询
       await service.queryRoute(tokenAddress);
+      const callsAfterSecond = mockPublicClient.readContract.mock.calls.length;
 
-      expect(mockPublicClient.readContract.mock.calls.length).toBeGreaterThan(5);
+      // 第二次查询应该增加调用次数（缓存已清除）
+      expect(callsAfterSecond).toBeGreaterThan(callsAfterFirst);
     });
 
     it('应该清除所有缓存', async () => {
