@@ -95,14 +95,14 @@ export class PancakePairFinder {
 
     // 3. 如果指定了 quoteToken，只查询这一个
     if (quoteToken && typeof quoteToken === 'string') {
-      const normalizedQuote = quoteToken.toLowerCase();
+      let normalizedQuote = quoteToken.toLowerCase();
 
-      // 检查是否为零地址
+      // 零地址表示 BNB 筹集，需要转换为 WBNB 来查询 Pancake pair
       if (normalizedQuote === ZERO_ADDRESS.toLowerCase()) {
-        structuredLogger.warn('[PancakePairFinder] quoteToken 是零地址，跳过查询', {
+        structuredLogger.debug('[PancakePairFinder] quoteToken 是零地址（BNB 筹集），转换为 WBNB 查询', {
           tokenAddress: normalizedToken
         });
-        return { hasLiquidity: false };
+        normalizedQuote = CONTRACTS.WBNB.toLowerCase();
       }
 
       try {
