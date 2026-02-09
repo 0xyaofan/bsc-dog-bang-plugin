@@ -81,15 +81,10 @@ export class FourPlatformQuery extends BasePlatformQuery {
       (info as any)?.quoteToken ||
       (typeof infoArray[2] === 'string' ? infoArray[2] : undefined);
 
-    // 零地址表示原生 BNB，需要转换为 WBNB
-    const normalizedQuote = quoteCandidate?.toLowerCase() === '0x0000000000000000000000000000000000000000'
-      ? CONTRACTS.WBNB
-      : quoteCandidate;
-
     // 检查是否为空数据
     const isEmpty =
       (rawLaunchTime === 0n && this.isStructEffectivelyEmpty(info)) ||
-      (!normalizedQuote && this.isStructEffectivelyEmpty(info));
+      (!quoteCandidate && this.isStructEffectivelyEmpty(info));
 
     // 提取迁移相关信息
     const liquidityAdded = Boolean(info?.liquidityAdded ?? infoArray[11]);
@@ -103,7 +98,7 @@ export class FourPlatformQuery extends BasePlatformQuery {
     return {
       isEmpty,
       liquidityAdded,
-      quoteToken: normalizedQuote,
+      quoteToken: quoteCandidate,
       offers,
       maxOffers,
       funds,
