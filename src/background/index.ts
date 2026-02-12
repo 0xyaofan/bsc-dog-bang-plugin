@@ -47,7 +47,7 @@ import {
   withCache
 } from '../shared/viem-helper.js';
 import { parseEther, type Address } from 'viem';
-import { getChannel, setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, getCachedAllowance, setTokenTradeHint } from '../shared/trading-channels-compat.js';
+import { setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, setTokenTradeHint } from '../shared/trading-channels-compat.js';
 import { TxWatcher } from '../shared/tx-watcher.js';
 import { dedupePromise } from '../shared/promise-dedupe.js';
 import {
@@ -2207,22 +2207,8 @@ async function handleGetCacheInfo({ tokenAddress }: { tokenAddress?: string } = 
     // 获取路由缓存
     const tradeHint = getTokenTradeHint(normalizedAddress);
 
-    // 获取授权缓存
+    // 授权缓存（已废弃，getCachedAllowance 总是返回 undefined）
     const allowances: Record<string, string> = {};
-    if (walletAccount) {
-      const pancakeRouter = '0x10ED43C718714eb63d5aA57B78B54704E256024E';
-      const smartRouter = '0x13f4EA83D0bd40E75C8222255bc855a974568Dd4';
-
-      const pancakeAllowance = getCachedAllowance(normalizedAddress, pancakeRouter);
-      const smartRouterAllowance = getCachedAllowance(normalizedAddress, smartRouter);
-
-      if (pancakeAllowance !== null) {
-        allowances.pancake = pancakeAllowance.toString();
-      }
-      if (smartRouterAllowance !== null) {
-        allowances.smartRouter = smartRouterAllowance.toString();
-      }
-    }
 
     // 格式化时间戳
     const formatTimestamp = (ts?: number) => {
@@ -2334,36 +2320,10 @@ async function handlePrefetchRoute({ tokenAddress }: { tokenAddress?: string } =
       return { success: true, cached: false };
     }
 
-    // 其他情况：执行路由查询（Unknown 代币或需要查询的情况）
-    let channelHandler: any;
-    try {
-      channelHandler = getChannel(channelId);
-    } catch (error) {
-      logger.debug('[Prefetch] 未知通道，使用 Pancake:', error);
-      channelHandler = getChannel('pancake');
-    }
-
-    // 预加载买入路由（使用小额 BNB）
-    const buyAmount = parseEther('0.001'); // 0.001 BNB
-    const buyPromise = channelHandler.quoteBuy?.({
-      publicClient,
-      tokenAddress,
-      amount: buyAmount
-    }).catch(() => null);
-
-    // 预加载卖出路由（使用 1 token）
-    const sellAmount = parseEther('1'); // 1 token
-    const sellPromise = channelHandler.quoteSell?.({
-      publicClient,
-      tokenAddress,
-      amount: sellAmount,
-      routeInfo: route
-    }).catch(() => null);
-
-    // 并发执行，但不等待结果（后台预加载）
-    Promise.all([buyPromise, sellPromise]).catch(() => {});
-
-    return { success: true, cached: true };
+    // 其他情况：路由预加载已废弃（getChannel 的 quoteBuy/quoteSell 返回 null）
+    // 直接返回成功，避免无效的查询
+    logger.debug('[Prefetch] 路由预加载已废弃，跳过');
+    return { success: true, cached: false };
   } catch (error) {
     // 预加载失败静默处理
     logger.debug('[Prefetch] Route prefetch failed:', error);
@@ -3905,99 +3865,8 @@ type SellEstimatePayload = {
 };
 
 async function handleEstimateSellAmount(payload: SellEstimatePayload = {}) {
-  try {
-    if (!walletAccount || !publicClient) {
-      await createClients();
-    }
-
-    const normalizedToken = normalizeTokenAddressValue(payload.tokenAddress);
-    if (!normalizedToken) {
-      return { success: false, error: '无效的代币地址' };
-    }
-
-    let amountToSell: bigint;
-    try {
-      amountToSell = BigInt(payload.amount ?? '0');
-    } catch {
-      return { success: false, error: '无效的卖出数量' };
-    }
-
-    if (amountToSell <= 0n) {
-      return { success: true, data: { amount: '0', formatted: '0.0000' } };
-    }
-
-    const route = await resolveTokenRoute(normalizedToken);
-    if (route.lockReason) {
-      return { success: false, error: route.lockReason };
-    }
-
-    const channelId = payload.channel || route.preferredChannel || 'pancake';
-    let channelHandler: any;
-    try {
-      channelHandler = getChannel(channelId);
-    } catch (error) {
-      logger.debug('[Background] 未知通道，使用 Pancake 估算:', error);
-      channelHandler = getChannel('pancake');
-    }
-
-    if (typeof channelHandler?.quoteSell !== 'function') {
-      return { success: false, error: '当前通道不支持预估' };
-    }
-
-    const estimate = await channelHandler.quoteSell({
-      publicClient,
-      tokenAddress: normalizedToken,
-      amount: amountToSell,
-      routeInfo: route
-    });
-
-    if (estimate === null || estimate === undefined) {
-      return { success: false, error: '无法获取预估' };
-    }
-
-    let finalAmount = estimate;
-    let displaySymbol = 'BNB';
-    let displayDecimals = 18;
-
-    const requiresConversion = shouldConvertQuoteForChannel(channelId, route);
-    const quoteToken = route.quoteToken;
-    if (requiresConversion && quoteToken && !isBnbQuote(quoteToken)) {
-      try {
-        const conversion = await convertQuoteToBnbWithFallback({
-          publicClient,
-          quoteToken,
-          amount: estimate
-        });
-        if (conversion?.amount && conversion.amount > 0n) {
-          finalAmount = conversion.amount;
-          displaySymbol = conversion.symbol ?? 'BNB';
-          displayDecimals = 18;
-        } else {
-          finalAmount = estimate;
-          displaySymbol = resolveQuoteTokenName(quoteToken);
-          displayDecimals = await readTokenDecimalsSafe(publicClient, quoteToken);
-        }
-      } catch (error) {
-        logger.debug('[Background] 募集币种卖出预估转换失败:', error);
-        finalAmount = estimate;
-        displaySymbol = resolveQuoteTokenName(quoteToken);
-        displayDecimals = await readTokenDecimalsSafe(publicClient, quoteToken);
-      }
-    }
-
-    const formatted = formatUnits(finalAmount, displayDecimals);
-    return {
-      success: true,
-      data: {
-        amount: finalAmount.toString(),
-        formatted,
-        symbol: displaySymbol
-      }
-    };
-  } catch (error) {
-    logger.error('[Background] 卖出预估失败:', error);
-    return { success: false, error: error.message };
-  }
+  // 卖出预估功能已废弃（getChannel 的 quoteSell 返回 null）
+  return { success: false, error: '卖出预估功能已废弃，请使用 SDK' };
 }
 
 type QuoteConversionResult = {
@@ -4033,21 +3902,7 @@ async function convertQuoteToBnbWithFallback(params: { publicClient: any; quoteT
   if (direct?.amount && direct.amount > 0n) {
     return direct;
   }
-  try {
-    const pancakeChannel = getChannel('pancake');
-    if (pancakeChannel?.quoteSell) {
-      const fallbackAmount = await pancakeChannel.quoteSell({
-        publicClient: params.publicClient,
-        tokenAddress: params.quoteToken,
-        amount: params.amount
-      });
-      if (fallbackAmount && fallbackAmount > 0n) {
-        return { amount: fallbackAmount, symbol: 'BNB' };
-      }
-    }
-  } catch (error) {
-    logger.debug('[Background] Pancake fallback 估算失败:', error);
-  }
+  // Pancake fallback 已废弃（getChannel 的 quoteSell 返回 null）
   return null;
 }
 
