@@ -1,16 +1,18 @@
 import '../shared/sw-polyfills.js';
 import { logger } from '../shared/logger.js';
 import {
-  CUSTOM_AGGREGATOR_CONFIG,
-  MEME_SWAP_AGGREGATOR_ABI,
   CONTRACTS,
-  TX_CONFIG,
+  MEME_SWAP_AGGREGATOR_ABI,
   PANCAKE_V3_FACTORY_ABI,
   PANCAKE_V3_QUOTER_ABI,
+  ERC20_ABI
+} from '../shared/config/sdk-config-adapter.js';
+import {
+  CUSTOM_AGGREGATOR_CONFIG,
+  TX_CONFIG,
   NETWORK_CONFIG,
-  ERC20_ABI,
   AGGREGATOR_RUNTIME_CONFIG
-} from '../shared/trading-config.js';
+} from '../shared/config/index.js';
 import {
   estimateQuoteAmount,
   isBnbQuote,
@@ -24,7 +26,7 @@ import {
   parseUnits,
   createHttpClient
 } from '../shared/viem-helper.js';
-import { prepareTokenSell } from '../shared/trading-channels.js';
+import { prepareTokenSell } from '../shared/prepare-sell-params.js';
 import type { Address } from 'viem';
 import { PerformanceTimer, perf } from '../shared/performance.js';
 
@@ -70,8 +72,8 @@ const V3_DIRECT_QUOTE_TOKENS = new Set(
     CONTRACTS.KGST,
     CONTRACTS.lisUSD
   ]
-    .filter((token): token is string => Boolean(token))
-    .map((token) => normalizeAddress(token))
+    .filter((token) => Boolean(token))
+    .map((token) => normalizeAddress(token as string))
     .filter((token) => Boolean(token))
 );
 const V3_FALLBACK_RPC_URLS = [
