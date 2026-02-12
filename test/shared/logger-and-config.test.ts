@@ -200,14 +200,14 @@ describe('Channel Config 测试', () => {
 
 describe('Trading Config 测试', () => {
   it('应该能够导入 CONTRACTS', async () => {
-    const { CONTRACTS } = await import('../../src/shared/trading-config');
+    const { CONTRACTS } = await import('../../src/shared/config/index');
 
     expect(CONTRACTS).toBeDefined();
     expect(typeof CONTRACTS).toBe('object');
   });
 
   it('CONTRACTS 应该包含必要的合约地址', async () => {
-    const { CONTRACTS } = await import('../../src/shared/trading-config');
+    const { CONTRACTS } = await import('../../src/shared/config/index');
 
     expect(CONTRACTS.WBNB).toBeDefined();
     expect(CONTRACTS.USDT).toBeDefined();
@@ -216,7 +216,7 @@ describe('Trading Config 测试', () => {
   });
 
   it('合约地址应该是有效的以太坊地址', async () => {
-    const { CONTRACTS } = await import('../../src/shared/trading-config');
+    const { CONTRACTS } = await import('../../src/shared/config/index');
 
     const addressRegex = /^0x[a-fA-F0-9]{40}$/;
 
@@ -228,14 +228,14 @@ describe('Trading Config 测试', () => {
   });
 
   it('应该能够导入 PANCAKE_FACTORY_ABI', async () => {
-    const { PANCAKE_FACTORY_ABI } = await import('../../src/shared/trading-config');
+    const { PANCAKE_FACTORY_ABI } = await import('../../src/shared/config/index');
 
     expect(PANCAKE_FACTORY_ABI).toBeDefined();
     expect(Array.isArray(PANCAKE_FACTORY_ABI)).toBe(true);
   });
 
   it('应该能够导入 PANCAKE_V3_FACTORY_ABI', async () => {
-    const { PANCAKE_V3_FACTORY_ABI } = await import('../../src/shared/trading-config');
+    const { PANCAKE_V3_FACTORY_ABI } = await import('../../src/shared/config/index');
 
     expect(PANCAKE_V3_FACTORY_ABI).toBeDefined();
     expect(Array.isArray(PANCAKE_V3_FACTORY_ABI)).toBe(true);
@@ -261,7 +261,7 @@ describe('集成测试 - Logger 和 Config', () => {
   });
 
   it('应该能够记录合约配置', async () => {
-    const { CONTRACTS } = await import('../../src/shared/trading-config');
+    const { CONTRACTS } = await import('../../src/shared/config/index');
     logger.warn('Contracts:', CONTRACTS);
 
     expect(consoleWarnSpy).toHaveBeenCalled();
