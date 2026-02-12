@@ -2724,6 +2724,9 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
 
   floatingWindow.innerHTML = `
     <div class="floating-header">
+      <div class="floating-mini-icon">
+        <img src="${chrome.runtime.getURL('icons/16x16.png')}" alt="Dog Bang" />
+      </div>
       <div class="floating-drag-handle">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <circle cx="3" cy="3" r="2" fill="#9ca3af"/>

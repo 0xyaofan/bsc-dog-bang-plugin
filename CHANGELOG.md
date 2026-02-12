@@ -13,7 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-02-12
+
 ### Added
+- **浮动窗口迷你图标** - 在浮动窗口左上角添加插件图标
+  - 使用绝对定位，不影响现有布局
+  - 16x16 尺寸，透明度 0.8
+  - 提升品牌识别度
 - **BSC Trading SDK 集成** - 引入独立的 BSC Trading SDK 库
   - 模块化架构：core, pancakeswap, fourmeme, flap, luna, router 六个独立包
   - 智能 RPC 节点管理：自动延迟检测、健康检查、动态节点切换
@@ -29,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **依赖更新** - 移除 @pancakeswap/swap-sdk-core，使用 BSC Trading SDK
 - **架构优化** - 为后续完全迁移到 SDK 做准备
+- **代码清理** - 完成 SDK 迁移后的代码清理
+  - 删除废弃的 trading-channels-compat.ts (264 行)
+  - 移除未使用的 getChannel、getCachedAllowance 等函数
+  - 简化 background/index.ts 和 content/index.ts
+  - 归档临时文档到 docs/archive/2026-02/
+  - 总计减少 506 行代码，构建产物减少 6.18 KB
 
 ### Fixed
 - **Transport 类型兼容性** - 修复 Smart Transport 与 viem Transport 类型不兼容问题
