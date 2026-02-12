@@ -1,10 +1,19 @@
 /**
  * 合约地址常量
- * 独立文件，避免循环依赖
+ *
+ * 注意：这些地址应该与 SDK 包中的地址保持一致
+ * - Four.meme: @bsc-trading/fourmeme/src/constants.ts
+ * - Flap: @bsc-trading/flap/src/constants.ts
+ * - Luna: @bsc-trading/luna/src/constants.ts
+ * - PancakeSwap: @bsc-trading/pancakeswap/src/constants.ts
+ *
+ * 由于 SDK 包之间存在循环依赖，暂时在此处定义以避免导入问题
+ * TODO: 等 SDK 包结构优化后，改为直接导入
  */
 
 /**
  * Four.meme 合约地址
+ * 来源: @bsc-trading/fourmeme
  */
 export const FOUR_MEME_CONTRACTS = {
   TOKEN_MANAGER_V2: '0x5c952063c7fc8610FFDB798152D69F0B9550762b',
@@ -13,23 +22,23 @@ export const FOUR_MEME_CONTRACTS = {
 
 /**
  * Flap 合约地址
+ * 来源: @bsc-trading/flap
  */
 export const FLAP_CONTRACTS = {
   PORTAL: '0xe2cE6ab80874Fa9Fa2aAE65D277Dd6B8e65C9De0',
-  STATE_READER: '0xe2cE6ab80874Fa9Fa2aAE65D277Dd6B8e65C9De0',
 } as const;
 
 /**
  * Luna.fun 合约地址
+ * 来源: @bsc-trading/luna
  */
 export const LUNA_CONTRACTS = {
   LAUNCHPAD: '0x7fdC3c5c4eC798150462D040526B6A89190b459c',
-  ROUTER: '0x0000000000000000000000000000000000000000',
-  FACTORY: '0x0000000000000000000000000000000000000000',
 } as const;
 
 /**
  * PancakeSwap 合约地址
+ * 来源: @bsc-trading/pancakeswap
  */
 export const PANCAKE_CONTRACTS = {
   ROUTER: '0x10ED43C718714eb63d5aA57B78B54704E256024E',
@@ -40,10 +49,14 @@ export const PANCAKE_CONTRACTS = {
 } as const;
 
 /**
- * 常用代币地址
+ * WBNB 地址
  */
 export const WBNB_ADDRESS = '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c' as const;
 
+/**
+ * 常用代币地址
+ * 来源: @bsc-trading/pancakeswap 和插件配置
+ */
 export const TOKEN_ADDRESSES = {
   WBNB: WBNB_ADDRESS,
   CAKE: '0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82',
