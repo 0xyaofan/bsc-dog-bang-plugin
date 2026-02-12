@@ -32,6 +32,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@bsc-trading/contracts": "file:../bsc-trading-sdk/packages/contracts",
     "@bsc-trading/core": "file:../bsc-trading-sdk/packages/core",
     "@bsc-trading/manager": "file:../bsc-trading-sdk/packages/manager",
     "@bsc-trading/route-detector": "file:../bsc-trading-sdk/packages/route-detector",
