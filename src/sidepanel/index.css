@@ -291,6 +291,19 @@ body {
   color: var(--sp-text-primary);
 }
 
+.config-section-title {
+  margin: 16px 0 12px;
+  padding-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sp-text-active);
+  border-bottom: 1px solid var(--sp-border-color);
+}
+
+.config-section-title:first-child {
+  margin-top: 0;
+}
+
 .channel-switch {
   display: flex;
   flex-wrap: wrap;

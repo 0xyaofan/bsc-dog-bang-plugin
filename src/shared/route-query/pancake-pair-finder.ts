@@ -7,7 +7,7 @@ import type { Address } from 'viem';
 import { createLRUCacheWithTTL } from '../lru-cache.js';
 import { cacheMonitorManager } from '../cache-monitor.js';
 import { structuredLogger } from '../structured-logger.js';
-import { CONTRACTS, PANCAKE_FACTORY_ABI, PANCAKE_V3_FACTORY_ABI } from '../trading-config.js';
+import { CONTRACTS, PANCAKE_FACTORY_ABI, PANCAKE_V3_FACTORY_ABI } from '../config/sdk-config-adapter.js';
 import { getFourQuoteTokenList } from '../channel-config.js';
 import {
   ZERO_ADDRESS,

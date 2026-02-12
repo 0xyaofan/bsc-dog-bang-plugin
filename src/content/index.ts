@@ -3,10 +3,9 @@
 import { logger, DEBUG_CONFIG } from '../shared/logger.js';
 import { PerformanceTimer, perf } from '../shared/performance.js';
 import {
-  WALLET_CONFIG,
   UI_CONFIG,
   CHANNELS
-} from '../shared/trading-config.js';
+} from '../shared/config/index.js';
 import { CONTENT_CONFIG } from '../shared/content-config.js';
 import {
   DEFAULT_USER_SETTINGS,
@@ -1688,9 +1687,6 @@ async function handleBuy(tokenAddress) {
 
       const perfResult = timer.finish();
       const durationText = formatDuration(buttonTimer.stop('买入'));
-      // 隐藏提交确认成功信息
-      // const baseMessage = `⏳ 买入交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
-      // showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
 
       if (response.performance) {
         perf.printBackgroundReport('buy', response.performance);
@@ -1911,9 +1907,6 @@ async function handleSell(tokenAddress) {
 
       const perfResult = timer.finish();
       const durationText = formatDuration(buttonTimer.stop('卖出'));
-      // 隐藏提交确认成功信息
-      // const baseMessage = `⏳ 卖出交易已提交，等待链上确认 (${response.txHash.slice(0, 10)}...)`;
-      // showStatus(appendDurationSuffix(baseMessage, durationText), 'info');
 
       if (response.performance) {
         perf.printBackgroundReport('sell', response.performance);
@@ -4007,50 +4000,11 @@ if (shouldMountEmbeddedPanel) {
 
 let routeCacheRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
-// 主动刷新路由缓存（如果即将过期或已过期）
+// 主动刷新路由缓存（已废弃）
 async function refreshRouteCacheIfNeeded() {
-  // 只在页面可见时刷新
-  if (document.visibilityState !== 'visible') {
-    return;
-  }
-
-  const tokenAddress = currentTokenAddress;
-  if (!tokenAddress) {
-    return;
-  }
-
-  try {
-    // 动态导入 trading-channels 模块
-    const { checkRouteCache, isRouteCacheExpiringSoon } = await import('../shared/trading-channels.js');
-
-    // 检查买入路由
-    const buyCache = checkRouteCache(tokenAddress, 'buy');
-    const buyExpiringSoon = isRouteCacheExpiringSoon(tokenAddress, 'buy');
-
-    if (buyCache.needsQuery || buyExpiringSoon) {
-      logger.info('[Route Cache] 买入路由缓存过期或即将过期，主动刷新');
-      // 🚀 修复：触发路由预加载（会同时预加载买入和卖出路由）
-      safeSendMessage({
-        action: 'prefetch_route',
-        data: { tokenAddress }
-      }).catch(() => {});
-    }
-
-    // 检查卖出路由
-    const sellCache = checkRouteCache(tokenAddress, 'sell');
-    const sellExpiringSoon = isRouteCacheExpiringSoon(tokenAddress, 'sell');
-
-    if (sellCache.needsQuery || sellExpiringSoon) {
-      logger.info('[Route Cache] 卖出路由缓存过期或即将过期，主动刷新');
-      // 🚀 修复：触发路由预加载（会同时预加载买入和卖出路由）
-      safeSendMessage({
-        action: 'prefetch_route',
-        data: { tokenAddress }
-      }).catch(() => {});
-    }
-  } catch (error) {
-    logger.debug('[Route Cache] 刷新缓存失败:', error);
-  }
+  // 路由缓存检查功能已废弃
+  // 路由查询会在需要时自动执行
+  return;
 }
 
 // 启动定时检查（每5分钟）

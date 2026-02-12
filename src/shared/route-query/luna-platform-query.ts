@@ -3,7 +3,7 @@
  */
 
 import type { Address } from 'viem';
-import { CONTRACTS } from '../trading-config.js';
+import { CONTRACTS } from '../config/sdk-config-adapter.js';
 import { structuredLogger } from '../structured-logger.js';
 import lunaLaunchpadAbi from '../../../abis/luna-fun-launchpad.json';
 import { BasePlatformQuery } from './base-platform-query.js';

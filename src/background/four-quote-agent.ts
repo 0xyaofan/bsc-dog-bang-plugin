@@ -1,5 +1,5 @@
 import { logger } from '../shared/logger.js';
-import { BACKGROUND_TASK_CONFIG, CONTRACTS } from '../shared/trading-config.js';
+import { BACKGROUND_TASK_CONFIG, CONTRACTS } from '../shared/config/index.js';
 import {
   resolveQuoteTokenName,
   getQuoteBalance,

@@ -1,4 +1,4 @@
-import { CONTRACTS } from './trading-config.js';
+import { CONTRACTS } from './config/index.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 

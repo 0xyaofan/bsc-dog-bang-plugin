@@ -47,7 +47,6 @@ import {
   withCache
 } from '../shared/viem-helper.js';
 import { parseEther, type Address } from 'viem';
-import { setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, setTokenTradeHint } from '../shared/trading-channels-compat.js';
 import { TxWatcher } from '../shared/tx-watcher.js';
 import { dedupePromise } from '../shared/promise-dedupe.js';
 import {
@@ -90,6 +89,17 @@ let walletNonceManager = null;
 
 // 批量查询处理器
 let batchQueryHandlers = null;
+
+// 代币交易提示缓存（内联实现，替代 trading-channels-compat.ts）
+const tokenTradeHintCache = new Map<string, any>();
+
+function getTokenTradeHint(tokenAddress: string): any {
+  return tokenTradeHintCache.get(tokenAddress.toLowerCase());
+}
+
+function setTokenTradeHint(tokenAddress: string, hint: any): void {
+  tokenTradeHintCache.set(tokenAddress.toLowerCase(), hint);
+}
 
 type NonceDiagnostics = {
   pending: number;
@@ -791,11 +801,7 @@ async function resolveTokenRoute(tokenAddress: string, options: { force?: boolea
     routeResult.preferredChannel = 'pancake';
   }
 
-  if (routeResult.preferredChannel === 'pancake') {
-    setPancakePreferredMode(normalized, routeResult.metadata?.pancakePreferredMode ?? null);
-  } else {
-    setPancakePreferredMode(normalized, null);
-  }
+  // Pancake 偏好模式缓存已废弃（从未被读取）
 
   const ttl = computeRouteTtl(routeResult.readyForPancake, routeResult.progress, routeResult.migrating);
   let metadata: Record<string, any> | undefined = routeResult.metadata
@@ -3489,8 +3495,7 @@ async function handleRevokeTokenApproval({ tokenAddress, channel = 'pancake' }) 
       }, 'revoke');
       invalidateWalletDerivedCaches(walletAccount.address, tokenAddress, { allowances: true });
 
-      // 清除授权缓存
-      clearAllowanceCache(tokenAddress, spenderAddress);
+      // 授权缓存已废弃（从未被使用）
 
       logger.debug('[Revoke] 撤销授权成功');
       return {

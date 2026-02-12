@@ -11,7 +11,8 @@
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
     "coverage": "vitest run --coverage",
-    "prepare": "husky"
+    "prepare": "husky",
+    "archive-docs": "bash scripts/archive-docs.sh"
   },
   "keywords": [],
   "author": "0xyaofan",
@@ -26,12 +27,15 @@
     "@vitest/ui": "^4.0.18",
     "husky": "^9.1.7",
     "typescript": "^5.9.3",
-    "viem": "^2.43.1",
+    "viem": "^2.45.2",
     "vite": "^7.2.4",
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@pancakeswap/swap-sdk-core": "^1.5.0",
+    "@bsc-trading/core": "file:../bsc-trading-sdk/packages/core",
+    "@bsc-trading/manager": "file:../bsc-trading-sdk/packages/manager",
+    "@bsc-trading/route-detector": "file:../bsc-trading-sdk/packages/route-detector",
+    "@bsc-trading/aggregator": "file:../bsc-trading-sdk/packages/aggregator",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   }

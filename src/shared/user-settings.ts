@@ -5,7 +5,7 @@ import {
   NETWORK_CONFIG,
   TX_WATCHER_CONFIG,
   CUSTOM_AGGREGATOR_CONFIG
-} from './trading-config.js';
+} from './config/index.js';
 import { DEFAULT_FOUR_QUOTE_TOKENS, setFourQuoteTokenList } from './channel-config.js';
 
 export const USER_SETTINGS_STORAGE_KEY = 'dongBangUserSettings';
@@ -51,11 +51,56 @@ export type AggregatorSettings = {
   contractAddress: string;
 };
 
+/**
+ * SDK 配置
+ * 用于配置 @bsc-trading SDK 的行为
+ */
+export type SdkSettings = {
+  // ========== 交易配置 ==========
+  /** 默认滑点（%），SDK 使用 */
+  defaultSlippage: number;
+
+  /** 默认 Gas Price (Gwei)，SDK 使用 */
+  defaultGasPrice: number;
+
+  /** 偏好的 deadline（秒），SDK 使用 */
+  preferredDeadline: number;
+
+  // ========== 通道配置 ==========
+  /** 偏好的交易通道 */
+  preferredChannel?: string;
+
+  /** 是否自动选择通道 */
+  autoSelectChannel: boolean;
+
+  // ========== 网络配置 ==========
+  /** 自定义 RPC URL（SDK 专用，优先级高于 system.primaryRpc） */
+  customRpcUrl?: string;
+
+  /** 是否使用自定义 RPC */
+  useCustomRpc: boolean;
+
+  // ========== UI 配置 ==========
+  /** 是否显示通知 */
+  showNotifications: boolean;
+
+  /** 是否自动刷新余额 */
+  autoRefreshBalance: boolean;
+
+  // ========== 高级配置 ==========
+  /** 是否启用 WebSocket 监控 */
+  enableWebSocketMonitor: boolean;
+
+  /** 是否启用调试模式 */
+  enableDebugMode: boolean;
+};
+
 export type UserSettings = {
   system: SystemSettings;
   trading: TradingSettings;
   channels: ChannelSettings;
   aggregator: AggregatorSettings;
+  sdk: SdkSettings;
 };
 
 const DEFAULT_BUY_PRESETS = ['0.001', '0.02', '0.05', '0.1', '0.2', '0.5', '1', '2'];
@@ -96,6 +141,27 @@ const DEFAULT_AGGREGATOR_SETTINGS: AggregatorSettings = {
   enabled: true,
   executionMode: 'contract',
   contractAddress: CUSTOM_AGGREGATOR_CONFIG.DEFAULT_ADDRESS
+};
+
+const DEFAULT_SDK_SETTINGS: SdkSettings = {
+  // 交易配置
+  defaultSlippage: 15,              // 15%
+  defaultGasPrice: 5,               // 5 Gwei
+  preferredDeadline: 60 * 20,       // 20 分钟
+
+  // 通道配置
+  autoSelectChannel: true,
+
+  // 网络配置
+  useCustomRpc: false,
+
+  // UI 配置
+  showNotifications: true,
+  autoRefreshBalance: true,
+
+  // 高级配置
+  enableWebSocketMonitor: false,
+  enableDebugMode: false,
 };
 
 const BUILTIN_FOUR_TOKEN_SET = new Set(
@@ -142,7 +208,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
       customQuoteTokens: []
     }
   },
-  aggregator: { ...DEFAULT_AGGREGATOR_SETTINGS }
+  aggregator: { ...DEFAULT_AGGREGATOR_SETTINGS },
+  sdk: { ...DEFAULT_SDK_SETTINGS }
 };
 
 let cachedSettings: UserSettings = DEFAULT_USER_SETTINGS;
@@ -352,6 +419,33 @@ export function normalizeUserSettings(raw?: Partial<UserSettings> | null): UserS
     DEFAULT_AGGREGATOR_SETTINGS.contractAddress
   );
 
+  // SDK 配置规范化
+  const rawSdk = raw.sdk as Partial<SdkSettings> | undefined;
+  let sdkSlippage = Number(rawSdk?.defaultSlippage ?? base.sdk.defaultSlippage);
+  if (!Number.isFinite(sdkSlippage) || sdkSlippage <= 0 || sdkSlippage > 100) {
+    sdkSlippage = base.sdk.defaultSlippage;
+  }
+  let sdkGasPrice = Number(rawSdk?.defaultGasPrice ?? base.sdk.defaultGasPrice);
+  if (!Number.isFinite(sdkGasPrice) || sdkGasPrice <= 0) {
+    sdkGasPrice = base.sdk.defaultGasPrice;
+  }
+  let sdkDeadline = Number(rawSdk?.preferredDeadline ?? base.sdk.preferredDeadline);
+  if (!Number.isFinite(sdkDeadline) || sdkDeadline <= 0) {
+    sdkDeadline = base.sdk.preferredDeadline;
+  }
+  const sdkPreferredChannel = typeof rawSdk?.preferredChannel === 'string'
+    ? rawSdk.preferredChannel.trim() || undefined
+    : undefined;
+  const sdkAutoSelectChannel = rawSdk?.autoSelectChannel !== false;
+  const sdkCustomRpcUrl = typeof rawSdk?.customRpcUrl === 'string'
+    ? rawSdk.customRpcUrl.trim() || undefined
+    : undefined;
+  const sdkUseCustomRpc = Boolean(rawSdk?.useCustomRpc);
+  const sdkShowNotifications = rawSdk?.showNotifications !== false;
+  const sdkAutoRefreshBalance = rawSdk?.autoRefreshBalance !== false;
+  const sdkEnableWebSocketMonitor = Boolean(rawSdk?.enableWebSocketMonitor);
+  const sdkEnableDebugMode = Boolean(rawSdk?.enableDebugMode);
+
   return {
     system: {
       primaryRpc: primaryRpc || base.system.primaryRpc,
@@ -383,6 +477,19 @@ export function normalizeUserSettings(raw?: Partial<UserSettings> | null): UserS
       enabled: aggregatorEnabled,
       executionMode: aggregatorExecutionMode,
       contractAddress: aggregatorAddress
+    },
+    sdk: {
+      defaultSlippage: sdkSlippage,
+      defaultGasPrice: sdkGasPrice,
+      preferredDeadline: sdkDeadline,
+      preferredChannel: sdkPreferredChannel,
+      autoSelectChannel: sdkAutoSelectChannel,
+      customRpcUrl: sdkCustomRpcUrl,
+      useCustomRpc: sdkUseCustomRpc,
+      showNotifications: sdkShowNotifications,
+      autoRefreshBalance: sdkAutoRefreshBalance,
+      enableWebSocketMonitor: sdkEnableWebSocketMonitor,
+      enableDebugMode: sdkEnableDebugMode,
     }
   };
 }

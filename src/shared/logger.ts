@@ -3,7 +3,7 @@
  * 统一的日志管理工具
  */
 
-import { DEBUG_CONFIG } from './trading-config.js';
+import { DEBUG_CONFIG } from './config/index.js';
 
 // 日志工具函数
 export const logger = {

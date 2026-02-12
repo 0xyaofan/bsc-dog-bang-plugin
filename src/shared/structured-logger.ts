@@ -3,7 +3,7 @@
  * 结构化日志系统，提供更丰富的上下文信息和更好的可读性
  */
 
-import { DEBUG_CONFIG } from './trading-config.js';
+import { DEBUG_CONFIG } from './config/index.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

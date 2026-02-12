@@ -9,7 +9,7 @@
  */
 
 import { createHttpClient } from './viem-helper.js';
-import { NETWORK_CONFIG, TX_WATCHER_CONFIG, DEBUG_CONFIG } from './trading-config.js';
+import { NETWORK_CONFIG, TX_WATCHER_CONFIG, DEBUG_CONFIG } from './config/index.js';
 import type { Hash } from 'viem';
 
 type PublicClient = ReturnType<typeof createHttpClient>;

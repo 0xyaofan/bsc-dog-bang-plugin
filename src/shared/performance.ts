@@ -3,7 +3,7 @@
  * 性能监控和分析工具
  */
 
-import { DEBUG_CONFIG } from './trading-config.js';
+import { DEBUG_CONFIG } from './config/index.js';
 import { logger } from './logger.js';
 
 export interface PerformanceStep {

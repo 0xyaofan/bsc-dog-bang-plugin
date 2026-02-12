@@ -2,7 +2,7 @@
  * 路由查询常量定义
  */
 
-import { CONTRACTS } from '../trading-config.js';
+import { CONTRACTS } from '../config/sdk-config-adapter.js';
 import type { TokenPlatform } from './types.js';
 
 /**

@@ -13,7 +13,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { bsc } from 'viem/chains';
-import { RPC_CONFIG } from './trading-config.js';
+import { RPC_CONFIG } from './config/index.js';
 
 const BASE_CHAIN = {
   ...bsc,

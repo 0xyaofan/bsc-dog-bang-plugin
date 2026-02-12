@@ -9,7 +9,7 @@ import {
   saveUserSettings,
   onUserSettingsChange
 } from '../shared/user-settings.js';
-import { TX_CONFIG, CUSTOM_AGGREGATOR_CONFIG } from '../shared/trading-config.js';
+import { TX_CONFIG, CUSTOM_AGGREGATOR_CONFIG } from '../shared/config/index.js';
 import { DEFAULT_FOUR_QUOTE_TOKENS, resolveFourQuoteTokenLabel } from '../shared/channel-config.js';
 
 const AUTO_APPROVE_GAS_DISPLAY = (() => {
@@ -234,7 +234,13 @@ systemConfigTab.className = 'config-subtab';
 systemConfigTab.dataset.section = 'system';
 systemConfigTab.textContent = '系统';
 
-configSubTabs.append(tradeConfigTab, channelConfigTab, aggregatorConfigTab, systemConfigTab);
+const sdkConfigTab = document.createElement('button');
+sdkConfigTab.type = 'button';
+sdkConfigTab.className = 'config-subtab';
+sdkConfigTab.dataset.section = 'sdk';
+sdkConfigTab.textContent = 'SDK';
+
+configSubTabs.append(tradeConfigTab, channelConfigTab, aggregatorConfigTab, systemConfigTab, sdkConfigTab);
 
 const configSubPanes = document.createElement('div');
 configSubPanes.className = 'config-subpanes';
@@ -487,31 +493,131 @@ const systemStatus = document.createElement('div');
 systemStatus.className = 'config-status';
 systemConfigPane.append(systemForm, systemStatus);
 
-configSubPanes.append(tradeConfigPane, channelConfigPane, aggregatorConfigPane, systemConfigPane);
+const sdkConfigPane = document.createElement('div');
+sdkConfigPane.className = 'config-subpane';
+sdkConfigPane.dataset.section = 'sdk';
+
+const sdkForm = document.createElement('form');
+sdkForm.className = 'config-sub-form';
+sdkForm.innerHTML = `
+  <section class="config-section">
+    <h3 class="config-section-title">交易配置</h3>
+    <div class="config-field">
+      <label class="config-label">默认滑点 (%)</label>
+      <input type="number" name="sdkDefaultSlippage" class="config-input" min="0.1" max="100" step="0.1" placeholder="15" />
+      <p class="config-hint">SDK 使用的默认滑点，范围 0.1-100%</p>
+    </div>
+
+    <div class="config-field">
+      <label class="config-label">默认 Gas Price (Gwei)</label>
+      <input type="number" name="sdkDefaultGasPrice" class="config-input" min="0.01" step="0.01" placeholder="5" />
+      <p class="config-hint">SDK 使用的默认 Gas Price</p>
+    </div>
+
+    <div class="config-field">
+      <label class="config-label">交易 Deadline (秒)</label>
+      <input type="number" name="sdkPreferredDeadline" class="config-input" min="60" step="60" placeholder="1200" />
+      <p class="config-hint">交易有效期，默认 1200 秒（20 分钟）</p>
+    </div>
+
+    <h3 class="config-section-title">通道配置</h3>
+    <div class="config-field">
+      <label class="config-label">偏好通道</label>
+      <input type="text" name="sdkPreferredChannel" class="config-input" placeholder="留空则自动选择" />
+      <p class="config-hint">指定偏好的交易通道（如 pancake、four 等）</p>
+    </div>
+
+    <div class="config-field">
+      <label class="config-toggle">
+        <input type="checkbox" name="sdkAutoSelectChannel" />
+        <span>自动选择通道</span>
+      </label>
+      <p class="config-hint">启用后将根据代币情况自动选择最佳通道</p>
+    </div>
+
+    <h3 class="config-section-title">网络配置</h3>
+    <div class="config-field">
+      <label class="config-toggle">
+        <input type="checkbox" name="sdkUseCustomRpc" />
+        <span>使用 SDK 专用 RPC</span>
+      </label>
+      <p class="config-hint">启用后 SDK 将使用独立的 RPC 节点</p>
+    </div>
+
+    <div class="config-field">
+      <label class="config-label">SDK 专用 RPC URL</label>
+      <input type="text" name="sdkCustomRpcUrl" class="config-input" placeholder="https://..." />
+      <p class="config-hint">SDK 专用 RPC 节点，优先级高于系统主节点</p>
+    </div>
+
+    <h3 class="config-section-title">UI 配置</h3>
+    <div class="config-field">
+      <label class="config-toggle">
+        <input type="checkbox" name="sdkShowNotifications" />
+        <span>显示通知</span>
+      </label>
+    </div>
+
+    <div class="config-field">
+      <label class="config-toggle">
+        <input type="checkbox" name="sdkAutoRefreshBalance" />
+        <span>自动刷新余额</span>
+      </label>
+    </div>
+
+    <h3 class="config-section-title">高级配置</h3>
+    <div class="config-field">
+      <label class="config-toggle">
+        <input type="checkbox" name="sdkEnableWebSocketMonitor" />
+        <span>启用 WebSocket 监控</span>
+      </label>
+      <p class="config-hint">实时监控交易状态（实验性功能）</p>
+    </div>
+
+    <div class="config-field">
+      <label class="config-toggle">
+        <input type="checkbox" name="sdkEnableDebugMode" />
+        <span>启用调试模式</span>
+      </label>
+      <p class="config-hint">输出详细的 SDK 调试日志</p>
+    </div>
+  </section>
+  <div class="config-actions">
+    <button type="submit" class="config-action-button primary">保存</button>
+    <button type="button" class="config-action-button secondary sdk-reset">重置</button>
+  </div>
+`;
+const sdkStatus = document.createElement('div');
+sdkStatus.className = 'config-status';
+sdkConfigPane.append(sdkForm, sdkStatus);
+
+configSubPanes.append(tradeConfigPane, channelConfigPane, aggregatorConfigPane, systemConfigPane, sdkConfigPane);
 configShell.append(configSubTabs, configSubPanes);
 configContent.append(configShell);
 
-const configSubTabButtons: Record<'trade' | 'channel' | 'aggregator' | 'system', HTMLButtonElement> = {
+const configSubTabButtons: Record<'trade' | 'channel' | 'aggregator' | 'system' | 'sdk', HTMLButtonElement> = {
   trade: tradeConfigTab,
   channel: channelConfigTab,
   aggregator: aggregatorConfigTab,
-  system: systemConfigTab
+  system: systemConfigTab,
+  sdk: sdkConfigTab
 };
-const configSubPaneMap: Record<'trade' | 'channel' | 'aggregator' | 'system', HTMLElement> = {
+const configSubPaneMap: Record<'trade' | 'channel' | 'aggregator' | 'system' | 'sdk', HTMLElement> = {
   trade: tradeConfigPane,
   channel: channelConfigPane,
   aggregator: aggregatorConfigPane,
-  system: systemConfigPane
+  system: systemConfigPane,
+  sdk: sdkConfigPane
 };
 
-let activeConfigSection: 'trade' | 'channel' | 'aggregator' | 'system' = 'trade';
+let activeConfigSection: 'trade' | 'channel' | 'aggregator' | 'system' | 'sdk' = 'trade';
 
-function setActiveConfigSection(section: 'trade' | 'channel' | 'aggregator' | 'system') {
+function setActiveConfigSection(section: 'trade' | 'channel' | 'aggregator' | 'system' | 'sdk') {
   if (activeConfigSection === section) {
     return;
   }
   activeConfigSection = section;
-  (Object.keys(configSubPaneMap) as Array<'trade' | 'channel' | 'aggregator' | 'system'>).forEach((key) => {
+  (Object.keys(configSubPaneMap) as Array<'trade' | 'channel' | 'aggregator' | 'system' | 'sdk'>).forEach((key) => {
     configSubPaneMap[key].classList.toggle('active', key === section);
     configSubTabButtons[key].classList.toggle('active', key === section);
   });
@@ -521,6 +627,7 @@ tradeConfigTab.addEventListener('click', () => setActiveConfigSection('trade'));
 channelConfigTab.addEventListener('click', () => setActiveConfigSection('channel'));
 aggregatorConfigTab.addEventListener('click', () => setActiveConfigSection('aggregator'));
 systemConfigTab.addEventListener('click', () => setActiveConfigSection('system'));
+sdkConfigTab.addEventListener('click', () => setActiveConfigSection('sdk'));
 
 const perfToggle = systemForm.querySelector<HTMLInputElement>('input[name="perfLogs"]');
 const logModeSelect = systemForm.querySelector<HTMLSelectElement>('select[name="logMode"]');
@@ -528,6 +635,7 @@ const tradeResetButton = tradeForm.querySelector<HTMLButtonElement>('.trade-rese
 const channelResetButton = channelForm.querySelector<HTMLButtonElement>('.channel-reset');
 const aggregatorResetButton = aggregatorForm.querySelector<HTMLButtonElement>('.aggregator-reset');
 const systemResetButton = systemForm.querySelector<HTMLButtonElement>('.system-reset');
+const sdkResetButton = sdkForm.querySelector<HTMLButtonElement>('.sdk-reset');
 const channelSwitchSelect = channelForm.querySelector<HTMLSelectElement>('#channelConfigSelect');
 const channelPanelFour = channelForm.querySelector<HTMLElement>('[data-channel-panel="four"]');
 const channelConfigHint = channelForm.querySelector<HTMLElement>('#channelConfigHint');
@@ -1010,11 +1118,49 @@ function populateSystemForm(settings: UserSettings) {
   syncPerfToggleState();
 }
 
+function populateSdkForm(settings: UserSettings) {
+  const setInputValue = (name: string, value: string | number) => {
+    const input = sdkForm.querySelector<HTMLInputElement>(`[name="${name}"]`);
+    if (input) {
+      input.value = String(value ?? '');
+    }
+  };
+
+  const setCheckboxValue = (name: string, checked: boolean) => {
+    const input = sdkForm.querySelector<HTMLInputElement>(`[name="${name}"]`);
+    if (input) {
+      input.checked = Boolean(checked);
+    }
+  };
+
+  // 交易配置
+  setInputValue('sdkDefaultSlippage', settings.sdk.defaultSlippage);
+  setInputValue('sdkDefaultGasPrice', settings.sdk.defaultGasPrice);
+  setInputValue('sdkPreferredDeadline', settings.sdk.preferredDeadline);
+
+  // 通道配置
+  setInputValue('sdkPreferredChannel', settings.sdk.preferredChannel || '');
+  setCheckboxValue('sdkAutoSelectChannel', settings.sdk.autoSelectChannel);
+
+  // 网络配置
+  setCheckboxValue('sdkUseCustomRpc', settings.sdk.useCustomRpc);
+  setInputValue('sdkCustomRpcUrl', settings.sdk.customRpcUrl || '');
+
+  // UI 配置
+  setCheckboxValue('sdkShowNotifications', settings.sdk.showNotifications);
+  setCheckboxValue('sdkAutoRefreshBalance', settings.sdk.autoRefreshBalance);
+
+  // 高级配置
+  setCheckboxValue('sdkEnableWebSocketMonitor', settings.sdk.enableWebSocketMonitor);
+  setCheckboxValue('sdkEnableDebugMode', settings.sdk.enableDebugMode);
+}
+
 function populateAllConfigForms(settings: UserSettings) {
   populateTradeForm(settings);
   populateChannelForm(settings);
   populateAggregatorForm(settings);
   populateSystemForm(settings);
+  populateSdkForm(settings);
 }
 
 function parseListInput(value: string | FormDataEntryValue | null) {
@@ -1081,6 +1227,10 @@ async function savePartialSettings(patch: Partial<UserSettings>) {
     aggregator: {
       ...userSettings.aggregator,
       ...(patch.aggregator ?? {})
+    },
+    sdk: {
+      ...userSettings.sdk,
+      ...(patch.sdk ?? {})
     }
   };
   userSettings = await saveUserSettings(next);
@@ -1112,6 +1262,12 @@ systemResetButton?.addEventListener('click', (event) => {
   event.preventDefault();
   populateSystemForm({ ...userSettings, system: DEFAULT_USER_SETTINGS.system } as UserSettings);
   showConfigStatus(systemStatus, '已恢复默认配置，请点击保存后生效', 'success');
+});
+
+sdkResetButton?.addEventListener('click', (event) => {
+  event.preventDefault();
+  populateSdkForm({ ...userSettings, sdk: DEFAULT_USER_SETTINGS.sdk } as UserSettings);
+  showConfigStatus(sdkStatus, '已恢复默认配置，请点击保存后生效', 'success');
 });
 
 tradeForm.addEventListener('submit', async (event) => {
@@ -1224,6 +1380,56 @@ systemForm.addEventListener('submit', async (event) => {
     refreshTradingPanel();
   } catch (error) {
     showConfigStatus(systemStatus, `保存失败: ${(error as Error).message}`, 'error');
+  }
+});
+
+sdkForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const formData = new FormData(sdkForm);
+
+  const getNumberValue = (name: string, fallback: number): number => {
+    const value = Number(formData.get(name));
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+
+  const getStringValue = (name: string): string => {
+    return (formData.get(name) as string || '').trim();
+  };
+
+  const getBooleanValue = (name: string): boolean => {
+    return formData.get(name) === 'on';
+  };
+
+  const updatedSdk = {
+    // 交易配置
+    defaultSlippage: getNumberValue('sdkDefaultSlippage', userSettings.sdk.defaultSlippage),
+    defaultGasPrice: getNumberValue('sdkDefaultGasPrice', userSettings.sdk.defaultGasPrice),
+    preferredDeadline: getNumberValue('sdkPreferredDeadline', userSettings.sdk.preferredDeadline),
+
+    // 通道配置
+    preferredChannel: getStringValue('sdkPreferredChannel') || undefined,
+    autoSelectChannel: getBooleanValue('sdkAutoSelectChannel'),
+
+    // 网络配置
+    useCustomRpc: getBooleanValue('sdkUseCustomRpc'),
+    customRpcUrl: getStringValue('sdkCustomRpcUrl') || undefined,
+
+    // UI 配置
+    showNotifications: getBooleanValue('sdkShowNotifications'),
+    autoRefreshBalance: getBooleanValue('sdkAutoRefreshBalance'),
+
+    // 高级配置
+    enableWebSocketMonitor: getBooleanValue('sdkEnableWebSocketMonitor'),
+    enableDebugMode: getBooleanValue('sdkEnableDebugMode'),
+  };
+
+  try {
+    await savePartialSettings({ sdk: updatedSdk });
+    populateSdkForm(userSettings);
+    showConfigStatus(sdkStatus, '设置已保存', 'success');
+    refreshTradingPanel();
+  } catch (error) {
+    showConfigStatus(sdkStatus, `保存失败: ${(error as Error).message}`, 'error');
   }
 });
 

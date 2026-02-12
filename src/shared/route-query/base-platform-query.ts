@@ -5,7 +5,7 @@
 
 import type { Address } from 'viem';
 import { structuredLogger } from '../structured-logger.js';
-import { CONTRACTS } from '../trading-config.js';
+import { CONTRACTS } from '../config/sdk-config-adapter.js';
 import type { RouteFetchResult, TokenPlatform, PancakePairCheckResult } from './types.js';
 import { ServiceWorkerError, isServiceWorkerError, toServiceWorkerError } from './errors.js';
 import { pancakePairFinder } from './pancake-pair-finder.js';

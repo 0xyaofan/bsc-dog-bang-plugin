@@ -6,14 +6,16 @@ import {
   CONTRACTS,
   ERC20_ABI,
   ROUTER_ABI,
-  TX_CONFIG,
-  BACKGROUND_TASK_CONFIG,
   PANCAKE_V3_FACTORY_ABI,
   PANCAKE_V3_QUOTER_ABI,
   PANCAKE_V3_SMART_ROUTER_ABI,
-  NETWORK_CONFIG,
   QUOTE_TOKEN_POOL_CONFIG
-} from '../shared/trading-config.js';
+} from '../shared/config/sdk-config-adapter.js';
+import {
+  TX_CONFIG,
+  BACKGROUND_TASK_CONFIG,
+  NETWORK_CONFIG
+} from '../shared/config/index.js';
 import {
   resolveFourQuoteTokenLabel,
   getFourBridgeTokenList
@@ -68,8 +70,8 @@ const V3_DIRECT_QUOTE_TOKENS = new Set(
     CONTRACTS.KGST,
     CONTRACTS.lisUSD
   ]
-    .filter((token): token is string => Boolean(token))
-    .map((token) => token.toLowerCase())
+    .filter((token) => Boolean(token))
+    .map((token) => (token as string).toLowerCase())
     .filter(Boolean)
 );
 const V3_FALLBACK_RPC_URLS = [

@@ -1,4 +1,4 @@
-import { CONTRACTS } from '../shared/trading-config.js';
+import { CONTRACTS } from '../shared/config/index.js';
 import {
   isBnbQuote,
   prepareQuoteFunds,

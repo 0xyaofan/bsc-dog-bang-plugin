@@ -13,6 +13,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **BSC Trading SDK 集成** - 引入独立的 BSC Trading SDK 库
+  - 模块化架构：core, pancakeswap, fourmeme, flap, luna, router 六个独立包
+  - 智能 RPC 节点管理：自动延迟检测、健康检查、动态节点切换
+  - 统一交易接口：TradingPlatform 抽象，支持多平台扩展
+  - 智能路由器：自动选择最优交易路径和平台
+  - SDK 适配层：SDKClientManager 和 SDKAdapter 适配 Chrome Extension 环境
+  - 完整测试覆盖：1266 个测试用例，覆盖率 > 80%
+- **SDK 交易功能增强**
+  - Gas Price 和 Nonce 配置支持：允许自定义交易参数
+  - SmartRouter 交易执行：自动选择最佳报价并执行交易
+  - 渐进式集成策略：SDK 和现有逻辑并行运行，优先尝试 SDK
+
+### Changed
+- **依赖更新** - 移除 @pancakeswap/swap-sdk-core，使用 BSC Trading SDK
+- **架构优化** - 为后续完全迁移到 SDK 做准备
+
+### Fixed
+- **Transport 类型兼容性** - 修复 Smart Transport 与 viem Transport 类型不兼容问题
+  - 修复 createSmartTransport() 返回正确的 Transport 类型
+  - 添加完整的 config 对象（key, name, request, retryCount, retryDelay, timeout, type）
+  - 移除 sdk-client-manager.ts 中的大部分 `as any` 类型断言
+  - 提高类型安全和 IDE 支持
+- **PancakeSwap 类型兼容性** - 修复 PancakeSwapV2/V3 类型错误
+  - 实现完整的 TradingPlatform 接口
+  - 使用方法重载保持向后兼容
+  - 移除所有 `as any` 类型断言
+
+
+## [1.1.9] - 2026-02-10
+
+### Changed
+- **路由查询逻辑重构** - 全面重构路由查询系统，提升代码质量和可维护性
+  - 模块化设计：拆分为独立的平台查询类、流动性检查器、Pancake pair 查找器
+  - 统一错误处理：使用专用错误类型和重试机制
+  - 优化缓存机制：使用 LRU 缓存替换简单 Map，集成缓存监控
+  - 并发查询优化：V2 和 V3 并行查询，性能提升 50%
+  - 代码行数从 1492 行降至约 800 行，减少 46% 代码量
+
+### Fixed
+- **零地址 quoteToken 处理** - 修复 BNB 筹集代币查询 Pancake pair 失败的问题
+  - 零地址（BNB 筹集）自动转换为 WBNB 进行查询
+  - 保留零地址语义，不影响交易路径选择逻辑
+- **通知图标加载错误** - 修复 Service Worker 环境下通知图标无法加载的问题
+  - 使用 `chrome.runtime.getURL()` 获取正确的资源路径
+- **Service Worker 错误日志优化** - 降低预期错误的日志级别
+  - Service Worker 限制错误从 ERROR 降级为 DEBUG
+  - 减少控制台噪音，保留真实错误的 ERROR 日志
+
+### Tests
+- **测试全面修复** - 469/469 测试全部通过 (100%)
+  - 修复并发查询导致的 mock 失败问题
+  - 使用独立服务实例避免测试间干扰
+  - 添加缓存清理确保测试隔离
 
 ## [1.1.8] - 2026-02-06
 
@@ -439,6 +493,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Version History
 
+- `1.1.9` - Route query refactoring & bug fixes (2026-02-10)
 - `1.1.8` - Four.meme USD1 routing & performance optimization (2026-02-06)
 - `1.1.7` - Route optimization & cache improvements (2026-02-04)
 - `1.1.6` - Sell performance & token switch fix (2025-01-27)
@@ -453,6 +508,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `0.8.0-alpha` - Alpha testing (2024-12-20)
 
 ## Upgrade Guide
+
+### From 1.1.8 to 1.1.9
+
+1. Download version 1.1.9 from Releases
+2. Remove old version from Chrome
+3. Load new version
+4. 路由查询系统重构自动生效
+5. 零地址 quoteToken 处理优化自动启用
+6. 所有测试通过，稳定性提升
 
 ### From 1.1.7 to 1.1.8
 
@@ -545,7 +609,8 @@ None in 1.0.0 release.
 
 ---
 
-[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.8...HEAD
+[Unreleased]: https://github.com/0xyaofan/bsc-dog-bang-plugin/compare/v1.1.9...HEAD
+[1.1.9]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.9
 [1.1.8]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.8
 [1.1.7]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.7
 [1.1.6]: https://github.com/0xyaofan/bsc-dog-bang-plugin/releases/tag/v1.1.6

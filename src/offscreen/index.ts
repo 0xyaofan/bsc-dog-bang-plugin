@@ -1,5 +1,6 @@
 import { createHttpClient, formatEther, formatUnits } from '../shared/viem-helper.js';
-import { NETWORK_CONFIG, ERC20_ABI, CONTRACTS, DEBUG_CONFIG } from '../shared/trading-config.js';
+import { ERC20_ABI, CONTRACTS } from '../shared/config/sdk-config-adapter.js';
+import { NETWORK_CONFIG, DEBUG_CONFIG } from '../shared/config/index.js';
 import type { Address } from 'viem';
 
 const PORT_NAME = 'dog-bang-offscreen';

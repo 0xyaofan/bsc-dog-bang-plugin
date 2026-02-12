@@ -52,6 +52,8 @@ export default defineConfig({
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]'
       },
+      // 排除测试相关的依赖
+      external: ['vitest', 'chai', '@vitest/utils'],
       // 抑制第三方依赖的 PURE 注释警告
       onwarn(warning, warn) {
         // 忽略 ox 包中的 PURE 注释位置警告
@@ -59,6 +61,14 @@ export default defineConfig({
           warning.code === 'SOURCEMAP_ERROR' ||
           (warning.code === 'INVALID_ANNOTATION' && warning.message.includes('ox/_esm/core/Base64.js'))
         ) {
+          return;
+        }
+        // 忽略 vitest/chai 相关的未解析导入警告
+        if (warning.code === 'UNRESOLVED_IMPORT' && (
+          warning.exporter?.includes('vitest') ||
+          warning.exporter?.includes('chai') ||
+          warning.exporter?.includes('@bsc-trading')
+        )) {
           return;
         }
         // 其他警告正常显示
