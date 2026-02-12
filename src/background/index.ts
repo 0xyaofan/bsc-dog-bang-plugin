@@ -10,28 +10,23 @@
 
 import '../shared/sw-polyfills.js';
 import { logger } from '../shared/logger.js';
-import { PerformanceTimer, perf, getPerformanceTimer, releasePerformanceTimer } from '../shared/performance.js';
+import { perf, getPerformanceTimer, releasePerformanceTimer } from '../shared/performance.js';
 import { rpcQueue } from '../shared/rpc-queue.js';
-import { retry, isRpcError } from '../shared/retry-helper.js';
+import { withRetry, RetryStrategies } from '../shared/retry.js';
 import { CacheManager } from '../shared/cache-manager.js';
+import { CONTRACTS, ERC20_ABI } from '../shared/config/sdk-config-adapter.js';
 import {
   WALLET_CONFIG,
   NETWORK_CONFIG,
   TX_WATCHER_CONFIG,
   TX_CONFIG,
-  CONTRACTS,
-  ROUTER_ABI,
-  ERC20_ABI,
-  FOUR_TOKEN_MANAGER_ABI,
   BACKGROUND_TASK_CONFIG,
-  FLAP_PORTAL_ABI,
   CUSTOM_AGGREGATOR_CONFIG
-} from '../shared/trading-config.js';
+} from '../shared/config/index.js';
 import {
   isBnbQuote,
   resolveQuoteTokenName,
   getQuoteBalance,
-  resolveSwapSlippageBps,
   estimateQuoteToBnbAmount
 } from './four-quote-bridge.js';
 import {
@@ -51,8 +46,8 @@ import {
   parseUnits,
   withCache
 } from '../shared/viem-helper.js';
-import { encodeAbiParameters, parseEther, type Address } from 'viem';
-import { getChannel, setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, getCachedAllowance, setTokenTradeHint } from '../shared/trading-channels.js';
+import { parseEther, type Address } from 'viem';
+import { getChannel, setPancakePreferredMode, clearAllowanceCache, getTokenTradeHint, getCachedAllowance, setTokenTradeHint } from '../shared/trading-channels-compat.js';
 import { TxWatcher } from '../shared/tx-watcher.js';
 import { dedupePromise } from '../shared/promise-dedupe.js';
 import {
@@ -67,12 +62,10 @@ import {
   FOUR_CHANNEL_IDS,
   shouldUseFourQuote,
   requireFourQuoteToken,
-  prepareFourQuoteBuy,
   finalizeFourQuoteSell as finalizeFourQuoteConversion
 } from './four-quote-agent.js';
 import {
-  shouldUseFlapQuote,
-  prepareFlapQuoteBuy
+  shouldUseFlapQuote
 } from './flap-quote-agent.js';
 import {
   shouldUseCustomAggregator,
@@ -82,6 +75,8 @@ import {
   isAggregatorUnsupportedError
 } from './custom-aggregator-agent.js';
 import { createBatchQueryHandlers, type BatchQueryDependencies } from './batch-query-handlers.js';
+import { canUseSDK, buyTokenWithSDK, sellTokenWithSDK, queryTokenRoute } from './sdk-trading-v2.js';
+import { sdkClientManager } from '../shared/sdk-client-manager.js';
 
 // 全局变量
 let publicClient = null;
@@ -305,353 +300,6 @@ const buildQuoteSignature = (tokens: string[]) =>
   tokens.map((value) => value?.toLowerCase?.() || '').filter(Boolean).sort().join(',');
 let currentFourQuoteSignature = buildQuoteSignature(DEFAULT_FOUR_QUOTE_TOKENS);
 
-function assertWalletReadyForFourQuote() {
-  if (!publicClient || !walletClient || !walletAccount || !chainConfig) {
-    throw new Error('钱包未初始化，无法执行交易');
-  }
-}
-
-function buildFourSwapContext(gasPriceWei: bigint, nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>) {
-  assertWalletReadyForFourQuote();
-  return {
-    publicClient,
-    walletClient,
-    account: walletAccount,
-    chain: chainConfig,
-    gasPrice: gasPriceWei,
-    nonceExecutor
-  };
-}
-
-type BuyTokenArgsStruct = {
-  origin?: bigint;
-  token: Address;
-  to: Address;
-  amount?: bigint;
-  maxFunds?: bigint;
-  funds?: bigint;
-  minAmount?: bigint;
-};
-
-function encodeBuyTokenStruct(args: BuyTokenArgsStruct) {
-  const {
-    origin = 0n,
-    token,
-    to,
-    amount = 0n,
-    maxFunds = 0n,
-    funds = 0n,
-    minAmount = 1n
-  } = args;
-  return encodeAbiParameters(
-    [
-      { name: 'origin', type: 'uint256' },
-      { name: 'token', type: 'address' },
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-      { name: 'maxFunds', type: 'uint256' },
-      { name: 'funds', type: 'uint256' },
-      { name: 'minAmount', type: 'uint256' }
-    ],
-    [origin, token, to, amount, maxFunds, funds, minAmount]
-  );
-}
-
-async function sendFourEncodedBuy(params: {
-  tokenAddress: string;
-  amount?: bigint;
-  maxFunds?: bigint;
-  funds?: bigint;
-  minAmount?: bigint;
-  msgValue: bigint;
-  gasPriceWei: bigint;
-  nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
-  label?: string;
-}) {
-  const fnStart = perf.now();
-  const { tokenAddress, amount, maxFunds, funds, minAmount, msgValue, gasPriceWei, nonceExecutor, label = 'four-buy-encoded' } = params;
-
-  logger.debug(`[FourEncodedBuy] 开始执行`, {
-    tokenAddress: tokenAddress.slice(0, 10),
-    amount: amount?.toString(),
-    maxFunds: maxFunds?.toString(),
-    funds: funds?.toString(),
-    minAmount: minAmount?.toString(),
-    msgValue: msgValue.toString()
-  });
-
-  const encodeStart = perf.now();
-  assertWalletReadyForFourQuote();
-  const encodedArgs = encodeBuyTokenStruct({
-    token: tokenAddress as Address,
-    to: walletAccount.address,
-    amount,
-    maxFunds,
-    funds,
-    minAmount
-  });
-  logger.debug(`[FourEncodedBuy] 参数编码完成 (${perf.measure(encodeStart).toFixed(2)}ms)`);
-
-  const txStart = perf.now();
-  const txHash = await nonceExecutor(label, async (nonce) => {
-    logger.debug(`[FourEncodedBuy] 发送交易 (nonce: ${nonce})`);
-    const hash = await walletClient.sendTransaction({
-      account: walletAccount,
-      chain: chainConfig,
-      to: CONTRACTS.FOUR_TOKEN_MANAGER_V2,
-      nonce: BigInt(nonce),
-      value: msgValue,
-      gasPrice: gasPriceWei,
-      data: encodeFunctionData({
-        abi: FOUR_TOKEN_MANAGER_ABI,
-        functionName: 'buyToken',
-        args: [encodedArgs as `0x${string}`, 0n, '0x']
-      })
-    });
-    return hash;
-  });
-  logger.debug(`[FourEncodedBuy] 交易已发送 (${perf.measure(txStart).toFixed(2)}ms)`, { txHash });
-  logger.debug(`[FourEncodedBuy] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
-
-  return txHash;
-}
-
-async function executeFourQuoteBuy(params: {
-  tokenAddress: string;
-  amountBnb: string | number;
-  slippage: number;
-  quoteToken: string;
-  gasPriceWei: bigint;
-  nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
-  useEncodedBuy?: boolean;
-}) {
-  const fnStart = perf.now();
-  const { tokenAddress, amountBnb, slippage, quoteToken, gasPriceWei, nonceExecutor, useEncodedBuy = false } = params;
-
-  // 5.3.1: 参数验证
-  let stepStart = perf.now();
-  assertWalletReadyForFourQuote();
-  const amountStr = typeof amountBnb === 'string' ? amountBnb : amountBnb?.toString?.() || '0';
-  let amountWei: bigint;
-  try {
-    amountWei = parseUnits(amountStr, 18);
-  } catch (error) {
-    throw new Error('无效的买入数量');
-  }
-  if (amountWei <= 0n) {
-    throw new Error('买入数量必须大于 0');
-  }
-  logger.debug(`[FourQuote] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
-
-  // 5.3.2: 准备 Quote 买入（BNB 兑换为 Quote Token）
-  stepStart = perf.now();
-  const swapContext = buildFourSwapContext(gasPriceWei, nonceExecutor);
-  const { quoteAmount, usedWalletQuote } = await prepareFourQuoteBuy({
-    tokenAddress,
-    amountInWei: amountWei,
-    slippage,
-    quoteToken,
-    swapContext,
-    publicClient,
-    walletAddress: walletAccount.address
-  });
-  logger.debug(`[FourQuote] 准备 Quote 买入完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
-    quoteAmount: quoteAmount.toString(),
-    usedWalletQuote
-  });
-
-  // 5.3.3: 执行买入交易
-  stepStart = perf.now();
-  let buyHash: string;
-  if (useEncodedBuy) {
-    buyHash = await sendFourEncodedBuy({
-      tokenAddress,
-      funds: quoteAmount,
-      minAmount: 1n,
-      msgValue: 0n,
-      gasPriceWei,
-      nonceExecutor,
-      label: 'four-quote-buy'
-    });
-  } else {
-    buyHash = await nonceExecutor('four-quote-buy', async (nonce) => {
-      const hash = await walletClient.sendTransaction({
-        account: walletAccount,
-        chain: chainConfig,
-        to: CONTRACTS.FOUR_TOKEN_MANAGER_V2,
-        nonce: BigInt(nonce),
-        value: 0n,
-        gasPrice: gasPriceWei,
-        data: encodeFunctionData({
-          abi: FOUR_TOKEN_MANAGER_ABI,
-          functionName: 'buyTokenAMAP',
-          args: [tokenAddress as Address, quoteAmount, 1n]
-        })
-      });
-      return hash;
-    });
-  }
-  logger.debug(`[FourQuote] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { buyHash });
-
-  logger.debug(`[FourQuote] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`, {
-    token: tokenAddress,
-    quoteToken,
-    quoteAmount: quoteAmount.toString(),
-    buyHash,
-    usedWalletQuote
-  });
-
-  return buyHash;
-}
-
-async function executeFlapQuoteBuy(params: {
-  tokenAddress: string;
-  amountBnb: string | number;
-  slippage: number;
-  quoteToken: string;
-  gasPriceWei: bigint;
-  nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
-}) {
-  const fnStart = perf.now();
-  const { tokenAddress, amountBnb, slippage, quoteToken, gasPriceWei, nonceExecutor } = params;
-
-  // 5.4.1: 参数验证
-  let stepStart = perf.now();
-  assertWalletReadyForFourQuote();
-  const amountStr = typeof amountBnb === 'string' ? amountBnb : amountBnb?.toString?.() || '0';
-  let amountWei: bigint;
-  try {
-    amountWei = parseUnits(amountStr, 18);
-  } catch (error) {
-    throw new Error('无效的买入数量');
-  }
-  if (amountWei <= 0n) {
-    throw new Error('买入数量必须大于 0');
-  }
-  logger.debug(`[FlapQuote] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
-
-  // 5.4.2: 准备 Quote 买入（BNB 兑换为 Quote Token）
-  stepStart = perf.now();
-  const swapContext = buildFourSwapContext(gasPriceWei, nonceExecutor);
-  const { quoteAmount, usedWalletQuote } = await prepareFlapQuoteBuy({
-    tokenAddress,
-    amountInWei: amountWei,
-    slippage,
-    quoteToken,
-    swapContext,
-    publicClient,
-    walletAddress: walletAccount.address
-  });
-  logger.debug(`[FlapQuote] 准备 Quote 买入完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
-    quoteAmount: quoteAmount.toString(),
-    usedWalletQuote
-  });
-
-  // 5.4.3: 查询 Flap Portal 报价
-  stepStart = perf.now();
-  const expected = await publicClient.readContract({
-    address: CONTRACTS.FLAP_PORTAL,
-    abi: FLAP_PORTAL_ABI,
-    functionName: 'quoteExactInput',
-    args: [{
-      inputToken: quoteToken as Address,
-      outputToken: tokenAddress as Address,
-      inputAmount: quoteAmount
-    }]
-  });
-  const expectedTokens = typeof expected === 'bigint' ? expected : BigInt((expected as any)?.amountOut ?? 0n);
-  if (expectedTokens <= 0n) {
-    throw new Error('Flap Portal 报价为 0，无法执行');
-  }
-  const slippageBps = resolveSwapSlippageBps(slippage);
-  const minTokens = expectedTokens * BigInt(10000 - slippageBps) / 10000n;
-  logger.debug(`[FlapQuote] 查询 Flap Portal 报价完成 (${perf.measure(stepStart).toFixed(2)}ms)`, {
-    expectedTokens: expectedTokens.toString(),
-    minTokens: minTokens.toString()
-  });
-
-  // 5.4.4: 执行买入交易
-  stepStart = perf.now();
-  const txHash = await nonceExecutor('flap-quote-buy', async (nonce) => {
-    const hash = await walletClient.sendTransaction({
-      account: walletAccount,
-      chain: chainConfig,
-      to: CONTRACTS.FLAP_PORTAL,
-      nonce: BigInt(nonce),
-      value: 0n,
-      gasPrice: gasPriceWei,
-      data: encodeFunctionData({
-        abi: FLAP_PORTAL_ABI,
-        functionName: 'swapExactInput',
-        args: [{
-          inputToken: quoteToken as Address,
-          outputToken: tokenAddress as Address,
-          inputAmount: quoteAmount,
-          minOutputAmount: minTokens,
-          permitData: '0x'
-        }]
-      })
-    });
-    return hash;
-  });
-  logger.debug(`[FlapQuote] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { txHash });
-
-  logger.debug(`[FlapQuote] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`, {
-    token: tokenAddress,
-    quoteToken,
-    quoteAmount: quoteAmount.toString(),
-    usedWalletQuote
-  });
-
-  return txHash;
-}
-
-async function executeXModeDirectBuy(params: {
-  tokenAddress: string;
-  amountBnb: string | number;
-  gasPriceWei: bigint;
-  nonceExecutor: (label: string, sender: (nonce: number) => Promise<any>) => Promise<any>;
-}) {
-  const fnStart = perf.now();
-  const { tokenAddress, amountBnb, gasPriceWei, nonceExecutor } = params;
-
-  // 5.5.1: 参数验证
-  let stepStart = perf.now();
-  assertWalletReadyForFourQuote();
-  const amountStr = typeof amountBnb === 'string' ? amountBnb : amountBnb?.toString?.() || '0';
-  let amountWei: bigint;
-  try {
-    amountWei = parseUnits(amountStr, 18);
-  } catch (error) {
-    throw new Error('无效的买入数量');
-  }
-  if (amountWei <= 0n) {
-    throw new Error('买入数量必须大于 0');
-  }
-  logger.debug(`[XMode] 参数验证完成 (${perf.measure(stepStart).toFixed(2)}ms)`);
-
-  // 5.5.2: 执行 XMode 买入交易
-  stepStart = perf.now();
-  const buyHash = await sendFourEncodedBuy({
-    tokenAddress,
-    funds: amountWei,
-    minAmount: 1n,
-    msgValue: amountWei,
-    gasPriceWei,
-    nonceExecutor,
-    label: 'xmode-buy'
-  });
-  logger.debug(`[XMode] 执行买入交易完成 (${perf.measure(stepStart).toFixed(2)}ms)`, { buyHash });
-
-  logger.debug(`[XMode] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`, {
-    token: tokenAddress,
-    amountWei: amountWei.toString(),
-    buyHash
-  });
-
-  return buyHash;
-}
-
 type FourQuoteSettlementParams = {
   txHash: string;
   quoteToken: string;
@@ -664,8 +312,17 @@ type FourQuoteSettlementParams = {
 function scheduleFourQuoteSellSettlement(params: FourQuoteSettlementParams) {
   const task = async () => {
     try {
-      assertWalletReadyForFourQuote();
-      const swapContext = buildFourSwapContext(params.gasPriceWei, params.nonceExecutor);
+      if (!publicClient || !walletClient || !walletAccount || !chainConfig) {
+        throw new Error('钱包未初始化，无法执行交易');
+      }
+      const swapContext = {
+        publicClient,
+        walletClient,
+        account: walletAccount,
+        chain: chainConfig,
+        gasPrice: params.gasPriceWei,
+        nonceExecutor: params.nonceExecutor
+      };
       const result = await finalizeFourQuoteConversion({
         txHash: params.txHash,
         quoteToken: params.quoteToken,
@@ -2255,6 +1912,18 @@ async function createWalletClientInstance() {
 
   // 初始化批量查询处理器
   initializeBatchQueryHandlers();
+
+  // 初始化 SDK 客户端管理器
+  try {
+    await sdkClientManager.initialize({
+      rpcNodes: allRpcNodes.map(url => ({ url })),
+      privateKey: walletPrivateKey,
+      chain: chainConfig,
+    });
+    logger.debug('[Background] SDK 客户端管理器已初始化');
+  } catch (sdkError) {
+    logger.warn('[Background] SDK 客户端管理器初始化失败:', sdkError);
+  }
 }
 
 /**
@@ -2289,14 +1958,13 @@ function initializeBatchQueryHandlers() {
 
 // RPC 调用包装器 - 使用统一的重试工具
 async function executeWithRetry(asyncFunc, maxRetries = 2) {
-  return retry(asyncFunc, {
-    maxRetries,
-    shouldRetry: isRpcError,
-    onRetry: async (attempt, error) => {
+  return withRetry(asyncFunc, {
+    ...RetryStrategies.network,
+    maxAttempts: maxRetries + 1,
+    onRetry: async (error, attempt) => {
       logger.warn(`[Background] RPC 错误，切换节点 (尝试 ${attempt}/${maxRetries + 1})`);
       await createClients(true);  // 切换到下一个节点
-    },
-    logTag: 'Background'
+    }
   });
 }
 
@@ -3178,23 +2846,18 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
       const resolvedSlippage = Number.isFinite(slippageValue) ? slippageValue : 0;
       logger.debug('[Buy] Starting buy transaction:', { tokenAddress: normalizedTokenAddress, amount, slippage, channel: resolvedChannelId });
 
-      // 步骤3: 获取通道处理器
-      stepStart = perf.now();
-      const channelHandler = getChannel(resolvedChannelId);
-      timer.step(`获取通道处理器 (${perf.measure(stepStart).toFixed(2)}ms)`);
-
-      // 步骤4: 规范化 Gas Price
+      // 步骤3: 规范化 Gas Price
       stepStart = perf.now();
       const normalizedGasPrice = normalizeGasPriceInput(gasPrice);
       const gasPriceWei = toWeiGasPrice(normalizedGasPrice);
       timer.step(`规范化GasPrice (${perf.measure(stepStart).toFixed(2)}ms)`);
 
-      // 步骤5: 执行区块链买入交易
+      // 步骤4: 执行区块链买入交易
       stepStart = perf.now();
       logger.debug('[Buy] 开始区块链操作...');
       const buyTxStart = perf.now();
 
-      // 5.1: 初始化执行器和判断交易类型
+      // 4.1: 初始化执行器和判断交易类型
       let subStepStart = perf.now();
       const nonceExecutor = (label: string, sender: (nonce: number) => Promise<any>) =>
         executeWithNonceRetry(sender, `${resolvedChannelId}:${label}`);
@@ -3219,7 +2882,7 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
 
       let txHash;
       if (useCustomAggregator) {
-        // 5.2: 自定义聚合器买入
+        // 4.2: 自定义聚合器买入
         subStepStart = perf.now();
         const quoteToken = routeInfo?.quoteToken;
         if (!quoteToken) {
@@ -3255,82 +2918,38 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
           }
         }
       }
-      if (!txHash && useQuoteBridge) {
-        // 5.3: Four.meme Quote 买入
+      // 4.3: 使用 SDK 买入（支持所有平台）
+      if (!txHash && canUseSDK(resolvedChannelId, routeInfo)) {
         subStepStart = perf.now();
-        const quoteToken = requireFourQuoteToken(routeInfo);
-        logger.debug('[Buy] 开始执行 Four.meme Quote 买入...', {
-          quoteToken,
-          quoteLabel: resolveQuoteTokenName(quoteToken)
-        });
-        txHash = await executeFourQuoteBuy({
-          tokenAddress: normalizedTokenAddress,
-          amountBnb: amount,
-          slippage: resolvedSlippage,
-          quoteToken,
-          gasPriceWei,
-          nonceExecutor,
-          useEncodedBuy: shouldUseXModeBuy
-        });
-        logger.debug(`[Buy] ✅ Four.meme Quote 买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
-      }
-      if (!txHash && useFlapQuote) {
-        // 5.4: Flap Quote 买入
-        subStepStart = perf.now();
-        const quoteToken = routeInfo?.quoteToken;
-        if (!quoteToken) {
-          throw new Error('无法读取 Flap 募集币种信息，请稍后重试');
+        logger.debug(`[Buy] 使用 SDK 买入 (${resolvedChannelId})...`);
+        try {
+          const sdkResult = await buyTokenWithSDK({
+            tokenAddress: normalizedTokenAddress,
+            amount: Number(amount),
+            slippage: resolvedSlippage,
+            channel: resolvedChannelId,
+          });
+
+          if (sdkResult.success && sdkResult.txHash) {
+            txHash = sdkResult.txHash;
+            logger.debug(`[Buy] ✅ SDK 买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
+          } else {
+            throw new Error(sdkResult.error || 'SDK 买入失败');
+          }
+        } catch (sdkError) {
+          logger.error(`[Buy] SDK 买入失败:`, sdkError);
+          throw sdkError;
         }
-        logger.debug('[Buy] 开始执行 Flap Quote 买入...', {
-          quoteToken,
-          quoteLabel: resolveQuoteTokenName(quoteToken)
-        });
-        txHash = await executeFlapQuoteBuy({
-          tokenAddress: normalizedTokenAddress,
-          amountBnb: amount,
-          slippage: resolvedSlippage,
-          quoteToken,
-          gasPriceWei,
-          nonceExecutor
-        });
-        logger.debug(`[Buy] ✅ Flap Quote 买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
       }
-      if (!txHash && shouldUseXModeBuy && isBnbQuote(quoteTokenAddress)) {
-        // 5.5: XMode 直接买入
-        subStepStart = perf.now();
-        logger.debug('[Buy] 开始执行 XMode 直接买入...');
-        txHash = await executeXModeDirectBuy({
-          tokenAddress: normalizedTokenAddress,
-          amountBnb: amount,
-          gasPriceWei,
-          nonceExecutor
-        });
-        logger.debug(`[Buy] ✅ XMode 直接买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
-      }
+
       if (!txHash) {
-        // 5.6: 标准通道买入
-        subStepStart = perf.now();
-        logger.debug(`[Buy] 开始执行标准通道买入 (${resolvedChannelId})...`);
-        txHash = await channelHandler.buy({
-          publicClient,
-          walletClient,
-          account: walletAccount,
-          chain: chainConfig,
-          tokenAddress: normalizedTokenAddress,
-          amount,
-          slippage: resolvedSlippage,
-          gasPrice: normalizedGasPrice,
-          nonceExecutor,
-          quoteToken: routeInfo?.quoteToken,
-          routeInfo: routeInfo
-        });
-        logger.debug(`[Buy] ✅ 标准通道买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
+        throw new Error('未能发送买入交易');
       }
 
       logger.debug(`[Buy] 🎯 总买入交易耗时: ${perf.measure(buyTxStart).toFixed(2)}ms`);
       timer.step(`执行区块链买入交易 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
-      // 步骤6: 清除缓存
+      // 步骤5: 清除缓存
       stepStart = perf.now();
       invalidateWalletDerivedCaches(walletAccount.address, normalizedTokenAddress);
       timer.step(`清除缓存 (${perf.measure(stepStart).toFixed(2)}ms)`);
@@ -3475,23 +3094,18 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
 
       logger.debug('[Sell] Starting sell transaction:', { tokenAddress: normalizedTokenAddress, percent: resolvedPercent, slippage, channel: resolvedChannelId });
 
-      // 步骤3: 获取通道处理器
-      stepStart = perf.now();
-      const channelHandler = getChannel(resolvedChannelId);
-      timer.step(`获取通道处理器 (${perf.measure(stepStart).toFixed(2)}ms)`);
-
-      // 步骤4: 规范化 Gas Price
+      // 步骤3: 规范化 Gas Price
       stepStart = perf.now();
       const normalizedGasPrice = normalizeGasPriceInput(gasPrice);
       const gasPriceWei = toWeiGasPrice(normalizedGasPrice);
       timer.step(`规范化GasPrice (${perf.measure(stepStart).toFixed(2)}ms)`);
 
-      // 步骤5: 执行区块链卖出交易
+      // 步骤4: 执行区块链卖出交易
       stepStart = perf.now();
       logger.debug('[Sell] 开始区块链操作...');
       const sellTxStart = perf.now();
 
-      // 5.1: 初始化执行器和判断交易类型
+      // 4.1: 初始化执行器和判断交易类型
       let subStepStart = perf.now();
       const nonceExecutor = (label: string, sender: (nonce: number) => Promise<any>) =>
         executeWithNonceRetry(sender, `${resolvedChannelId}:${label}`);
@@ -3510,7 +3124,7 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
 
       let txHash: string | null = null;
       if (useCustomAggregator) {
-        // 5.2: 自定义聚合器卖出
+        // 4.2: 自定义聚合器卖出
         subStepStart = perf.now();
         try {
           logger.debug('[Sell] 开始执行自定义聚合器卖出...');
@@ -3542,61 +3156,33 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
         }
       }
 
-      let pendingQuoteSettlement: Omit<FourQuoteSettlementParams, 'txHash'> | null = null;
       if (!txHash) {
-        // 5.3: 标准通道卖出（可能包含 Quote 兑换）
-        subStepStart = perf.now();
+        // 4.3: 尝试使用 SDK 卖出
+        if (canUseSDK(resolvedChannelId, routeInfo) && !useQuoteBridge) {
+          subStepStart = perf.now();
+          logger.debug(`[Sell] 尝试使用 SDK 卖出 (${resolvedChannelId})...`);
+          try {
+            const sdkResult = await sellTokenWithSDK({
+              tokenAddress: normalizedTokenAddress,
+              percent: resolvedPercent,
+              slippage: resolvedSlippage,
+              channel: resolvedChannelId,
+              tokenInfo,
+            });
 
-        // 性能优化：并发执行 quote balance 查询和卖出交易
-        let quoteBalancePromise: Promise<bigint> | null = null;
-        let quoteToken: string | null = null;
-
-        if (useQuoteBridge) {
-          const quoteBalanceStart = perf.now();
-          quoteToken = requireFourQuoteToken(routeInfo);
-          quoteBalancePromise = getQuoteBalance(publicClient, quoteToken, walletAccount.address);
-          logger.debug('[Sell] 并发查询 Quote Balance...', {
-            quoteToken,
-            quoteLabel: resolveQuoteTokenName(quoteToken)
-          });
-        }
-
-        logger.debug(`[Sell] 开始执行标准通道卖出 (${resolvedChannelId})...`);
-        const sellStart = perf.now();
-
-        // 并发执行：卖出交易和 quote balance 查询
-        const [sellTxHash, quoteBalanceBefore] = await Promise.all([
-          channelHandler.sell({
-            publicClient,
-            walletClient,
-            account: walletAccount,
-            chain: chainConfig,
-            tokenAddress: normalizedTokenAddress,
-            percent: resolvedPercent,
-            slippage: resolvedSlippage,
-            gasPrice: normalizedGasPrice,
-            nonceExecutor,
-            tokenInfo: tokenInfo,  // 🐛 修复问题1：传递 tokenInfo
-            routeInfo: routeInfo
-          }),
-          quoteBalancePromise || Promise.resolve(0n)
-        ]);
-
-        logger.debug(`[Sell] ✅ 标准通道卖出完成 (${perf.measure(sellStart).toFixed(2)}ms)`);
-        logger.debug(`[Sell] ✅ 标准通道卖出总耗时（含并发查询） (${perf.measure(subStepStart).toFixed(2)}ms)`);
-
-        txHash = sellTxHash;
-
-        if (useQuoteBridge && quoteToken) {
-          pendingQuoteSettlement = {
-            quoteToken,
-            quoteBalanceBefore,
-            slippage: resolvedSlippage,
-            gasPriceWei,
-            nonceExecutor
-          };
+            if (sdkResult.success && sdkResult.txHash) {
+              txHash = sdkResult.txHash;
+              logger.debug(`[Sell] ✅ SDK 卖出完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
+            } else {
+              throw new Error(sdkResult.error || 'SDK 卖出失败');
+            }
+          } catch (sdkError) {
+            logger.error(`[Sell] SDK 卖出失败:`, sdkError);
+            throw sdkError;
+          }
         }
       }
+
       if (!txHash) {
         throw new Error('未能发送卖出交易');
       }
@@ -3604,7 +3190,7 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
       logger.debug(`[Sell] 🎯 总卖出交易耗时: ${perf.measure(sellTxStart).toFixed(2)}ms`);
       timer.step(`执行区块链卖出交易 (${perf.measure(stepStart).toFixed(2)}ms)`);
 
-      // 步骤6: 清除缓存
+      // 步骤5: 清除缓存
       stepStart = perf.now();
       invalidateWalletDerivedCaches(walletAccount.address, normalizedTokenAddress, { allowances: true });
       timer.step(`清除缓存 (${perf.measure(stepStart).toFixed(2)}ms)`);
@@ -3614,12 +3200,6 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
         tokenAddress: normalizedTokenAddress,
         type: 'sell'
       });
-      if (pendingQuoteSettlement) {
-        scheduleFourQuoteSellSettlement({
-          ...pendingQuoteSettlement,
-          txHash
-        });
-      }
 
       // 步骤7: 启动 TxWatcher 监听
       stepStart = perf.now();
