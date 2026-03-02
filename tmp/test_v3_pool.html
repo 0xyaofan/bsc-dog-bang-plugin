@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>V3 池子测试</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #4ec9b0;
+        }
+        .section {
+            background: #252526;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 3px solid #007acc;
+        }
+        .success {
+            color: #4ec9b0;
+        }
+        .error {
+            color: #f48771;
+        }
+        .info {
+            color: #dcdcaa;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #005a9e;
+        }
+        pre {
+            background: #1e1e1e;
+            padding: 10px;
+            overflow-x: auto;
+        }
+        .loading {
+            color: #ce9178;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 V3 池子完整测试</h1>
+
+        <div class="section">
+            <h3>配置信息</h3>
+            <pre id="config"></pre>
+        </div>
+
+        <div class="section">
+            <button onclick="testAllPools()">🚀 开始测试</button>
+            <button onclick="clearResults()">🗑️ 清除结果</button>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        // 配置
+        const CONFIG = {
+            TOKEN: '0xe747e54783ba3f77a8e5251a3cba19ebe9c0e197',
+            WBNB: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+            V3_FACTORY: '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865',
+            V3_QUOTER: '0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997',
+            RPC_URLS: [
+                'https://bsc-dataseed1.binance.org',
+                'https://bsc-dataseed2.binance.org',
+                'https://bsc-dataseed3.binance.org',
+                'https://bsc-dataseed4.binance.org',
+                'https://bsc-dataseed.bnbchain.org',
+                'https://bsc.publicnode.com',
+            ],
+            currentRpcIndex: 0,
+            FEE_TIERS: [100, 500, 2500, 10000],
+            TEST_AMOUNT: '0x5af3107a4000', // 0.0001 BNB
+        };
+
+        // 显示配置
+        document.getElementById('config').textContent = JSON.stringify(CONFIG, null, 2);
+
+        // RPC 调用（带重试和 RPC 切换）
+        async function rpcCall(method, params, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const rpcUrl = CONFIG.RPC_URLS[CONFIG.currentRpcIndex];
+                    const response = await fetch(rpcUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: Date.now(),
+                            method,
+                            params
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    const result = await response.json();
+                    if (result.error) {
+                        throw new Error(result.error.message || JSON.stringify(result.error));
+                    }
+                    return result.result;
+                } catch (error) {
+                    console.warn(`RPC call failed (attempt ${i + 1}/${retries}):`, error.message);
+
+                    // 切换到下一个 RPC
+                    CONFIG.currentRpcIndex = (CONFIG.currentRpcIndex + 1) % CONFIG.RPC_URLS.length;
+
+                    if (i === retries - 1) {
+                        throw error;
+                    }
+
+                    // 等待一下再重试
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+
+        // 查询池子地址
+        async function getPoolAddress(fee) {
+            const tokenAHex = CONFIG.WBNB.toLowerCase().replace('0x', '').padStart(64, '0');
+            const tokenBHex = CONFIG.TOKEN.toLowerCase().replace('0x', '').padStart(64, '0');
+            const feeHex = fee.toString(16).padStart(6, '0');
+            const data = `0x1698ee82${tokenAHex}${tokenBHex}${feeHex}`;
+
+            const result = await rpcCall('eth_call', [
+                { to: CONFIG.V3_FACTORY, data },
+                'latest'
+            ]);
+
+            return '0x' + result.slice(26);
+        }
+
+        // 查询池子流动性
+        async function getPoolLiquidity(poolAddress) {
+            const data = '0x1a686502'; // liquidity()
+            const result = await rpcCall('eth_call', [
+                { to: poolAddress, data },
+                'latest'
+            ]);
+            return BigInt(result);
+        }
+
+        // 查询 token0 和 token1
+        async function getPoolTokens(poolAddress) {
+            const token0Data = '0x0dfe1681'; // token0()
+            const token1Data = '0xd21220a7'; // token1()
+
+            const [token0Result, token1Result] = await Promise.all([
+                rpcCall('eth_call', [{ to: poolAddress, data: token0Data }, 'latest']),
+                rpcCall('eth_call', [{ to: poolAddress, data: token1Data }, 'latest'])
+            ]);
+
+            return {
+                token0: '0x' + token0Result.slice(26),
+                token1: '0x' + token1Result.slice(26)
+            };
+        }
+
+        // 查询 slot0
+        async function getPoolSlot0(poolAddress) {
+            const data = '0x3850c7bd'; // slot0()
+            const result = await rpcCall('eth_call', [
+                { to: poolAddress, data },
+                'latest'
+            ]);
+
+            const sqrtPriceX96 = BigInt('0x' + result.slice(2, 66));
+            const tick = parseInt(result.slice(66, 130), 16);
+
+            return { sqrtPriceX96, tick };
+        }
+
+        // 查询代币余额
+        async function getTokenBalance(tokenAddress, holderAddress) {
+            const holderHex = holderAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+            const data = `0x70a08231${holderHex}`; // balanceOf(address)
+
+            const result = await rpcCall('eth_call', [
+                { to: tokenAddress, data },
+                'latest'
+            ]);
+
+            return BigInt(result);
+        }
+
+        // 获取 V3 报价（原始 eth_call）
+        async function getV3Quote(tokenIn, tokenOut, amountIn, fee) {
+            const tokenInHex = tokenIn.toLowerCase().replace('0x', '').padStart(64, '0');
+            const tokenOutHex = tokenOut.toLowerCase().replace('0x', '').padStart(64, '0');
+            const amountInHex = BigInt(amountIn).toString(16).padStart(64, '0');
+            const feeHex = fee.toString(16).padStart(64, '0');
+            const sqrtPriceLimitX96Hex = '0'.padStart(64, '0');
+
+            const data = `0xc6a5026a${tokenInHex}${tokenOutHex}${amountInHex}${feeHex}${sqrtPriceLimitX96Hex}`;
+
+            try {
+                const result = await rpcCall('eth_call', [
+                    { to: CONFIG.V3_QUOTER, data },
+                    'latest'
+                ]);
+
+                const amountOut = BigInt('0x' + result.slice(2, 66));
+                return { success: true, amountOut };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        }
+
+        // 测试单个池子
+        async function testPool(fee) {
+            const resultsDiv = document.getElementById('results');
+            const sectionDiv = document.createElement('div');
+            sectionDiv.className = 'section';
+            sectionDiv.innerHTML = `<h3>Fee Tier: ${fee} (${fee/10000}%)</h3><div class="loading">⏳ 测试中...</div>`;
+            resultsDiv.appendChild(sectionDiv);
+
+            const log = (msg, type = 'info') => {
+                const p = document.createElement('p');
+                p.className = type;
+                p.textContent = msg;
+                sectionDiv.appendChild(p);
+            };
+
+            try {
+                // 1. 查询池子地址
+                log('📍 查询池子地址...');
+                const poolAddress = await getPoolAddress(fee);
+
+                if (poolAddress === '0x0000000000000000000000000000000000000000') {
+                    log('✗ 池子不存在', 'error');
+                    return;
+                }
+
+                log(`✓ 池子地址: ${poolAddress}`, 'success');
+
+                // 2. 查询流动性
+                log('💧 查询流动性...');
+                const liquidity = await getPoolLiquidity(poolAddress);
+                log(`✓ Liquidity: ${liquidity.toString()}`, 'success');
+
+                // 3. 查询 token0 和 token1
+                log('🔄 查询 token 顺序...');
+                const tokens = await getPoolTokens(poolAddress);
+                log(`✓ Token0: ${tokens.token0}`, 'success');
+                log(`✓ Token1: ${tokens.token1}`, 'success');
+
+                const isToken0WBNB = tokens.token0.toLowerCase() === CONFIG.WBNB.toLowerCase();
+                log(`✓ ${isToken0WBNB ? 'Token0 是 WBNB' : 'Token1 是 WBNB'}`, 'info');
+
+                // 4. 查询 slot0
+                log('📊 查询价格信息...');
+                const slot0 = await getPoolSlot0(poolAddress);
+                log(`✓ SqrtPriceX96: ${slot0.sqrtPriceX96.toString()}`, 'success');
+                log(`✓ Tick: ${slot0.tick}`, 'success');
+
+                // 计算价格
+                const priceX96 = slot0.sqrtPriceX96 * slot0.sqrtPriceX96;
+                const price = Number(priceX96) / (2 ** 192);
+                const tokenPriceInWBNB = isToken0WBNB ? price : (1 / price);
+                log(`✓ 1 TOKEN = ${tokenPriceInWBNB.toFixed(10)} WBNB`, 'info');
+
+                // 5. 查询池子余额
+                log('💰 查询池子余额...');
+                const [balance0, balance1] = await Promise.all([
+                    getTokenBalance(tokens.token0, poolAddress),
+                    getTokenBalance(tokens.token1, poolAddress)
+                ]);
+
+                const wbnbBalance = isToken0WBNB ? balance0 : balance1;
+                const tokenBalance = isToken0WBNB ? balance1 : balance0;
+
+                log(`✓ WBNB 余额: ${(Number(wbnbBalance) / 1e18).toFixed(6)} WBNB`, 'success');
+                log(`✓ TOKEN 余额: ${(Number(tokenBalance) / 1e18).toFixed(2)} tokens`, 'success');
+
+                // 6. 测试报价
+                log('💱 测试报价...');
+                const quote = await getV3Quote(
+                    CONFIG.WBNB,
+                    CONFIG.TOKEN,
+                    CONFIG.TEST_AMOUNT,
+                    fee
+                );
+
+                if (quote.success) {
+                    log(`✓ 报价成功!`, 'success');
+                    log(`✓ AmountOut: ${quote.amountOut.toString()}`, 'success');
+                    log(`✓ 预计获得: ${(Number(quote.amountOut) / 1e18).toFixed(2)} tokens`, 'success');
+                } else {
+                    log(`✗ 报价失败: ${quote.error}`, 'error');
+                }
+
+            } catch (error) {
+                log(`✗ 错误: ${error.message}`, 'error');
+            }
+
+            sectionDiv.querySelector('.loading')?.remove();
+        }
+
+        // 测试所有池子
+        async function testAllPools() {
+            document.getElementById('results').innerHTML = '';
+
+            for (const fee of CONFIG.FEE_TIERS) {
+                await testPool(fee);
+            }
+        }
+
+        // 清除结果
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+    </script>
+</body>
+</html>

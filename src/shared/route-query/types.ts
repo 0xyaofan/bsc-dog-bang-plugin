@@ -108,6 +108,8 @@ export interface PancakePairCheckResult {
   pairAddress?: string;
   /** 协议版本 */
   version?: 'v2' | 'v3';
+  /** V3 fee tier */
+  fee?: number;
   /** 流动性数量（用于比较） */
   liquidityAmount?: bigint;
 }

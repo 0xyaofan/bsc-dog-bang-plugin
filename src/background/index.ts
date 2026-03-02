@@ -2888,17 +2888,28 @@ async function handleBuyToken({ tokenAddress, amount, slippage, gasPrice, channe
       if (!txHash && canUseSDK(resolvedChannelId, routeInfo)) {
         subStepStart = perf.now();
         logger.debug(`[Buy] 使用 SDK 买入 (${resolvedChannelId})...`);
+
+        const sdkCallStart = perf.now();
         try {
           const sdkResult = await buyTokenWithSDK({
             tokenAddress: normalizedTokenAddress,
             amount: Number(amount),
             slippage: resolvedSlippage,
             channel: resolvedChannelId,
+            routeInfo: routeInfo,
           });
+
+          const sdkCallDuration = perf.measure(sdkCallStart);
 
           if (sdkResult.success && sdkResult.txHash) {
             txHash = sdkResult.txHash;
             logger.debug(`[Buy] ✅ SDK 买入完成 (${perf.measure(subStepStart).toFixed(2)}ms)`);
+            logger.debug(`[Buy] SDK 调用耗时: ${sdkCallDuration.toFixed(2)}ms`);
+
+            // 输出 SDK 内部性能数据
+            if (sdkResult.performance) {
+              logger.perf(`[Buy] SDK 性能明细:`, sdkResult.performance.steps);
+            }
           } else {
             throw new Error(sdkResult.error || 'SDK 买入失败');
           }
@@ -3134,6 +3145,7 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
               slippage: resolvedSlippage,
               channel: resolvedChannelId,
               tokenInfo,
+              routeInfo: routeInfo,
             });
 
             if (sdkResult.success && sdkResult.txHash) {

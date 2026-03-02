@@ -140,6 +140,11 @@ export abstract class BasePlatformQuery {
       metadata.pancakeVersion = pairInfo.version;
     }
 
+    // 添加 V3 fee 信息
+    if (pairInfo.version === 'v3' && pairInfo.fee) {
+      metadata.pancakeFee = pairInfo.fee;
+    }
+
     return metadata;
   }
 

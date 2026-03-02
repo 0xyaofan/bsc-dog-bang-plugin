@@ -38,22 +38,35 @@ export async function buyTokenWithSDK(params: {
   amount: number;
   slippage: number;
   channel?: string;
-}): Promise<{ success: boolean; txHash?: string; error?: string; gasUsed?: string }> {
+  routeInfo?: any;
+}): Promise<{
+  success: boolean;
+  txHash?: string;
+  error?: string;
+  gasUsed?: string;
+  performance?: {
+    total: number;
+    steps: Array<{ name: string; duration: number }>;
+  };
+}> {
   const timer = getPerformanceTimer('sdk-buy');
+  const perfStart = Date.now();
 
   try {
     // 1. 检查 SDK 是否已初始化
+    const initStart = Date.now();
     if (!sdkManagerAdapter.isInitialized()) {
       await sdkManagerAdapter.initialize();
-      timer.step('SDK 初始化');
+      timer.step(`SDK 初始化 (${Date.now() - initStart}ms)`);
     }
 
     // 2. 查询路由信息（如果没有指定 channel）
     let channel = params.channel;
     if (!channel) {
+      const routeStart = Date.now();
       const route = await sdkManagerAdapter.queryRoute(params.tokenAddress as Address);
       channel = route.preferredChannel;
-      timer.step('路由查询');
+      timer.step(`路由查询 (${Date.now() - routeStart}ms)`);
 
       logger.debug('[SDK Buy] 自动选择通道', {
         tokenAddress: params.tokenAddress,
@@ -64,8 +77,9 @@ export async function buyTokenWithSDK(params: {
     }
 
     // 3. 解析参数
+    const parseStart = Date.now();
     const slippageBps = Math.floor(params.slippage * 100);
-    timer.step('参数解析');
+    timer.step(`参数解析 (${Date.now() - parseStart}ms)`);
 
     logger.debug('[SDK Buy] 开始交易', {
       tokenAddress: params.tokenAddress,
@@ -75,13 +89,16 @@ export async function buyTokenWithSDK(params: {
     });
 
     // 4. 执行买入
+    const txStart = Date.now();
     const result = await sdkManagerAdapter.buyToken({
       tokenAddress: params.tokenAddress as Address,
       amountBnb: params.amount,
       slippageBps,
       channel,
+      routeInfo: params.routeInfo,
     });
-    timer.step('执行交易');
+    const txDuration = Date.now() - txStart;
+    timer.step(`执行交易 (${txDuration}ms)`);
 
     // 5. 返回结果
     if (result.status === 'success') {
@@ -90,10 +107,18 @@ export async function buyTokenWithSDK(params: {
         channel: result.channel,
       });
 
+      // 不调用 timer.finish()，避免重复输出性能报告
+      // 只收集性能数据返回给调用方
+      const perfSteps = timer['impl']['steps'] || [];
+
       return {
         success: true,
         txHash: result.hash,
         gasUsed: result.gasPrice?.toString(),
+        performance: {
+          total: Date.now() - perfStart,
+          steps: perfSteps,
+        },
       };
     } else {
       throw new Error(result.error || '交易失败');
@@ -119,6 +144,7 @@ export async function sellTokenWithSDK(params: {
   slippage: number;
   channel?: string;
   tokenInfo?: any;
+  routeInfo?: any;
 }): Promise<{ success: boolean; txHash?: string; error?: string; gasUsed?: string }> {
   const timer = getPerformanceTimer('sdk-sell');
 
@@ -177,6 +203,7 @@ export async function sellTokenWithSDK(params: {
       amountToken,
       slippageBps,
       channel,
+      routeInfo: params.routeInfo,
     });
     timer.step('执行交易');
 

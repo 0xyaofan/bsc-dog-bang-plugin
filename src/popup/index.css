@@ -355,10 +355,22 @@ button:disabled {
 .panel-footer {
   min-height: 32px;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 
 .panel-footer .message {
   width: 100%;
   margin-top: 0;
+}
+
+.version-info {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  text-align: center;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.5px;
+  user-select: none;
 }

@@ -53,7 +53,10 @@ export class DebugPerformanceTimer {
   }
 
   private printReport(totalTime: number) {
-    const actionName = this.type === 'buy' ? '买入' : '卖出';
+    // 判断操作类型
+    const isBuy = this.type === 'buy' || this.type === 'sdk-buy';
+    const actionName = isBuy ? '买入' : '卖出';
+
     logger.perf(`[Perf:${actionName}] 总耗时 ${totalTime.toFixed(2)}ms`, this.steps);
     console.group(`%c⏱️ ${actionName}交易性能报告`, 'font-weight: bold; font-size: 14px; color: #10b981;');
     console.log(`%c总耗时: ${totalTime.toFixed(2)}ms`, 'font-weight: bold; color: #3b82f6;');

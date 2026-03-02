@@ -31,6 +31,38 @@ const flattenExtensionHtml = () => ({
 export default defineConfig({
   base: './',
   plugins: [react(), flattenExtensionHtml()],
+  resolve: {
+    // 确保 Vite 能够解析 @bsc-trading 包
+    dedupe: ['viem'],
+    alias: {
+      // 使用 SDK 包的源文件而不是构建后的 dist 文件
+      '@bsc-trading/contracts': resolve(__dirname, '../bsc-trading-sdk/packages/contracts/src/index.ts'),
+      '@bsc-trading/core': resolve(__dirname, '../bsc-trading-sdk/packages/core/src/index.ts'),
+      '@bsc-trading/manager': resolve(__dirname, '../bsc-trading-sdk/packages/manager/src/index.ts'),
+      '@bsc-trading/route-detector': resolve(__dirname, '../bsc-trading-sdk/packages/route-detector/src/index.ts'),
+      '@bsc-trading/aggregator': resolve(__dirname, '../bsc-trading-sdk/packages/aggregator/src/index.ts'),
+      '@bsc-trading/fourmeme': resolve(__dirname, '../bsc-trading-sdk/packages/fourmeme/src/index.ts'),
+      '@bsc-trading/flap': resolve(__dirname, '../bsc-trading-sdk/packages/flap/src/index.ts'),
+      '@bsc-trading/luna': resolve(__dirname, '../bsc-trading-sdk/packages/luna/src/index.ts'),
+      '@bsc-trading/pancakeswap': resolve(__dirname, '../bsc-trading-sdk/packages/pancakeswap/src/index.ts'),
+      '@bsc-trading/router': resolve(__dirname, '../bsc-trading-sdk/packages/router/src/index.ts'),
+    },
+  },
+  optimizeDeps: {
+    // 强制预构建本地 @bsc-trading 包
+    include: [
+      '@bsc-trading/contracts',
+      '@bsc-trading/core',
+      '@bsc-trading/manager',
+      '@bsc-trading/route-detector',
+      '@bsc-trading/aggregator',
+      '@bsc-trading/fourmeme',
+      '@bsc-trading/flap',
+      '@bsc-trading/luna',
+      '@bsc-trading/pancakeswap',
+      '@bsc-trading/router',
+    ],
+  },
   build: {
     outDir: 'extension/dist',
     emptyOutDir: true,
@@ -66,8 +98,7 @@ export default defineConfig({
         // 忽略 vitest/chai 相关的未解析导入警告
         if (warning.code === 'UNRESOLVED_IMPORT' && (
           warning.exporter?.includes('vitest') ||
-          warning.exporter?.includes('chai') ||
-          warning.exporter?.includes('@bsc-trading')
+          warning.exporter?.includes('chai')
         )) {
           return;
         }

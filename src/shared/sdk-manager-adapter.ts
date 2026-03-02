@@ -29,10 +29,16 @@ export class SDKManagerAdapter {
       const publicClient = sdkClientManager.getPublicClient();
       const walletClient = sdkClientManager.getWalletClient();
       const account = walletClient.account;
+      const nonceManager = sdkClientManager.getNonceManager();
 
       if (!account) {
         throw new Error('Wallet account not found');
       }
+
+      logger.info('[SDKManagerAdapter] 初始化配置', {
+        hasNonceManager: !!nonceManager,
+        accountAddress: account.address,
+      });
 
       // 从用户偏好加载配置
       const tradingConfig = await createPluginTradingConfig();
@@ -42,6 +48,7 @@ export class SDKManagerAdapter {
         publicClient,
         walletClient,
         account,
+        nonceManager,
         ...tradingConfig,
       });
 
@@ -114,6 +121,7 @@ export class SDKManagerAdapter {
     channel?: string;
     gasPriceWei?: bigint;
     deadline?: number;
+    routeInfo?: any;
   }) {
     if (!this.manager) {
       throw new Error('TradingManager not initialized');
@@ -133,6 +141,7 @@ export class SDKManagerAdapter {
         channel: params.channel as any,
         gasPriceWei: params.gasPriceWei,
         deadline: params.deadline,
+        routeInfo: params.routeInfo,
       });
 
       logger.info('[SDKManagerAdapter] 买入成功', {
@@ -169,6 +178,7 @@ export class SDKManagerAdapter {
     channel?: string;
     gasPriceWei?: bigint;
     deadline?: number;
+    routeInfo?: any;
   }) {
     if (!this.manager) {
       throw new Error('TradingManager not initialized');
@@ -188,6 +198,7 @@ export class SDKManagerAdapter {
         channel: params.channel as any,
         gasPriceWei: params.gasPriceWei,
         deadline: params.deadline,
+        routeInfo: params.routeInfo,
       });
 
       logger.info('[SDKManagerAdapter] 卖出成功', {

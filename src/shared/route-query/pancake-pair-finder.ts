@@ -200,7 +200,7 @@ export class PancakePairFinder {
   }
 
   /**
-   * 查询单个候选
+   * 查询单个候选（同时查询V2和V3）
    */
   private async queryCandidate(
     publicClient: any,
@@ -208,48 +208,46 @@ export class PancakePairFinder {
     candidate: string
   ): Promise<PancakePairCheckResult | null> {
     try {
-      // 查询 V2 pair
-      const pair = await publicClient.readContract({
-        address: CONTRACTS.PANCAKE_FACTORY,
-        abi: PANCAKE_FACTORY_ABI,
-        functionName: 'getPair',
-        args: [tokenAddress, candidate as Address]
-      }) as string;
+      // 并发查询 V2 和 V3
+      const [v2Result, v3Result] = await Promise.all([
+        this.findV2Pair(publicClient, tokenAddress, candidate),
+        this.findV3Pool(publicClient, tokenAddress, candidate)
+      ]);
 
-      if (typeof pair !== 'string' || pair === ZERO_ADDRESS) {
-        return null;
+      // 如果两者都存在，比较流动性
+      if (v2Result && v3Result) {
+        const v2Liquidity = v2Result.liquidityAmount || 0n;
+        const v3Liquidity = v3Result.liquidityAmount || 0n;
+
+        // 选择流动性更大的
+        if (v3Liquidity > v2Liquidity) {
+          structuredLogger.debug('[PancakePairFinder] V3流动性更大', {
+            candidate,
+            v2Liquidity: v2Liquidity.toString(),
+            v3Liquidity: v3Liquidity.toString()
+          });
+          return v3Result;
+        } else {
+          structuredLogger.debug('[PancakePairFinder] V2流动性更大', {
+            candidate,
+            v2Liquidity: v2Liquidity.toString(),
+            v3Liquidity: v3Liquidity.toString()
+          });
+          return v2Result;
+        }
       }
 
-      // 获取储备量
-      const quoteReserve = await this.liquidityChecker.getQuoteReserve(
-        publicClient,
-        pair,
-        candidate
-      );
-
-      if (quoteReserve === null) {
-        return null;
+      // 优先返回 V3
+      if (v3Result) {
+        return v3Result;
       }
 
-      // 检查流动性阈值
-      const threshold = this.liquidityChecker.getMinLiquidityThreshold(candidate);
-      if (quoteReserve < threshold) {
-        structuredLogger.warn('[PancakePairFinder] 候选配对流动性不足', {
-          pair,
-          quoteToken: candidate,
-          quoteReserve: quoteReserve.toString(),
-          threshold: threshold.toString()
-        });
-        return null;
+      // 返回 V2
+      if (v2Result) {
+        return v2Result;
       }
 
-      return {
-        hasLiquidity: true,
-        quoteToken: candidate,
-        pairAddress: pair,
-        version: 'v2',
-        liquidityAmount: quoteReserve
-      };
+      return null;
     } catch (error) {
       if (isServiceWorkerError(error)) {
         // Service Worker 限制，假设可能存在
@@ -272,6 +270,7 @@ export class PancakePairFinder {
 
   /**
    * 查找 V2 pair
+   * 使用原始 eth_call 避免 Service Worker 中的动态 import 问题
    */
   private async findV2Pair(
     publicClient: any,
@@ -279,21 +278,42 @@ export class PancakePairFinder {
     quoteToken: string
   ): Promise<PancakePairCheckResult | null> {
     try {
-      const pair = await publicClient.readContract({
-        address: CONTRACTS.PANCAKE_FACTORY,
-        abi: PANCAKE_FACTORY_ABI,
-        functionName: 'getPair',
-        args: [tokenAddress, quoteToken as Address]
-      }) as string;
+      // 手动编码 getPair 函数调用
+      // function getPair(address tokenA, address tokenB) returns (address pair)
+      // 函数选择器: keccak256("getPair(address,address)") = 0xe6a43905
 
-      if (typeof pair !== 'string' || pair === ZERO_ADDRESS) {
+      const tokenA = tokenAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+      const tokenB = quoteToken.toLowerCase().replace('0x', '').padStart(64, '0');
+      const data = `0xe6a43905${tokenA}${tokenB}` as `0x${string}`;
+
+      // 使用原始 eth_call
+      const result = await publicClient.request({
+        method: 'eth_call',
+        params: [
+          {
+            to: CONTRACTS.PANCAKE_FACTORY,
+            data,
+          },
+          'latest',
+        ],
+      });
+
+      // 解码返回值：address (32 bytes)
+      if (typeof result !== 'string' || result.length < 66) {
+        return null;
+      }
+
+      // 提取地址（去掉前导0）
+      const pairAddress = `0x${result.slice(26, 66)}` as Address;
+
+      if (pairAddress === ZERO_ADDRESS) {
         return null;
       }
 
       // 检查流动性
       const hasLiquidity = await this.liquidityChecker.checkV2PairLiquidity(
         publicClient,
-        pair,
+        pairAddress,
         tokenAddress,
         quoteToken
       );
@@ -302,26 +322,33 @@ export class PancakePairFinder {
         return null;
       }
 
-      structuredLogger.debug('[PancakePairFinder] 找到 V2 pair', { pair, quoteToken });
+      structuredLogger.debug('[PancakePairFinder] 找到 V2 pair', { pair: pairAddress, quoteToken });
 
       return {
         hasLiquidity: true,
         quoteToken,
-        pairAddress: pair,
+        pairAddress,
         version: 'v2'
       };
     } catch (error) {
-      // Service Worker 错误是预期的，使用 debug 级别
+      // 记录详细的错误信息以便诊断
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
       if (isServiceWorkerError(error)) {
         structuredLogger.debug('[PancakePairFinder] Service Worker 限制，无法查询 V2 pair', {
           tokenAddress,
-          quoteToken
+          quoteToken,
+          errorMessage,
+          errorType: error?.constructor?.name
         });
       } else {
-        structuredLogger.error('[PancakePairFinder] 查询 V2 pair 失败', {
+        structuredLogger.warn('[PancakePairFinder] 查询 V2 pair 失败', {
           tokenAddress,
           quoteToken,
-          error: error instanceof Error ? error.message : String(error)
+          errorMessage,
+          errorType: error?.constructor?.name,
+          errorStack: errorStack?.split('\n').slice(0, 3).join('\n') // 只记录前3行堆栈
         });
       }
       return null;

@@ -3,17 +3,19 @@
  * 负责创建和管理 viem 客户端实例
  */
 
-import { createPublicClient, createWalletClient, http, type PublicClient, type WalletClient, type Chain, type Transport } from 'viem';
+import { createPublicClient, createWalletClient, createNonceManager, http, type PublicClient, type WalletClient, type Chain, type Transport } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { bsc } from 'viem/chains';
 import { createSmartTransport, type TransportConfig } from '@bsc-trading/core';
 import { logger } from './logger.js';
+import { NonceManagerAdapter, type NonceManager } from './nonce-manager-adapter.js';
 
 export class SDKClientManager {
   private publicClient: PublicClient | null = null;
   private walletClient: WalletClient | null = null;
   private transportManager: any = null;
   private transport: Transport | null = null;
+  private nonceManager: NonceManager | null = null;
 
   /**
    * 初始化客户端
@@ -66,6 +68,10 @@ export class SDKClientManager {
         chain,
         transport,
       }) as WalletClient;
+
+      // 不使用 nonceManager，让 SDK 直接调用 sendTransaction
+      // 这样可以避免额外的 nonce 管理开销
+      this.nonceManager = null;
     }
 
     logger.debug('[SDKClientManager] 客户端初始化完成');
@@ -86,6 +92,9 @@ export class SDKClientManager {
       transport: this.transport,
     }) as WalletClient;
 
+    // 不使用 nonceManager
+    this.nonceManager = null;
+
     logger.debug('[SDKClientManager] 钱包已更新');
   }
 
@@ -94,6 +103,7 @@ export class SDKClientManager {
    */
   clearWallet(): void {
     this.walletClient = null;
+    this.nonceManager = null;
     logger.debug('[SDKClientManager] 钱包已清除');
   }
 
@@ -132,6 +142,13 @@ export class SDKClientManager {
   }
 
   /**
+   * 获取 Nonce Manager
+   */
+  getNonceManager(): NonceManager | null {
+    return this.nonceManager;
+  }
+
+  /**
    * 获取 Transport Manager
    */
   getTransportManager(): any {
@@ -148,6 +165,7 @@ export class SDKClientManager {
     this.publicClient = null;
     this.walletClient = null;
     this.transportManager = null;
+    this.nonceManager = null;
     logger.debug('[SDKClientManager] 已销毁');
   }
 }

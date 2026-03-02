@@ -474,6 +474,7 @@ export default function App() {
         {activeMessage && (
           <div className={`message ${activeMessage.type}`}>{activeMessage.text}</div>
         )}
+        <div className="version-info">v2.0.0</div>
       </div>
     );
   };
