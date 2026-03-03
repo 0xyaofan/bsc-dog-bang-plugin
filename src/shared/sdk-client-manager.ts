@@ -69,12 +69,18 @@ export class SDKClientManager {
         transport,
       }) as WalletClient;
 
-      // 不使用 nonceManager，让 SDK 直接调用 sendTransaction
-      // 这样可以避免额外的 nonce 管理开销
-      this.nonceManager = null;
-    }
+      // 创建 Nonce Manager Adapter（优化性能）
+      // 采用缓存策略，只在第一次交易时查询链上 nonce
+      this.nonceManager = new NonceManagerAdapter(this.publicClient, account.address);
 
-    logger.debug('[SDKClientManager] 客户端初始化完成');
+      logger.debug('[SDKClientManager] 客户端初始化完成', {
+        hasNonceManager: true,
+      });
+    } else {
+      logger.debug('[SDKClientManager] 客户端初始化完成', {
+        hasNonceManager: false,
+      });
+    }
   }
 
   /**
@@ -92,8 +98,8 @@ export class SDKClientManager {
       transport: this.transport,
     }) as WalletClient;
 
-    // 不使用 nonceManager
-    this.nonceManager = null;
+    // 重新创建 Nonce Manager Adapter
+    this.nonceManager = new NonceManagerAdapter(this.publicClient, account.address);
 
     logger.debug('[SDKClientManager] 钱包已更新');
   }
