@@ -28,45 +28,80 @@ export class LiquidityChecker {
     quoteToken: string
   ): Promise<boolean> {
     try {
-      // 手动编码函数调用，避免 Service Worker 限制
-      // function getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
-      // 函数选择器: keccak256("getReserves()") = 0x0902f1ac
-      const getReservesData = '0x0902f1ac' as `0x${string}`;
+      const supportsRawCall = typeof publicClient?.request === 'function';
 
-      // function token0() returns (address)
-      // 函数选择器: keccak256("token0()") = 0x0dfe1681
-      const token0Data = '0x0dfe1681' as `0x${string}`;
+      let reserve0: bigint;
+      let reserve1: bigint;
+      let token0: string;
+      let token1: string;
 
-      // function token1() returns (address)
-      // 函数选择器: keccak256("token1()") = 0xd21220a7
-      const token1Data = '0xd21220a7' as `0x${string}`;
+      if (supportsRawCall) {
+        // 手动编码函数调用，避免 Service Worker 限制
+        // function getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
+        // 函数选择器: keccak256("getReserves()") = 0x0902f1ac
+        const getReservesData = '0x0902f1ac' as `0x${string}`;
 
-      // 并发查询储备量、token0 和 token1
-      const [reservesResult, token0Result, token1Result] = await Promise.all([
-        publicClient.request({
-          method: 'eth_call',
-          params: [{ to: pairAddress as Address, data: getReservesData }, 'latest'],
-        }),
-        publicClient.request({
-          method: 'eth_call',
-          params: [{ to: pairAddress as Address, data: token0Data }, 'latest'],
-        }),
-        publicClient.request({
-          method: 'eth_call',
-          params: [{ to: pairAddress as Address, data: token1Data }, 'latest'],
-        }),
-      ]);
+        // function token0() returns (address)
+        // 函数选择器: keccak256("token0()") = 0x0dfe1681
+        const token0Data = '0x0dfe1681' as `0x${string}`;
+
+        // function token1() returns (address)
+        // 函数选择器: keccak256("token1()") = 0xd21220a7
+        const token1Data = '0xd21220a7' as `0x${string}`;
+
+        // 并发查询储备量、token0 和 token1
+        const [reservesResult, token0Result, token1Result] = await Promise.all([
+          publicClient.request({
+            method: 'eth_call',
+            params: [{ to: pairAddress as Address, data: getReservesData }, 'latest'],
+          }),
+          publicClient.request({
+            method: 'eth_call',
+            params: [{ to: pairAddress as Address, data: token0Data }, 'latest'],
+          }),
+          publicClient.request({
+            method: 'eth_call',
+            params: [{ to: pairAddress as Address, data: token1Data }, 'latest'],
+          }),
+        ]);
 
       // 解码 getReserves 返回值
       // 返回值: (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
       // reserve0: bytes 0-32 (实际只用后14字节，uint112)
       // reserve1: bytes 32-64 (实际只用后14字节，uint112)
-      const reserve0 = BigInt(`0x${reservesResult.slice(2, 66)}`);
-      const reserve1 = BigInt(`0x${reservesResult.slice(66, 130)}`);
+        reserve0 = BigInt(`0x${reservesResult.slice(2, 66)}`);
+        reserve1 = BigInt(`0x${reservesResult.slice(66, 130)}`);
 
       // 解码 token0 和 token1
-      const token0 = `0x${token0Result.slice(26, 66)}`.toLowerCase();
-      const token1 = `0x${token1Result.slice(26, 66)}`.toLowerCase();
+        token0 = `0x${token0Result.slice(26, 66)}`.toLowerCase();
+        token1 = `0x${token1Result.slice(26, 66)}`.toLowerCase();
+      } else if (typeof publicClient?.readContract === 'function') {
+        const [reserves, token0Result, token1Result] = await Promise.all([
+          publicClient.readContract({
+            address: pairAddress as Address,
+            abi: PAIR_ABI,
+            functionName: 'getReserves'
+          }),
+          publicClient.readContract({
+            address: pairAddress as Address,
+            abi: PAIR_ABI,
+            functionName: 'token0'
+          }),
+          publicClient.readContract({
+            address: pairAddress as Address,
+            abi: PAIR_ABI,
+            functionName: 'token1'
+          })
+        ]);
+
+        reserve0 = BigInt(reserves[0]);
+        reserve1 = BigInt(reserves[1]);
+        token0 = (token0Result as string).toLowerCase();
+        token1 = (token1Result as string).toLowerCase();
+      } else {
+        throw new Error('publicClient must provide request or readContract');
+      }
+
       const normalizedQuote = quoteToken.toLowerCase();
 
       // 确定哪个是报价代币的储备量

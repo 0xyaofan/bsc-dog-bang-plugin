@@ -278,33 +278,48 @@ export class PancakePairFinder {
     quoteToken: string
   ): Promise<PancakePairCheckResult | null> {
     try {
-      // 手动编码 getPair 函数调用
-      // function getPair(address tokenA, address tokenB) returns (address pair)
-      // 函数选择器: keccak256("getPair(address,address)") = 0xe6a43905
+      const supportsRawCall = typeof publicClient?.request === 'function';
+      let pairAddress: Address | null = null;
 
-      const tokenA = tokenAddress.toLowerCase().replace('0x', '').padStart(64, '0');
-      const tokenB = quoteToken.toLowerCase().replace('0x', '').padStart(64, '0');
-      const data = `0xe6a43905${tokenA}${tokenB}` as `0x${string}`;
+      if (supportsRawCall) {
+        // 手动编码 getPair 函数调用
+        // function getPair(address tokenA, address tokenB) returns (address pair)
+        // 函数选择器: keccak256("getPair(address,address)") = 0xe6a43905
 
-      // 使用原始 eth_call
-      const result = await publicClient.request({
-        method: 'eth_call',
-        params: [
-          {
-            to: CONTRACTS.PANCAKE_FACTORY,
-            data,
-          },
-          'latest',
-        ],
-      });
+        const tokenA = tokenAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+        const tokenB = quoteToken.toLowerCase().replace('0x', '').padStart(64, '0');
+        const data = `0xe6a43905${tokenA}${tokenB}` as `0x${string}`;
 
-      // 解码返回值：address (32 bytes)
-      if (typeof result !== 'string' || result.length < 66) {
-        return null;
+        // 使用原始 eth_call
+        const result = await publicClient.request({
+          method: 'eth_call',
+          params: [
+            {
+              to: CONTRACTS.PANCAKE_FACTORY,
+              data,
+            },
+            'latest',
+          ],
+        });
+
+        // 解码返回值：address (32 bytes)
+        if (typeof result !== 'string' || result.length < 66) {
+          return null;
+        }
+
+        // 提取地址（去掉前导0）
+        pairAddress = `0x${result.slice(26, 66)}` as Address;
+      } else if (typeof publicClient?.readContract === 'function') {
+        const readResult = await publicClient.readContract({
+          address: CONTRACTS.PANCAKE_FACTORY as Address,
+          abi: PANCAKE_FACTORY_ABI,
+          functionName: 'getPair',
+          args: [tokenAddress, quoteToken as Address]
+        }) as Address;
+        pairAddress = readResult;
+      } else {
+        throw new Error('publicClient must provide request or readContract');
       }
-
-      // 提取地址（去掉前导0）
-      const pairAddress = `0x${result.slice(26, 66)}` as Address;
 
       if (pairAddress === ZERO_ADDRESS) {
         return null;
