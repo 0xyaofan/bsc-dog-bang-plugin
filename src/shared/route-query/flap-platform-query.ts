@@ -35,7 +35,7 @@ export class FlapPlatformQuery extends BasePlatformQuery {
       }
 
       // 3. 解析状态信息
-      const result = this.parseStateInfo(state, stateReaderUsed);
+      const result = await this.parseStateInfo(state, stateReaderUsed, tokenAddress);
 
       this.logQuerySuccess(tokenAddress, result);
       return result;
@@ -148,7 +148,7 @@ export class FlapPlatformQuery extends BasePlatformQuery {
   /**
    * 解析状态信息
    */
-  private parseStateInfo(state: any, stateReaderUsed: string | null): RouteFetchResult {
+  private async parseStateInfo(state: any, stateReaderUsed: string | null, tokenAddress: Address): Promise<RouteFetchResult> {
     // 提取状态信息
     const reserve = BigInt(state.reserve ?? 0n);
     const threshold = BigInt(state.dexSupplyThresh ?? 0n);
@@ -166,19 +166,59 @@ export class FlapPlatformQuery extends BasePlatformQuery {
       (state as any)?.quoteToken ||
       (Array.isArray(state) ? state[7] : undefined);
 
-    const normalizedQuote =
-      typeof quoteTokenAddress === 'string' && quoteTokenAddress !== ZERO_ADDRESS
-        ? quoteTokenAddress
-        : undefined;
+    // 如果 Flap 没有提供 quoteToken，默认使用 WBNB
+    let normalizedQuote: string | undefined;
+    if (quoteTokenAddress && typeof quoteTokenAddress === 'string' && quoteTokenAddress !== ZERO_ADDRESS) {
+      normalizedQuote = quoteTokenAddress;
+    } else {
+      normalizedQuote = CONTRACTS.WBNB;
+      structuredLogger.debug('[FlapQuery] Flap 未提供 quoteToken，默认使用 WBNB', {
+        tokenAddress,
+        defaultQuote: normalizedQuote
+      });
+    }
 
     // 判断是否已迁移
     // pool 地址存在且不为零地址，说明已迁移到 Pancake
-    const readyForPancake = Boolean(pool && pool !== ZERO_ADDRESS);
-    const pancakePair: PancakePairCheckResult | null = readyForPancake
-      ? { hasLiquidity: true, quoteToken: normalizedQuote, pairAddress: pool, version: 'v2' }
-      : null;
+    const hasMigrated = Boolean(pool && pool !== ZERO_ADDRESS);
 
+    // 如果已迁移，通过 pancakePairFinder 同时查找 V2 和 V3，选择流动性最大的
+    let pancakePair: PancakePairCheckResult | null = null;
+    if (hasMigrated) {
+      try {
+        pancakePair = await this.checkPancakeFallback(tokenAddress, normalizedQuote);
+
+        structuredLogger.info('[FlapQuery] 检测到已迁移，Pancake pair 查找成功', {
+          tokenAddress,
+          version: pancakePair.version,
+          quoteToken: pancakePair.quoteToken,
+          pairAddress: pancakePair.pairAddress,
+          flapPoolAddress: pool
+        });
+      } catch (error) {
+        if (isServiceWorkerError(error)) {
+          // Service Worker 限制，假设已迁移，使用默认 quoteToken
+          structuredLogger.warn('[FlapQuery] Service Worker 限制，假设已迁移', {
+            tokenAddress,
+            quoteToken: normalizedQuote
+          });
+          pancakePair = {
+            hasLiquidity: true,
+            quoteToken: normalizedQuote,
+            pairAddress: pool,
+            version: 'v2'
+          };
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    const readyForPancake = Boolean(pancakePair?.hasLiquidity);
     const migrating = !readyForPancake && progress >= 0.99;
+
+    // 使用 Pancake pair 中发现的 quote token，如果没有则使用默认的
+    const finalQuoteToken = pancakePair?.quoteToken || normalizedQuote;
 
     // 构建元数据
     const metadata = this.mergePancakeMetadata(
@@ -195,7 +235,7 @@ export class FlapPlatformQuery extends BasePlatformQuery {
       readyForPancake,
       progress,
       migrating,
-      quoteToken: normalizedQuote,
+      quoteToken: finalQuoteToken,
       metadata
     };
   }

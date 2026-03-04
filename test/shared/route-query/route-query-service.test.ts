@@ -49,21 +49,19 @@ describe('路由查询服务测试', () => {
       const tokenAddress = '0xd86eb37348f72ddff0c0b9873531dd0fe4d77777'; // Flap
 
       mockPublicClient.readContract
-        .mockResolvedValueOnce({ // State reader V7
-          reserve: BigInt(150 * 1e18),
-          threshold: BigInt(100 * 1e18),
-          pool: '0xpooladdress',
+        .mockResolvedValueOnce({ // State reader V7 - 未迁移的代币
+          reserve: BigInt(50 * 1e18),
+          dexSupplyThresh: BigInt(100 * 1e18),
+          pool: '0x0000000000000000000000000000000000000000', // 零地址表示未迁移
+          quoteToken: '0x55d398326f99059ff775485246999027b3197955', // USDT
           nativeToQuoteSwapEnabled: true
-        })
-        .mockResolvedValueOnce([BigInt(200 * 1e18), BigInt(100 * 1e18), 0])
-        .mockResolvedValueOnce('0x55d398326f99059ff775485246999027b3197955')
-        .mockResolvedValueOnce(tokenAddress);
+        });
 
       const result = await service.queryRoute(tokenAddress);
 
       expect(result.platform).toBe('flap');
-      expect(result.preferredChannel).toBe('pancake');
-      expect(result.readyForPancake).toBe(true);
+      expect(result.preferredChannel).toBe('flap'); // 未迁移，使用 Flap 渠道
+      expect(result.readyForPancake).toBe(false);
     });
 
     it('应该查询 unknown 代币路由', async () => {

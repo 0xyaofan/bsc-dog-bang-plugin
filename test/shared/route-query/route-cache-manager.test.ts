@@ -113,7 +113,7 @@ describe('路由缓存管理器测试', () => {
         preferredChannel: 'four',
         readyForPancake: false,
         progress: 0.5,
-        migrating: true
+        migrating: false // progress < 99%，未迁移
       };
 
       manager.setRoute('0x1234', route);
@@ -122,20 +122,20 @@ describe('路由缓存管理器测试', () => {
       expect(cached?.migrationStatus).toBe('not_migrated');
     });
 
-    it('应该正确识别迁移中代币（未完成迁移）', () => {
+    it('应该正确识别迁移中代币（progress >= 99%）', () => {
       const route: RouteFetchResult = {
         platform: 'four',
-        preferredChannel: 'pancake',
+        preferredChannel: 'four',
         readyForPancake: false,
-        progress: 0.8,
-        migrating: true
+        progress: 0.99,
+        migrating: true // progress >= 99%，正在迁移
       };
 
       manager.setRoute('0x1234', route);
       const cached = manager.getRoute('0x1234');
 
-      // 迁移中但未完成，状态为 not_migrated
-      expect(cached?.migrationStatus).toBe('not_migrated');
+      // progress >= 99% 且未完成迁移，状态为 migrating
+      expect(cached?.migrationStatus).toBe('migrating');
     });
   });
 
