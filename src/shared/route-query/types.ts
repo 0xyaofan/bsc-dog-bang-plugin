@@ -135,7 +135,7 @@ export interface RouteCache {
   /** 缓存时间戳 */
   timestamp: number;
   /** 迁移状态 */
-  migrationStatus: 'not_migrated' | 'migrated';
+  migrationStatus: 'not_migrated' | 'migrating' | 'migrated';
 }
 
 /**

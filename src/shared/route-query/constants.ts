@@ -135,6 +135,8 @@ export const ROUTE_CACHE_CONFIG = {
   MAX_SIZE: 50,
   /** 已迁移代币的 TTL（永久） */
   MIGRATED_TTL: Infinity,
+  /** 正在迁移代币的 TTL（2 秒，实时监控） */
+  MIGRATING_TTL: 2000,
   /** 未迁移代币的 TTL（1 分钟） */
   NOT_MIGRATED_TTL: 60000
 } as const;

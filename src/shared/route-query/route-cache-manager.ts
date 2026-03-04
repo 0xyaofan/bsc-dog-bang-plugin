@@ -28,6 +28,7 @@ export class RouteCacheManager {
     structuredLogger.info('[RouteCacheManager] 初始化完成', {
       maxSize: ROUTE_CACHE_CONFIG.MAX_SIZE,
       migratedTTL: ROUTE_CACHE_CONFIG.MIGRATED_TTL,
+      migratingTTL: ROUTE_CACHE_CONFIG.MIGRATING_TTL,
       notMigratedTTL: ROUTE_CACHE_CONFIG.NOT_MIGRATED_TTL
     });
   }
@@ -55,12 +56,24 @@ export class RouteCacheManager {
    */
   setRoute(tokenAddress: string, route: RouteFetchResult): void {
     const normalized = tokenAddress.toLowerCase();
-    const migrationStatus = route.readyForPancake ? 'migrated' : 'not_migrated';
 
-    // 根据迁移状态设置 TTL
-    const ttl = route.readyForPancake
-      ? ROUTE_CACHE_CONFIG.MIGRATED_TTL
-      : ROUTE_CACHE_CONFIG.NOT_MIGRATED_TTL;
+    // 根据迁移状态确定缓存策略
+    let migrationStatus: RouteCache['migrationStatus'];
+    let ttl: number;
+
+    if (route.readyForPancake) {
+      // 已迁移：永久缓存
+      migrationStatus = 'migrated';
+      ttl = ROUTE_CACHE_CONFIG.MIGRATED_TTL;
+    } else if (route.migrating) {
+      // 正在迁移（progress >= 99%）：2 秒缓存，实时监控
+      migrationStatus = 'migrating';
+      ttl = ROUTE_CACHE_CONFIG.MIGRATING_TTL;
+    } else {
+      // 未迁移：1 分钟缓存
+      migrationStatus = 'not_migrated';
+      ttl = ROUTE_CACHE_CONFIG.NOT_MIGRATED_TTL;
+    }
 
     const cacheEntry: RouteCache = {
       route,
@@ -74,6 +87,7 @@ export class RouteCacheManager {
       tokenAddress: normalized,
       platform: route.platform,
       migrationStatus,
+      progress: route.progress,
       ttl: ttl === Infinity ? 'Infinity' : `${ttl}ms`
     });
   }
@@ -88,7 +102,24 @@ export class RouteCacheManager {
       return true;
     }
 
-    // 未迁移：检查是否过期
+    // 正在迁移：检查是否过期（2 秒 TTL）
+    if (cached.migrationStatus === 'migrating') {
+      const age = Date.now() - cached.timestamp;
+      const expired = age >= ROUTE_CACHE_CONFIG.MIGRATING_TTL;
+
+      if (expired) {
+        structuredLogger.debug('[RouteCacheManager] 正在迁移缓存已过期，重新查询', {
+          age,
+          ttl: ROUTE_CACHE_CONFIG.MIGRATING_TTL
+        });
+        return false;
+      }
+
+      structuredLogger.debug('[RouteCacheManager] 使用正在迁移缓存', { age });
+      return true;
+    }
+
+    // 未迁移：检查是否过期（1 分钟 TTL）
     const age = Date.now() - cached.timestamp;
     const expired = age >= ROUTE_CACHE_CONFIG.NOT_MIGRATED_TTL;
 
@@ -120,20 +151,46 @@ export class RouteCacheManager {
 
     // 2. 迁移状态变化 → 更新
     const cachedMigrated = cached.migrationStatus === 'migrated';
+    const cachedMigrating = cached.migrationStatus === 'migrating';
     const currentMigrated = currentRoute.readyForPancake;
+    const currentMigrating = currentRoute.migrating;
 
+    // 检测从"正在迁移"到"已迁移"的转换
+    if (cachedMigrating && currentMigrated) {
+      structuredLogger.info('[RouteCacheManager] 检测到迁移完成，更新缓存', {
+        tokenAddress,
+        from: 'migrating',
+        to: 'migrated',
+        progress: currentRoute.progress
+      });
+      return true;
+    }
+
+    // 检测从"未迁移"到"正在迁移"的转换
+    if (!cachedMigrating && !cachedMigrated && currentMigrating) {
+      structuredLogger.info('[RouteCacheManager] 检测到开始迁移，更新缓存', {
+        tokenAddress,
+        from: 'not_migrated',
+        to: 'migrating',
+        progress: currentRoute.progress
+      });
+      return true;
+    }
+
+    // 检测其他迁移状态变化
     if (cachedMigrated !== currentMigrated) {
       structuredLogger.info('[RouteCacheManager] 迁移状态变化，更新缓存', {
         tokenAddress,
         from: cached.migrationStatus,
-        to: currentMigrated ? 'migrated' : 'not_migrated'
+        to: currentMigrated ? 'migrated' : currentMigrating ? 'migrating' : 'not_migrated'
       });
       return true;
     }
 
     // 3. 迁移状态未变化
     // - 已迁移：不更新（永久缓存）
-    // - 未迁移：不更新（由 TTL 控制）
+    // - 正在迁移：不更新（由 2 秒 TTL 控制）
+    // - 未迁移：不更新（由 1 分钟 TTL 控制）
     return false;
   }
 
@@ -185,6 +242,16 @@ export class RouteCacheManager {
     return this.cache.keys().filter(key => {
       const cached = this.cache.get(key);
       return cached?.migrationStatus === 'migrated';
+    });
+  }
+
+  /**
+   * 获取正在迁移代币列表
+   */
+  getMigratingTokens(): string[] {
+    return this.cache.keys().filter(key => {
+      const cached = this.cache.get(key);
+      return cached?.migrationStatus === 'migrating';
     });
   }
 
