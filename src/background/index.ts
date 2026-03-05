@@ -1253,19 +1253,13 @@ function ensureWalletNonceManager() {
     walletNonceManager = createNonceManager({
       source: {
         async get({ address }) {
-          // 优先使用本地缓存的 nonce，避免查询链上
+          // 直接使用本地缓存的 nonce，不查询链上
+          // nonce 已在启动时查询并初始化
           if (managedNonceCursor === null) {
-            // 首次启动，尝试从 storage 恢复
-            await restoreNonceFromStorage();
+            throw new Error('Nonce 未初始化，请先调用 initializeNonce()');
           }
 
-          if (managedNonceCursor === null) {
-            // storage 中也没有，初始化为 0
-            managedNonceCursor = 0;
-            logger.debug('[NonceManager] 初始化 nonce = 0');
-          } else {
-            logger.debug(`[NonceManager] 使用缓存的 nonce: ${managedNonceCursor}`);
-          }
+          logger.debug(`[NonceManager] 使用缓存的 nonce: ${managedNonceCursor}`);
 
           const reserved = managedNonceCursor;
           managedNonceCursor += 1;
@@ -1285,7 +1279,38 @@ function ensureWalletNonceManager() {
 }
 
 /**
- * 从 storage 恢复 nonce
+ * 初始化 nonce（钱包解锁时调用）
+ */
+async function initializeNonce() {
+  if (!walletAccount?.address || !publicClient) {
+    throw new Error('无法初始化 nonce：钱包或客户端未就绪');
+  }
+
+  const startTime = Date.now();
+
+  try {
+    // 查询链上 nonce
+    const chainNonce = await publicClient.getTransactionCount({
+      address: walletAccount.address,
+      blockTag: 'pending'
+    });
+
+    managedNonceCursor = Number(chainNonce);
+    lastNonceSyncTime = Date.now();
+
+    // 保存到 storage
+    await saveNonceToStorage(managedNonceCursor);
+
+    const duration = Date.now() - startTime;
+    logger.info(`[NonceManager] 初始化 nonce = ${managedNonceCursor} (${duration}ms)`);
+  } catch (error) {
+    logger.error('[NonceManager] 初始化 nonce 失败:', error?.message);
+    throw error;
+  }
+}
+
+/**
+ * 从 storage 恢复 nonce（已废弃，启动时总是查询链上）
  */
 async function restoreNonceFromStorage() {
   if (!walletAccount?.address) {
@@ -2413,6 +2438,9 @@ async function createWalletClientInstance() {
 
   // 初始化批量查询处理器
   initializeBatchQueryHandlers();
+
+  // 初始化 nonce（启动时查询一次链上 nonce）
+  await initializeNonce();
 
   // 启动 nonce 定期同步定时器
   startNonceSyncTimer();
