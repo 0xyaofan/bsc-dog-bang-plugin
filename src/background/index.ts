@@ -1248,14 +1248,23 @@ function ensureWalletNonceManager() {
     walletNonceManager = createNonceManager({
       source: {
         async get({ address }) {
-          if (!publicClient) {
-            await createClients();
+          // 使用自定义的 nonce 缓存，避免每次查询链上 nonce
+          if (managedNonceCursor === null) {
+            if (!publicClient) {
+              await createClients();
+            }
+            const nonce = await publicClient.getTransactionCount({
+              address,
+              blockTag: 'pending'
+            });
+            managedNonceCursor = Number(nonce);
+            logger.debug(`[NonceManager] 首次查询链上 nonce: ${managedNonceCursor}`);
+          } else {
+            logger.debug(`[NonceManager] 使用缓存的 nonce: ${managedNonceCursor}`);
           }
-          const nonce = await publicClient.getTransactionCount({
-            address,
-            blockTag: 'pending'
-          });
-          return Number(nonce);
+          const reserved = managedNonceCursor;
+          managedNonceCursor += 1;
+          return reserved;
         },
         set() {}
       }
