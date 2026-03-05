@@ -2837,41 +2837,62 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
     const preferredV2Path = direction === 'buy' ? hint?.lastBuyPath : hint?.lastSellPath;
 
-    // 🚀 性能优化：检查失败缓存，跳过已知会失败的查询
+    // 🚀 性能优化：根据历史使用模式，优先查询已知的版本
     const v2FailedKey = direction === 'buy' ? 'v2BuyFailed' : 'v2SellFailed';
     const v3FailedKey = direction === 'buy' ? 'v3BuyFailed' : 'v3SellFailed';
     const v2KnownFailed = hint?.[v2FailedKey] === true;
     const v3KnownFailed = hint?.[v3FailedKey] === true;
 
-    // 如果 V2 已知失败且 V3 有缓存路径，跳过 V2 查询
-    const skipV2 = v2KnownFailed && (hint?.lastMode === 'v3' || routerMatchesV3);
-    if (skipV2) {
-      logger.debug(`${channelLabel} ⚡ V2 已知失败，跳过 V2 查询，直接使用 V3`);
+    // 判断是否应该跳过 V2 或 V3 查询
+    let skipV2 = false;
+    let skipV3 = false;
+
+    // 如果上次使用的是 V2，且 V2 没有失败过，只查询 V2
+    if (hint?.lastMode === 'v2' && !v2KnownFailed && preferredV2Path && preferredV2Path.length >= 2) {
+      skipV3 = true;
+      logger.debug(`${channelLabel} ⚡ 上次使用 V2 且成功，本次只查询 V2`);
+    }
+    // 如果上次使用的是 V3，且 V3 没有失败过，只查询 V3
+    else if (hint?.lastMode === 'v3' && !v3KnownFailed && hasSmartRouterSupport) {
+      skipV2 = true;
+      logger.debug(`${channelLabel} ⚡ 上次使用 V3 且成功，本次只查询 V3`);
+    }
+    // 如果 V2 已知失败，跳过 V2
+    else if (v2KnownFailed && hasSmartRouterSupport) {
+      skipV2 = true;
+      logger.debug(`${channelLabel} ⚡ V2 已知失败，只查询 V3`);
+    }
+    // 如果 V3 已知失败，跳过 V3
+    else if (v3KnownFailed) {
+      skipV3 = true;
+      logger.debug(`${channelLabel} ⚡ V3 已知失败，只查询 V2`);
     }
 
-    logger.debug(`${channelLabel} 🔍 ${skipV2 ? '仅查询 V3' : '并行查询 V2 和 V3'} 路由，选择最优...`);
+    const queryMode = skipV2 ? '仅 V3' : skipV3 ? '仅 V2' : 'V2 + V3 并发';
+    logger.debug(`${channelLabel} 🔍 查询模式: ${queryMode}`);
     const queryStartTime = Date.now();
 
-    // 🚀 性能优化：并行执行 V2 和 V3 查询（如果 V2 已知失败则跳过）
+    // 🚀 性能优化：根据 skipV2 和 skipV3 标志，选择性执行查询
     const [v2Result, v3Result] = await Promise.allSettled([
-      // V2 查询（如果已知失败则跳过）
+      // V2 查询（如果 skipV2 则跳过）
       skipV2
-        ? Promise.reject(new Error('V2 known to fail, skipped'))
+        ? Promise.reject(new Error('V2 skipped (using V3 or V2 known to fail)'))
         : (async () => {
             const v2Start = Date.now();
             logger.debug(`${channelLabel} 开始 V2 查询...`);
             try {
               const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken, routeInfo);
-              logger.debug(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
+              logger.perf(`${channelLabel} V2 查询完成，耗时: ${Date.now() - v2Start}ms`);
               return result;
             } catch (error) {
               logger.debug(`${channelLabel} V2 查询失败，耗时: ${Date.now() - v2Start}ms`);
               throw error;
             }
           })(),
-      // V3 查询
-      hasSmartRouterSupport
-        ? (async () => {
+      // V3 查询（如果 skipV3 则跳过）
+      skipV3 || !hasSmartRouterSupport
+        ? Promise.reject(new Error(skipV3 ? 'V3 skipped (using V2 or V3 known to fail)' : 'V3 not supported'))
+        : (async () => {
             const v3Start = Date.now();
             logger.debug(`${channelLabel} 开始 V3 查询...`);
             try {
@@ -2879,14 +2900,13 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
               if (!v3Route) {
                 v3Route = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
               }
-              logger.debug(`${channelLabel} V3 查询完成，耗时: ${Date.now() - v3Start}ms`);
+              logger.perf(`${channelLabel} V3 查询完成，耗时: ${Date.now() - v3Start}ms`);
               return v3Route;
             } catch (error) {
               logger.debug(`${channelLabel} V3 查询失败，耗时: ${Date.now() - v3Start}ms`);
               throw error;
             }
           })()
-        : Promise.reject(new Error('V3 not supported'))
     ]);
 
     const queryEndTime = Date.now();
@@ -2895,23 +2915,31 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
     // 处理 V2 结果
     let v2Data: { path: string[]; amountOut: bigint } | null = null;
     let v2Error: any = null;
+    // 判断是否真正查询了 V2（而不是 skip）
+    const v2Queried = !skipV2;
     if (v2Result.status === 'fulfilled' && v2Result.value?.path && v2Result.value.amountOut > 0n) {
       v2Data = v2Result.value;
       logger.debug(`${channelLabel} V2 路径成功，输出: ${v2Data.amountOut.toString()}`);
     } else if (v2Result.status === 'rejected') {
       v2Error = v2Result.reason;
-      logger.debug(`${channelLabel} V2 路径失败: ${v2Error?.message || v2Error}`);
+      if (v2Queried) {
+        logger.debug(`${channelLabel} V2 路径失败: ${v2Error?.message || v2Error}`);
+      }
     }
 
     // 处理 V3 结果
     let v3Data: V3RoutePlan | null = null;
     let v3Error: any = null;
+    // 判断是否真正查询了 V3（而不是 skip）
+    const v3Queried = !skipV3 && hasSmartRouterSupport;
     if (v3Result.status === 'fulfilled' && v3Result.value) {
       v3Data = v3Result.value;
       logger.debug(`${channelLabel} V3 路径成功，输出: ${v3Data.amountOut.toString()}`);
     } else if (v3Result.status === 'rejected') {
       v3Error = v3Result.reason;
-      logger.debug(`${channelLabel} V3 路径失败: ${v3Error?.message || v3Error}`);
+      if (v3Queried) {
+        logger.debug(`${channelLabel} V3 路径失败: ${v3Error?.message || v3Error}`);
+      }
     }
 
     // 比较 V2 和 V3 的输出，选择最优的
@@ -2933,21 +2961,68 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
       }
     } else if (v2Data) {
-      // V2 成功，V3 失败
-      updateRouteFailureStatus(tokenAddress, direction, { v2Failed: false, v3Failed: true });
-      // 更新路由加载时间
+      // V2 成功
+      // 只有在真正查询了 V3 且失败时，才标记 v3Failed
+      updateRouteFailureStatus(tokenAddress, direction, {
+        v2Failed: false,
+        v3Failed: v3Queried && !v3Data  // 只有查询了 V3 且失败时才标记
+      });
       updateRouteLoadingStatus(tokenAddress, direction, 'success');
-      logger.info(`${channelLabel} ✅ 只有 V2 路径可用`);
+      logger.info(`${channelLabel} ✅ 使用 V2 路径`);
       logger.perf(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
     } else if (v3Data) {
-      // V3 成功，V2 失败
-      updateRouteFailureStatus(tokenAddress, direction, { v2Failed: true, v3Failed: false });
-      // 更新路由加载时间
+      // V3 成功
+      // 只有在真正查询了 V2 且失败时，才标记 v2Failed
+      updateRouteFailureStatus(tokenAddress, direction, {
+        v2Failed: v2Queried && !v2Data,  // 只有查询了 V2 且失败时才标记
+        v3Failed: false
+      });
       updateRouteLoadingStatus(tokenAddress, direction, 'success');
-      logger.info(`${channelLabel} ✅ 只有 V3 路径可用`);
+      logger.info(`${channelLabel} ✅ 使用 V3 路径`);
       logger.perf(`${channelLabel} ⏱️ 路由查询总耗时: ${Date.now() - startTime}ms`);
       return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
+    }
+
+    // 🚀 性能优化：如果只查询了一个版本且失败，尝试另一个版本
+    if (!v2Data && !v3Data) {
+      // 如果只查询了 V2 且失败，尝试 V3
+      if (v2Queried && !v3Queried && hasSmartRouterSupport) {
+        logger.warn(`${channelLabel} ⚠️ V2 查询失败，尝试 fallback 到 V3...`);
+        try {
+          const fallbackStart = Date.now();
+          let v3Route = await reuseV3RouteFromHint(direction, publicClient, tokenAddress, amountIn, hint);
+          if (!v3Route) {
+            v3Route = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
+          }
+          if (v3Route && v3Route.amountOut > 0n) {
+            logger.info(`${channelLabel} ✅ V3 fallback 成功，耗时: ${Date.now() - fallbackStart}ms`);
+            updateRouteFailureStatus(tokenAddress, direction, { v2Failed: true, v3Failed: false });
+            updateRouteLoadingStatus(tokenAddress, direction, 'success');
+            return { kind: 'v3', route: v3Route, amountOut: v3Route.amountOut };
+          }
+        } catch (fallbackError) {
+          logger.debug(`${channelLabel} V3 fallback 失败: ${fallbackError?.message || fallbackError}`);
+          v3Error = fallbackError;
+        }
+      }
+      // 如果只查询了 V3 且失败，尝试 V2
+      else if (v3Queried && !v2Queried) {
+        logger.warn(`${channelLabel} ⚠️ V3 查询失败，尝试 fallback 到 V2...`);
+        try {
+          const fallbackStart = Date.now();
+          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, preferredV2Path, quoteToken, routeInfo);
+          if (result && result.amountOut > 0n) {
+            logger.info(`${channelLabel} ✅ V2 fallback 成功，耗时: ${Date.now() - fallbackStart}ms`);
+            updateRouteFailureStatus(tokenAddress, direction, { v2Failed: false, v3Failed: true });
+            updateRouteLoadingStatus(tokenAddress, direction, 'success');
+            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+          }
+        } catch (fallbackError) {
+          logger.debug(`${channelLabel} V2 fallback 失败: ${fallbackError?.message || fallbackError}`);
+          v2Error = fallbackError;
+        }
+      }
     }
 
     // V2 和 V3 都失败后，才检测混合路由
