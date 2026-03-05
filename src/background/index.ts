@@ -106,6 +106,11 @@ type NonceDiagnostics = {
 
 let lastNonceDiagnostics: NonceDiagnostics | null = null;
 let managedNonceCursor: number | null = null;
+let lastNonceSyncTime: number = 0;
+let nonceSyncTimer: ReturnType<typeof setInterval> | null = null;
+let isTransactionInProgress: boolean = false;
+const NONCE_SYNC_INTERVAL = 60000; // 1 分钟
+
 type AsyncMutex = {
   runExclusive<T>(task: () => Promise<T>): Promise<T>;
 };
@@ -1248,22 +1253,28 @@ function ensureWalletNonceManager() {
     walletNonceManager = createNonceManager({
       source: {
         async get({ address }) {
-          // 使用自定义的 nonce 缓存，避免每次查询链上 nonce
+          // 优先使用本地缓存的 nonce，避免查询链上
           if (managedNonceCursor === null) {
-            if (!publicClient) {
-              await createClients();
-            }
-            const nonce = await publicClient.getTransactionCount({
-              address,
-              blockTag: 'pending'
-            });
-            managedNonceCursor = Number(nonce);
-            logger.debug(`[NonceManager] 首次查询链上 nonce: ${managedNonceCursor}`);
+            // 首次启动，尝试从 storage 恢复
+            await restoreNonceFromStorage();
+          }
+
+          if (managedNonceCursor === null) {
+            // storage 中也没有，初始化为 0
+            managedNonceCursor = 0;
+            logger.debug('[NonceManager] 初始化 nonce = 0');
           } else {
             logger.debug(`[NonceManager] 使用缓存的 nonce: ${managedNonceCursor}`);
           }
+
           const reserved = managedNonceCursor;
           managedNonceCursor += 1;
+
+          // 异步保存到 storage（不阻塞）
+          saveNonceToStorage(managedNonceCursor).catch(err =>
+            logger.debug('[NonceManager] 保存 nonce 失败:', err?.message)
+          );
+
           return reserved;
         },
         set() {}
@@ -1273,6 +1284,117 @@ function ensureWalletNonceManager() {
   return walletNonceManager;
 }
 
+/**
+ * 从 storage 恢复 nonce
+ */
+async function restoreNonceFromStorage() {
+  if (!walletAccount?.address) {
+    return;
+  }
+
+  try {
+    const key = `nonce_${walletAccount.address.toLowerCase()}`;
+    const result = await chrome.storage.local.get(key);
+    if (result[key] !== undefined) {
+      managedNonceCursor = Number(result[key]);
+      logger.debug(`[NonceManager] 从 storage 恢复 nonce: ${managedNonceCursor}`);
+    }
+  } catch (error) {
+    logger.debug('[NonceManager] 恢复 nonce 失败:', error?.message);
+  }
+}
+
+/**
+ * 保存 nonce 到 storage
+ */
+async function saveNonceToStorage(nonce: number) {
+  if (!walletAccount?.address) {
+    return;
+  }
+
+  try {
+    const key = `nonce_${walletAccount.address.toLowerCase()}`;
+    await chrome.storage.local.set({ [key]: nonce });
+  } catch (error) {
+    logger.debug('[NonceManager] 保存 nonce 失败:', error?.message);
+  }
+}
+
+/**
+ * 定期同步链上 nonce（每分钟一次）
+ */
+async function periodicNonceSync() {
+  // 如果正在交易中，延迟同步
+  if (isTransactionInProgress) {
+    logger.debug('[NonceManager] 交易进行中，延迟同步 nonce');
+    return;
+  }
+
+  // 检查是否到了同步时间
+  const now = Date.now();
+  if (now - lastNonceSyncTime < NONCE_SYNC_INTERVAL) {
+    return;
+  }
+
+  if (!walletAccount?.address || !publicClient) {
+    return;
+  }
+
+  try {
+    const chainNonce = await publicClient.getTransactionCount({
+      address: walletAccount.address,
+      blockTag: 'pending'
+    });
+    const nonce = Number(chainNonce);
+
+    // 只有链上 nonce 更大时才更新
+    if (managedNonceCursor === null || nonce > managedNonceCursor) {
+      const oldNonce = managedNonceCursor;
+      managedNonceCursor = nonce;
+      lastNonceSyncTime = now;
+
+      // 保存到 storage
+      await saveNonceToStorage(nonce);
+
+      logger.debug(`[NonceManager] 定期同步 nonce: ${oldNonce} -> ${nonce}`);
+    } else {
+      lastNonceSyncTime = now;
+      logger.debug(`[NonceManager] 定期同步检查，本地 nonce (${managedNonceCursor}) >= 链上 nonce (${nonce})`);
+    }
+  } catch (error) {
+    logger.debug('[NonceManager] 定期同步 nonce 失败:', error?.message);
+  }
+}
+
+/**
+ * 启动 nonce 定期同步定时器
+ */
+function startNonceSyncTimer() {
+  if (nonceSyncTimer) {
+    return;
+  }
+
+  // 每分钟执行一次同步检查
+  nonceSyncTimer = setInterval(() => {
+    periodicNonceSync().catch(err =>
+      logger.debug('[NonceManager] 定期同步出错:', err?.message)
+    );
+  }, NONCE_SYNC_INTERVAL);
+
+  logger.debug('[NonceManager] 启动定期同步定时器');
+}
+
+/**
+ * 停止 nonce 定期同步定时器
+ */
+function stopNonceSyncTimer() {
+  if (nonceSyncTimer) {
+    clearInterval(nonceSyncTimer);
+    nonceSyncTimer = null;
+    logger.debug('[NonceManager] 停止定期同步定时器');
+  }
+}
+
 function resetWalletNonce(reason = '') {
   if (!walletNonceManager || !walletAccount || !chainConfig) {
     return;
@@ -1280,6 +1402,14 @@ function resetWalletNonce(reason = '') {
   try {
     walletNonceManager.reset({ address: walletAccount.address, chainId: chainConfig.id });
     managedNonceCursor = null;
+    lastNonceSyncTime = 0;
+
+    // 清除 storage 中的 nonce
+    const key = `nonce_${walletAccount.address.toLowerCase()}`;
+    chrome.storage.local.remove(key).catch(err =>
+      logger.debug('[NonceManager] 清除 storage nonce 失败:', err?.message)
+    );
+
     logger.debug(`[NonceManager] 已重置 nonce${reason ? ` (${reason})` : ''}`);
   } catch (error) {
     logger.warn('[NonceManager] 重置失败:', error?.message || error);
@@ -1330,6 +1460,9 @@ async function diagnoseNonceMismatch(reason = ''): Promise<NonceDiagnostics | nu
   }
 }
 
+/**
+ * 同步链上 nonce（仅在 nonce 错误时强制调用）
+ */
 async function syncManagedNonce(reason = '') {
   if (!walletAccount?.address) {
     throw new Error('钱包未加载，无法同步 nonce');
@@ -1340,15 +1473,23 @@ async function syncManagedNonce(reason = '') {
   if (!publicClient) {
     throw new Error('RPC 未就绪，无法同步 nonce');
   }
+
   const pending = Number(
     await publicClient.getTransactionCount({
       address: walletAccount.address,
       blockTag: 'pending'
     })
   );
+
   if (managedNonceCursor === null || pending > managedNonceCursor) {
     managedNonceCursor = pending;
   }
+
+  lastNonceSyncTime = Date.now();
+
+  // 保存到 storage
+  await saveNonceToStorage(managedNonceCursor);
+
   if (reason) {
     logger.debug(`[NonceManager] 已同步链上 nonce=${pending} (${reason})`);
   }
@@ -1394,48 +1535,52 @@ async function executeWithNonceRetry(task: (nonce: number) => Promise<any>, cont
   const fnStart = perf.now();
   logger.debug(`[NonceRetry] 开始执行 (context: ${context})`);
 
-  const MAX_ATTEMPTS = 3;
-  let lastError;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const attemptStart = perf.now();
-    logger.debug(`[NonceRetry] 尝试 ${attempt + 1}/${MAX_ATTEMPTS}`);
+  // 标记交易进行中，防止定期同步干扰
+  isTransactionInProgress = true;
 
-    const reservedNonce = await reserveManagedNonce(`${context}_attempt_${attempt + 1}`);
-    logger.debug(`[NonceRetry] 预留 nonce: ${reservedNonce} (${perf.measure(attemptStart).toFixed(2)}ms)`);
+  try {
+    const MAX_ATTEMPTS = 3;
+    let lastError;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const attemptStart = perf.now();
+      logger.debug(`[NonceRetry] 尝试 ${attempt + 1}/${MAX_ATTEMPTS}`);
 
-    try {
-      const taskStart = perf.now();
-      const result = await task(reservedNonce);
-      logger.debug(`[NonceRetry] ✅ 任务执行成功 (${perf.measure(taskStart).toFixed(2)}ms)`);
-      logger.debug(`[NonceRetry] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
-      return result;
-    } catch (error) {
-      lastError = error;
-      logger.debug(`[NonceRetry] ❌ 任务执行失败 (${perf.measure(attemptStart).toFixed(2)}ms)`);
+      const reservedNonce = await reserveManagedNonce(`${context}_attempt_${attempt + 1}`);
+      logger.debug(`[NonceRetry] 预留 nonce: ${reservedNonce} (${perf.measure(attemptStart).toFixed(2)}ms)`);
 
-      const message = (error?.shortMessage || error?.message || String(error) || '').toLowerCase();
-      const isNonceIssue =
-        isNonceRelatedError(error) || message.includes('missing or invalid parameters');
+      try {
+        const taskStart = perf.now();
+        const result = await task(reservedNonce);
+        logger.debug(`[NonceRetry] ✅ 任务执行成功 (${perf.measure(taskStart).toFixed(2)}ms)`);
+        logger.debug(`[NonceRetry] ✅ 总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
+        return result;
+      } catch (error) {
+        lastError = error;
+        logger.debug(`[NonceRetry] ❌ 任务执行失败 (${perf.measure(attemptStart).toFixed(2)}ms)`);
 
-      if (isNonceIssue) {
-        logger.warn(
-          `[${context}] 检测到 nonce 不一致 (attempt ${attempt + 1}/${MAX_ATTEMPTS})，重置 nonce 并重新同步`
-        );
-        logger.debug(`[NonceRetry] 错误信息: ${message.slice(0, 200)}`);
+        const message = (error?.shortMessage || error?.message || String(error) || '').toLowerCase();
+        const isNonceIssue =
+          isNonceRelatedError(error) || message.includes('missing or invalid parameters');
 
-        const resetStart = perf.now();
-        resetWalletNonce(`${context}_gapped_nonce`);
-        await diagnoseNonceMismatch(`${context}_attempt_${attempt + 1}`);
-        logger.debug(`[NonceRetry] Nonce 重置完成 (${perf.measure(resetStart).toFixed(2)}ms)`);
+        if (isNonceIssue) {
+          logger.warn(
+            `[${context}] 检测到 nonce 不一致 (attempt ${attempt + 1}/${MAX_ATTEMPTS})，重置 nonce 并重新同步`
+          );
+          logger.debug(`[NonceRetry] 错误信息: ${message.slice(0, 200)}`);
 
-        if (attempt < MAX_ATTEMPTS - 1) {
-          const syncStart = perf.now();
-          await syncManagedNonce(`${context}_retry_${attempt + 1}`);
-          logger.debug(`[NonceRetry] Nonce 同步完成 (${perf.measure(syncStart).toFixed(2)}ms)`);
+          const resetStart = perf.now();
+          resetWalletNonce(`${context}_gapped_nonce`);
+          await diagnoseNonceMismatch(`${context}_attempt_${attempt + 1}`);
+          logger.debug(`[NonceRetry] Nonce 重置完成 (${perf.measure(resetStart).toFixed(2)}ms)`);
 
-          // nonce 不一致一般与节点连通性无关，无需切换节点
-          const clientStart = perf.now();
-          await createClients(false);
+          if (attempt < MAX_ATTEMPTS - 1) {
+            const syncStart = perf.now();
+            await syncManagedNonce(`${context}_retry_${attempt + 1}`);
+            logger.debug(`[NonceRetry] Nonce 同步完成 (${perf.measure(syncStart).toFixed(2)}ms)`);
+
+            // nonce 不一致一般与节点连通性无关，无需切换节点
+            const clientStart = perf.now();
+            await createClients(false);
           logger.debug(`[NonceRetry] 客户端重建完成 (${perf.measure(clientStart).toFixed(2)}ms)`);
 
           logger.debug(`[NonceRetry] 准备重试...`);
@@ -1452,6 +1597,10 @@ async function executeWithNonceRetry(task: (nonce: number) => Promise<any>, cont
   }
   logger.debug(`[NonceRetry] ❌ 所有尝试失败，总耗时: ${perf.measure(fnStart).toFixed(2)}ms`);
   throw lastError;
+  } finally {
+    // 交易完成，恢复定期同步
+    isTransactionInProgress = false;
+  }
 }
 
 function createRpcRequestId() {
@@ -2264,6 +2413,9 @@ async function createWalletClientInstance() {
 
   // 初始化批量查询处理器
   initializeBatchQueryHandlers();
+
+  // 启动 nonce 定期同步定时器
+  startNonceSyncTimer();
 }
 
 /**
@@ -2947,6 +3099,13 @@ async function handleLockWallet() {
     walletAccount = null;
     walletPrivateKey = null;
     walletNonceManager = null;
+    managedNonceCursor = null;
+    lastNonceSyncTime = 0;
+    isTransactionInProgress = false;
+
+    // 停止 nonce 定期同步定时器
+    stopNonceSyncTimer();
+
     await updateWalletCache({ walletLocked: true });
     logger.debug('[Background] Wallet locked');
 
