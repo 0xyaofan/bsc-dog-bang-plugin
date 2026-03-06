@@ -19,9 +19,17 @@ import { calculatePriceImpact, calculateMinAmountOut } from './pancake-sdk-utils
 import { perf } from './performance.js';
 
 // ========== 路径缓存（优化4：减少 getAmountsOut 调用）==========
-// 注意：此缓存存储的是兑换金额（价格敏感数据），必须保持短期缓存以反映市场价格变化
+// 注意：此缓存存储的是兑换金额（价格敏感数据），需要平衡新鲜度和性能
+// TTL 设置考虑：
+// - 太短（1-2秒）：预加载的缓存在用户交易前就过期，无法复用
+// - 太长（10秒+）：价格可能过时，滑点保护不准确（尤其是波动剧烈的代币）
+// - 折中（3-5秒）：给用户足够时间完成交易，同时保证价格相对新鲜
 const pathCache = new Map<string, { time: number; amountOut: bigint }>();
-const PATH_CACHE_TTL = 1200; // 1.2秒缓存（balance between freshness and performance）
+const PATH_CACHE_TTL = 3000; // 3秒缓存（从 1.2s 延长，提升预加载缓存复用率）
+
+// V3 路由查询缓存（与 V2 使用相同的 TTL）
+const v3QuoteCache = new Map<string, { time: number; amountOut: bigint }>();
+const V3_QUOTE_CACHE_TTL = PATH_CACHE_TTL;
 const GWEI_DECIMALS = 9;
 const RPC_CACHE_TTL = 1500;
 
@@ -974,10 +982,13 @@ function getCachedPathAmount(path, amountIn) {
   const key = getPathCacheKey(path, amountIn);
   const cached = pathCache.get(key);
   if (cached && Date.now() - cached.time < PATH_CACHE_TTL) {
-    logger.debug(`[Path Cache] 缓存命中: ${path.map(a => a.slice(0, 6)).join(' -> ')}`);
+    const cacheAge = Math.floor((Date.now() - cached.time) / 1000 * 10) / 10; // 保留1位小数
+    logger.info(`[Path Cache] ⚡ 缓存命中（${cacheAge}秒前）: ${path.map(a => a.slice(0, 6)).join(' -> ')}`);
     return cached.amountOut;
   }
   if (cached) {
+    const cacheAge = Math.floor((Date.now() - cached.time) / 1000 * 10) / 10;
+    logger.debug(`[Path Cache] 缓存过期（${cacheAge}秒前，TTL=${PATH_CACHE_TTL}ms）`);
     pathCache.delete(key);
   }
   return null;
@@ -991,7 +1002,36 @@ function setPathCache(path, amountIn, amountOut) {
   });
 }
 
+// V3 缓存辅助函数
+function getV3QuoteCacheKey(tokens: string[], fees: number[], amountIn: bigint): string {
+  return `${tokens.join('-')}-${fees.join('-')}-${amountIn.toString()}`;
+}
+
+function getCachedV3Quote(tokens: string[], fees: number[], amountIn: bigint) {
+  const key = getV3QuoteCacheKey(tokens, fees, amountIn);
+  const cached = v3QuoteCache.get(key);
+  if (cached && Date.now() - cached.time < V3_QUOTE_CACHE_TTL) {
+    const cacheAge = Math.floor((Date.now() - cached.time) / 1000 * 10) / 10;
+    logger.info(`[V3 Quote Cache] ⚡ 缓存命中（${cacheAge}秒前）: ${tokens.map(a => a.slice(0, 6)).join(' -> ')}`);
+    return cached.amountOut;
+  }
+  if (cached) {
+    const cacheAge = Math.floor((Date.now() - cached.time) / 1000 * 10) / 10;
+    logger.debug(`[V3 Quote Cache] 缓存过期（${cacheAge}秒前，TTL=${V3_QUOTE_CACHE_TTL}ms）`);
+    v3QuoteCache.delete(key);
+  }
+  return null;
+}
+
+function setV3QuoteCache(tokens: string[], fees: number[], amountIn: bigint, amountOut: bigint) {
+  v3QuoteCache.set(getV3QuoteCacheKey(tokens, fees, amountIn), {
+    time: Date.now(),
+    amountOut
+  });
+}
+
 async function fetchPathAmounts(publicClient, amountIn, paths, routerAddress, routerAbi, channelLabel = '[Router]') {
+  const startTime = Date.now();
   const resolved = new Map<number, bigint>();
   const pending = [];
 
@@ -1005,10 +1045,15 @@ async function fetchPathAmounts(publicClient, amountIn, paths, routerAddress, ro
   });
 
   if (pending.length === 0) {
+    logger.perf(`${channelLabel} ⚡ 全部使用缓存，耗时: ${Date.now() - startTime}ms`);
     return paths.map((path, index) => ({
       path,
       amountOut: resolved.get(index)
     })).filter(item => item.amountOut !== undefined);
+  }
+
+  if (resolved.size > 0) {
+    logger.debug(`${channelLabel} 部分使用缓存: ${resolved.size}/${paths.length} 条路径`);
   }
 
   const runFallback = async (items) => {
@@ -2594,6 +2639,19 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       normalizedPath.push(checksum);
     }
 
+    // 检查缓存
+    const cachedAmountOut = getCachedV3Quote(normalizedPath, hintFees, amountIn);
+    if (cachedAmountOut !== null) {
+      logger.perf(`${channelLabel} ✅ V3 使用缓存，跳过 RPC 查询`);
+      const encodedPath = normalizedPath.length > 2 ? encodeV3Path(normalizedPath, hintFees) : undefined;
+      return {
+        tokens: normalizedPath,
+        fees: hintFees,
+        amountOut: cachedAmountOut,
+        encodedPath
+      };
+    }
+
     try {
       if (normalizedPath.length === 2) {
         const result = await publicClient.readContract({
@@ -2611,6 +2669,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         const amountOut = extractFirstBigInt(result);
         if (amountOut > 0n) {
           logger.debug(`${channelLabel} 复用 V3 单跳路径`);
+          setV3QuoteCache(normalizedPath, hintFees, amountIn, amountOut);
           return {
             tokens: normalizedPath,
             fees: hintFees,
@@ -2628,6 +2687,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
         const amountOut = extractFirstBigInt(result);
         if (amountOut > 0n) {
           logger.debug(`${channelLabel} 复用 V3 多跳路径`);
+          setV3QuoteCache(normalizedPath, hintFees, amountIn, amountOut);
           return {
             tokens: normalizedPath,
             fees: hintFees,
