@@ -1879,32 +1879,40 @@ async function handleSell(tokenAddress) {
         }
       });
 
-      // 卖出成功后立即刷新必要信息
+      // 卖出成功后立即更新余额显示
       const is100PercentSell = parseFloat(percent) === 100;
       const previousBalance = currentTokenInfo?.balance || '0';
-      loadWalletStatus();  // 刷新 BNB 余额（卖出获得了 BNB）
-      // 🐛 优化：不需要立即调用 loadTokenInfo，因为：
-      // 1. 代币信息（符号、精度等）在页面加载时已获取，不会变化
-      // 2. 交易刚提交，链上可能还未确认，余额查不到新值
-      // 3. startFastPolling 会每秒轮询，等待余额变化
-      // 4. 100% 卖出会在下面直接清零余额显示
-      loadTokenRoute(tokenAddress, { force: true });  // 刷新路由缓存（卖出后可能影响流动性）
 
-      // 启动快速轮询，快速检测余额变化（100%卖出除外，因为会直接清零）
-      if (!is100PercentSell) {
-        startFastPolling(tokenAddress, previousBalance);
+      // 🚀 性能优化：立即计算并显示预期余额，无需等待链上确认
+      const tokenBalanceEl = document.getElementById('token-balance');
+      if (tokenBalanceEl) {
+        if (is100PercentSell) {
+          // 100% 卖出，立即清零
+          tokenBalanceEl.textContent = '0.00';
+          logger.debug('[SidePanel] 100% 卖出，余额立即清零');
+        } else {
+          // 部分卖出，立即计算预期余额
+          try {
+            const currentBalance = parseFloat(previousBalance);
+            const sellPercent = parseFloat(percent);
+            if (!isNaN(currentBalance) && !isNaN(sellPercent) && currentBalance > 0) {
+              const remainingPercent = 100 - sellPercent;
+              const expectedBalance = (currentBalance * remainingPercent / 100).toFixed(2);
+              tokenBalanceEl.textContent = expectedBalance;
+              logger.debug(`[SidePanel] ${sellPercent}% 卖出，预期余额: ${expectedBalance}`);
+            }
+          } catch (err) {
+            logger.debug('[SidePanel] 计算预期余额失败:', err);
+          }
+        }
       }
 
-      // 特别处理：100% 卖出成功后直接清零余额
-      // 使用 setTimeout 确保在刷新完成后设置
-      if (is100PercentSell) {
-        setTimeout(() => {
-          const tokenBalanceEl = document.getElementById('token-balance');
-          if (tokenBalanceEl) {
-            tokenBalanceEl.textContent = '0.00';
-            logger.debug('[SidePanel] 100% 卖出，余额已清零');
-          }
-        }, 100); // 等待刷新函数执行
+      loadWalletStatus();  // 刷新 BNB 余额（卖出获得了 BNB）
+      loadTokenRoute(tokenAddress, { force: true });  // 刷新路由缓存（卖出后可能影响流动性）
+
+      // 启动快速轮询，等待链上确认后更新真实余额
+      if (!is100PercentSell) {
+        startFastPolling(tokenAddress, previousBalance);
       }
 
       timer.step('处理成功响应和通知');
@@ -3076,23 +3084,37 @@ function attachFloatingWindowEvents(floatingWindow: HTMLElement, state: Floating
             logger.debug('[Floating Window] 卖出成功');
             isSuccess = true;
 
-            // 卖出成功后立即刷新余额
+            // 卖出成功后立即更新余额显示
             const is100PercentSell = parseFloat(amount) === 100;
             const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
             const previousBalance = tokenBalanceEl?.textContent?.trim() || '0';
 
-            updateFloatingBalances().catch(err => {
-              logger.debug('[Floating Window] 刷新余额失败:', err);
-            }).finally(() => {
-              // 特别处理：100% 卖出成功后直接清零余额
-              // 在刷新完成后设置，确保不会被查询结果覆盖
+            // 🚀 性能优化：立即计算并显示预期余额，无需等待链上确认
+            if (tokenBalanceEl) {
               if (is100PercentSell) {
-                const tokenBalanceEl = floatingWindow.querySelector('#floating-token-balance');
-                if (tokenBalanceEl) {
-                  tokenBalanceEl.textContent = '0.00';
-                  logger.debug('[Floating Window] 100% 卖出，余额已清零');
+                // 100% 卖出，立即清零
+                tokenBalanceEl.textContent = '0.00';
+                logger.debug('[Floating Window] 100% 卖出，余额立即清零');
+              } else {
+                // 部分卖出，立即计算预期余额
+                try {
+                  const currentBalance = parseFloat(previousBalance);
+                  const sellPercent = parseFloat(amount);
+                  if (!isNaN(currentBalance) && !isNaN(sellPercent) && currentBalance > 0) {
+                    const remainingPercent = 100 - sellPercent;
+                    const expectedBalance = (currentBalance * remainingPercent / 100).toFixed(2);
+                    tokenBalanceEl.textContent = expectedBalance;
+                    logger.debug(`[Floating Window] ${sellPercent}% 卖出，预期余额: ${expectedBalance}`);
+                  }
+                } catch (err) {
+                  logger.debug('[Floating Window] 计算预期余额失败:', err);
                 }
               }
+            }
+
+            // 后台刷新真实余额（等待链上确认）
+            updateFloatingBalances().catch(err => {
+              logger.debug('[Floating Window] 刷新余额失败:', err);
             });
 
             // 启动快速轮询，快速检测余额变化（100%卖出除外，因为会直接清零）
