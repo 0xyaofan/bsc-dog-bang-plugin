@@ -3357,10 +3357,35 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       let v2AllowanceFromCache: bigint | null = null;
       let v3AllowanceFromCache: bigint | null = null;
 
-      // 🐛 修复：根据路由元数据中的版本信息决定查询哪个授权
-      const pancakeVersion = routeInfo?.metadata?.pancakeVersion || 'v2';
-      const shouldSkipV2 = pancakeVersion === 'v3'; // V3 pool 不需要查询 V2 授权
-      const shouldSkipV3 = pancakeVersion === 'v2'; // V2 pool 不需要查询 V3 授权
+      // 🚀 性能优化：根据路由缓存判断需要查询哪个授权
+      // 如果已知使用 V2，只查询 V2 授权；如果已知使用 V3，只查询 V3 授权
+      const hint = getTokenTradeHint(tokenAddress);
+      const hasSellCache = isRouteCacheValid(hint, 'sell');
+      const knownMode = hasSellCache ? hint?.lastMode : null;
+
+      // 决定是否跳过 V2/V3 授权查询
+      let shouldSkipV2 = false;
+      let shouldSkipV3 = false;
+
+      if (knownMode === 'v2') {
+        // 已知使用 V2，跳过 V3 授权查询
+        shouldSkipV3 = true;
+        logger.debug(`${channelLabel} ⚡ 已知使用 V2，跳过 V3 授权查询`);
+      } else if (knownMode === 'v3') {
+        // 已知使用 V3，跳过 V2 授权查询
+        shouldSkipV2 = true;
+        logger.debug(`${channelLabel} ⚡ 已知使用 V3，跳过 V2 授权查询`);
+      } else {
+        // 没有缓存，根据 routeInfo.metadata 决定
+        const pancakeVersion = routeInfo?.metadata?.pancakeVersion;
+        if (pancakeVersion === 'v3') {
+          shouldSkipV2 = true;
+          logger.debug(`${channelLabel} routeInfo 指示 V3 pool，跳过 V2 授权查询`);
+        } else if (pancakeVersion === 'v2') {
+          shouldSkipV3 = true;
+          logger.debug(`${channelLabel} routeInfo 指示 V2 pool，跳过 V3 授权查询`);
+        }
+      }
 
       if (tokenInfo && tokenInfo.allowances) {
         // tokenInfo 包含授权信息，直接使用
@@ -3435,13 +3460,6 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
           })()
         : Promise.resolve(v3AllowanceFromCache);
 
-      if (shouldSkipV2 && v2AllowanceFromCache === null) {
-        logger.debug(`${channelLabel} 使用 V3 pool，跳过 V2 授权查询`);
-      }
-      if (shouldSkipV3 && v3AllowanceFromCache === null) {
-        logger.debug(`${channelLabel} 使用 V2 pool，跳过 V3 授权查询`);
-      }
-
       // 🚀 性能优化：检查授权是否正在进行中（修复问题2）
       // 如果买入时并发授权还在 pending，卖出需要等待授权完成
       stepStart = perf.now();
@@ -3467,9 +3485,7 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
 
       // 5.3.2: 并发查询路由和授权
       stepStart = perf.now();
-      // 🚀 性能优化：检查是否有有效的卖出路由缓存
-      const hint = getTokenTradeHint(tokenAddress);
-      const hasSellCache = isRouteCacheValid(hint, 'sell');
+      // hint 已在前面获取，hasSellCache 也已计算
 
       // 如果有缓存且预估精度高，直接使用实际金额查询（会复用缓存）
       // 如果没有缓存或预估精度低，先用预估金额并发查询
