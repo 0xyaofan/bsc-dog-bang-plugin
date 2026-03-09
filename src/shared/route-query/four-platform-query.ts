@@ -234,9 +234,9 @@ export class FourPlatformQuery extends BasePlatformQuery {
         }) as string;
       });
 
-      // 如果返回非零地址，优先检查 V2 流动性
+      // 如果返回非零地址，优先使用 V2（Four.meme helper 返回的是迁移时创建的 pair）
       if (pairAddress && !this.isZeroAddress(pairAddress)) {
-        structuredLogger.debug('[FourQuery] Four.meme helper 返回 V2 pair 地址，检查流动性', {
+        structuredLogger.debug('[FourQuery] Four.meme helper 返回 V2 pair 地址，优先使用 V2', {
           tokenAddress,
           pairAddress
         });
@@ -264,13 +264,19 @@ export class FourPlatformQuery extends BasePlatformQuery {
             version: 'v2'
           };
         } else {
-          structuredLogger.warn('[FourQuery] V2 pair 流动性不足，重新比较 V2 和 V3', {
+          // 🚨 修复：V2 流动性不足时，仍返回 V2（信任 Four.meme helper）
+          // Four.meme helper 返回的是迁移时创建的 pair，应该优先使用
+          structuredLogger.warn('[FourQuery] V2 pair 流动性不足，但仍使用 V2（信任 Four.meme helper）', {
             tokenAddress,
             pairAddress,
             quoteToken
           });
-          // V2 流动性不足，通过 Factory 重新查找并比较 V2 和 V3
-          return await this.checkPancakeFallback(tokenAddress, quoteToken);
+          return {
+            hasLiquidity: true,
+            quoteToken,
+            pairAddress,
+            version: 'v2'
+          };
         }
       }
 

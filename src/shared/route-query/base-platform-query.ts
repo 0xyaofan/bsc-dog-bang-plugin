@@ -148,23 +148,14 @@ export abstract class BasePlatformQuery {
 
   /**
    * 解析 Pancake 推荐模式
+   *
+   * 🚨 修复：不再根据 quoteToken 类型推荐版本
+   * 推荐模式应该由实际找到的 pair 版本决定，而不是 quoteToken 类型
+   * Four.meme 代币可能使用 USD1/BUSD 等稳定币筹集，但迁移后创建的是 V2 pair
    */
   protected resolvePancakePreferredMode(quoteToken?: string | null): 'v2' | 'v3' | undefined {
-    if (!quoteToken) {
-      return undefined;
-    }
-
-    const normalized = quoteToken.toLowerCase();
-
-    // 从 CONTRACTS 获取 WBNB 地址
-    const wbnb = CONTRACTS.WBNB?.toLowerCase();
-
-    if (!normalized || !wbnb) {
-      return undefined;
-    }
-
-    // 如果不是 WBNB，推荐使用 V3
-    return normalized === wbnb ? undefined : 'v3';
+    // 移除基于 quoteToken 类型的推荐逻辑
+    return undefined;
   }
 
   /**
