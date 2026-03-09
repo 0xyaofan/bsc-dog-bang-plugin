@@ -269,6 +269,11 @@ export abstract class BasePlatformQuery {
       // 检查是否是 Service Worker 错误
       const swError = toServiceWorkerError(error, operation);
       if (swError) {
+        // 立即抛出，不等待
+        structuredLogger.warn('[BasePlatformQuery] Service Worker 限制，快速失败', {
+          operation,
+          platform: this.platform
+        });
         throw swError;
       }
 

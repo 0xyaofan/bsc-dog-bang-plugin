@@ -1685,38 +1685,64 @@ async function ensureTokenMetadata(
       await createClients();
     }
 
-    const fetched = await executeWithRetry(async () => {
-      // 使用 MultiCall 批量查询元数据，减少 RPC 调用
-      const contracts = missingFields.map((field) => {
-        return {
-          address: tokenAddress,
-          abi: ERC20_ABI,
-          functionName: field
-        };
+    try {
+      const fetched = await executeWithRetry(async () => {
+        // 使用 MultiCall 批量查询元数据，减少 RPC 调用
+        const contracts = missingFields.map((field) => {
+          return {
+            address: tokenAddress,
+            abi: ERC20_ABI,
+            functionName: field
+          };
+        });
+
+        const results = await publicClient.multicall({ contracts });
+
+        const data: Partial<TokenMetadata> = {};
+        missingFields.forEach((field, index) => {
+          const result = results[index];
+          if (result.status === 'failure') {
+            logger.warn(`[ensureTokenMetadata] Query ${field} failed:`, result.error);
+            return;
+          }
+          const value = result.result;
+          if (field === 'decimals') {
+            data.decimals = typeof value === 'number' ? value : Number(value);
+          } else if (field === 'symbol') {
+            data.symbol = value as string;
+          } else if (field === 'totalSupply') {
+            data.totalSupply = value as bigint;
+          }
+        });
+        return data;
       });
 
-      const results = await publicClient.multicall({ contracts });
-
-      const data: Partial<TokenMetadata> = {};
-      missingFields.forEach((field, index) => {
-        const result = results[index];
-        if (result.status === 'failure') {
-          logger.warn(`[ensureTokenMetadata] Query ${field} failed:`, result.error);
-          return;
+      cached = { ...cached, ...fetched };
+      writeTokenMetadataCache(tokenAddress, cached);
+    } catch (error: any) {
+      // 检查是否是 Service Worker 错误
+      const errorMsg = error?.message || '';
+      if (errorMsg.includes('import() is disallowed on ServiceWorkerGlobalScope')) {
+        logger.warn(`[ensureTokenMetadata] Service Worker 限制，使用默认值`, { tokenAddress });
+        // Service Worker 环境中，使用默认值并缓存，避免重复查询
+        const defaults: Partial<TokenMetadata> = {};
+        if (missingFields.includes('decimals')) {
+          defaults.decimals = 18; // 默认 18 位小数
         }
-        const value = result.result;
-        if (field === 'decimals') {
-          data.decimals = typeof value === 'number' ? value : Number(value);
-        } else if (field === 'symbol') {
-          data.symbol = value as string;
-        } else if (field === 'totalSupply') {
-          data.totalSupply = value as bigint;
+        if (missingFields.includes('symbol')) {
+          defaults.symbol = tokenAddress.slice(0, 6); // 使用地址前缀作为 symbol
         }
-      });
-      return data;
-    });
-
-    // 🚀 优化：合并数据并写入缓存，CacheManager 自动处理 TTL
+        if (missingFields.includes('totalSupply')) {
+          defaults.totalSupply = BigInt(0);
+        }
+        cached = { ...cached, ...defaults };
+        writeTokenMetadataCache(tokenAddress, cached);
+      } else {
+        // 其他错误继续抛出
+        throw error;
+      }
+    }
+  }
     cached = Object.assign({}, cached, fetched) as TokenMetadata;
     tokenMetadataCache.set(key, cached);
   }
