@@ -2727,103 +2727,49 @@ function createRouterChannel(definition: RouterChannelDefinition): TradingChanne
       logger.debug(`${channelLabel} RouteInfo: null/undefined`);
     }
 
-    // 🚀 Four.meme & Flap 优化：已迁移代币需要比较 V2 和 V3 价格
-    // 注意：pancakeVersion 只表示代币在哪个版本有池子，不代表哪个版本价格更好
+    // 🚀 Four.meme & Flap 优化：根据路由元数据中的版本信息选择 V2 或 V3
+    // 注意：BNB 筹集币种的 quoteToken 是 undefined，所以不检查 quoteToken
     if (routeInfo?.readyForPancake && (routeInfo?.platform === 'four' || routeInfo?.platform === 'flap')) {
       const platformName = routeInfo.platform === 'four' ? 'Four.meme' : 'Flap';
       const pancakeVersion = routeInfo.metadata?.pancakeVersion || 'v2'; // 默认 V2
 
-      logger.info(`${channelLabel} 🚀 ${platformName} 已迁移代币，检测到 ${pancakeVersion.toUpperCase()} 池，将比较 V2 和 V3 价格`);
+      logger.info(`${channelLabel} 🚀 ${platformName} 已迁移代币，使用 ${pancakeVersion.toUpperCase()} 路径`);
 
       try {
+        // 🐛 修复：根据路由元数据中的版本信息选择 V2 或 V3
         const effectiveQuoteToken = routeInfo.quoteToken || quoteToken;
 
-        // 🐛 修复：同时查询 V2 和 V3，比较价格后选择最优的
-        const [v2Result, v3Result] = await Promise.allSettled([
-          // V2 查询
-          (async () => {
-            try {
-              const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, effectiveQuoteToken, routeInfo);
-              if (result && result.amountOut > 0n) {
-                logger.debug(`${channelLabel} ${platformName} V2 查询成功，输出: ${result.amountOut.toString()}`);
-                return result;
-              }
-              return null;
-            } catch (err) {
-              logger.debug(`${channelLabel} ${platformName} V2 查询失败: ${err?.message || err}`);
-              throw err;
-            }
-          })(),
-          // V3 查询
-          hasSmartRouterSupport ? (async () => {
-            try {
-              const result = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
-              if (result && result.amountOut > 0n) {
-                logger.debug(`${channelLabel} ${platformName} V3 查询成功，输出: ${result.amountOut.toString()}`);
-                return result;
-              }
-              return null;
-            } catch (err) {
-              logger.debug(`${channelLabel} ${platformName} V3 查询失败: ${err?.message || err}`);
-              throw err;
-            }
-          })() : Promise.reject(new Error('V3 not supported'))
-        ]);
-
-        // 提取结果
-        const v2Data = v2Result.status === 'fulfilled' && v2Result.value ? v2Result.value : null;
-        const v3Data = v3Result.status === 'fulfilled' && v3Result.value ? v3Result.value : null;
-
-        // 比较 V2 和 V3，选择输出更多的（价格更好的）
-        if (v2Data && v3Data) {
-          if (v2Data.amountOut > v3Data.amountOut) {
-            const improvement = ((v2Data.amountOut - v3Data.amountOut) * 10000n / v3Data.amountOut);
-            logger.info(`${channelLabel} ✅ ${platformName} V2 价格更优 (比 V3 多 ${improvement.toString()}bps)，选择 V2`);
+        if (pancakeVersion === 'v3') {
+          // 使用 V3 路径
+          const result = await findBestV3Route(direction, publicClient, tokenAddress, amountIn);
+          if (result && result.amountOut > 0n) {
+            logger.perf(`${channelLabel} ✅ ${platformName} V3 路径成功，耗时: ${Date.now() - startTime}ms`);
             updateTokenTradeHint(tokenAddress, channelId, direction, {
-              routerAddress: contractAddress,
-              path: v2Data.path,
-              mode: 'v2'
-            });
-            updateRouteLoadingStatus(tokenAddress, direction, 'success');
-            return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
-          } else {
-            const improvement = ((v3Data.amountOut - v2Data.amountOut) * 10000n / v2Data.amountOut);
-            logger.info(`${channelLabel} ✅ ${platformName} V3 价格更优 (比 V2 多 ${improvement.toString()}bps)，选择 V3`);
-            updateTokenTradeHint(tokenAddress, channelId, direction, {
-              routerAddress: smartRouterAddress,
-              path: v3Data.tokens,
-              fees: v3Data.fees,
+              routerAddress: smartRouterAddress,  // 🐛 修复：V3 使用 Smart Router 地址
+              path: result.tokens,
+              fees: result.fees,
               mode: 'v3'
             });
             updateRouteLoadingStatus(tokenAddress, direction, 'success');
-            return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
+            return { kind: 'v3', route: result, amountOut: result.amountOut };
           }
-        } else if (v2Data) {
-          logger.info(`${channelLabel} ✅ ${platformName} 只有 V2 路径可用`);
-          updateTokenTradeHint(tokenAddress, channelId, direction, {
-            routerAddress: contractAddress,
-            path: v2Data.path,
-            mode: 'v2'
-          });
-          updateRouteLoadingStatus(tokenAddress, direction, 'success');
-          return { kind: 'v2', path: v2Data.path, amountOut: v2Data.amountOut };
-        } else if (v3Data) {
-          logger.info(`${channelLabel} ✅ ${platformName} 只有 V3 路径可用`);
-          updateTokenTradeHint(tokenAddress, channelId, direction, {
-            routerAddress: smartRouterAddress,
-            path: v3Data.tokens,
-            fees: v3Data.fees,
-            mode: 'v3'
-          });
-          updateRouteLoadingStatus(tokenAddress, direction, 'success');
-          return { kind: 'v3', route: v3Data, amountOut: v3Data.amountOut };
+        } else {
+          // 使用 V2 路径
+          const result = await findBestV2Path(direction, publicClient, tokenAddress, amountIn, undefined, effectiveQuoteToken, routeInfo);
+          if (result && result.amountOut > 0n) {
+            logger.perf(`${channelLabel} ✅ ${platformName} V2 路径成功，耗时: ${Date.now() - startTime}ms`);
+            updateTokenTradeHint(tokenAddress, channelId, direction, {
+              routerAddress: contractAddress,
+              path: result.path,
+              mode: 'v2'
+            });
+            updateRouteLoadingStatus(tokenAddress, direction, 'success');
+            return { kind: 'v2', path: result.path, amountOut: result.amountOut };
+          }
         }
-
-        // V2 和 V3 都失败
-        throw new Error(`${platformName} V2 和 V3 路径都失败`);
       } catch (error) {
         // 🐛 修复：Four.meme/Flap 已迁移代币失败后直接抛出错误
-        logger.error(`${channelLabel} ${platformName} 路径查询失败: ${error?.message || error}`);
+        logger.error(`${channelLabel} ${platformName} ${pancakeVersion.toUpperCase()} 路径失败: ${error?.message || error}`);
         updateRouteLoadingStatus(tokenAddress, direction, 'failed');
         throw new Error(`${platformName} 已迁移代币交易失败: ${error?.message || error}`);
       }
