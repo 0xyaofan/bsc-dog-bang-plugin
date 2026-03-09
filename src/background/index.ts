@@ -1158,8 +1158,8 @@ async function resolveTokenRoute(tokenAddress: string, options: { force?: boolea
       ...(routeResult.metadata ?? {}),
       // 优先使用平台合约返回的 symbol（更准确），回退到链上查询的 symbol
       symbol: routeResult.metadata?.symbol || tokenMeta.symbol,
-      // 优先使用平台返回的 name，回退到 tokenMeta.name 或 symbol
-      name: routeResult.metadata?.name || tokenMeta.name || (routeResult.metadata?.symbol || tokenMeta.symbol)
+      // 优先使用平台返回的 name，回退到 symbol
+      name: routeResult.metadata?.name || routeResult.metadata?.symbol || tokenMeta.symbol
     };
   } catch (metaError) {
     logger.debug('[Route] 读取代币元信息失败:', metaError);
@@ -1698,7 +1698,7 @@ async function ensureTokenMetadata(
 ): Promise<TokenMetadata> {
   const { needSymbol = false, needTotalSupply = false } = options;
   const key = getTokenMetadataKey(tokenAddress);
-  let cached: TokenMetadata = readTokenMetadataCache(tokenAddress) || {};
+  let cached: TokenMetadata = (readTokenMetadataCache(tokenAddress) || {}) as TokenMetadata;
   const missingFields: Array<'decimals' | 'symbol' | 'totalSupply'> = [];
 
   if (typeof cached.decimals !== 'number') {
@@ -1731,7 +1731,7 @@ async function ensureTokenMetadata(
       }
 
       cached = { ...cached, ...defaults };
-      writeTokenMetadataCache(tokenAddress, cached);
+      tokenMetadataCache.set(key, cached);
       return cached;
     }
 
@@ -1771,8 +1771,10 @@ async function ensureTokenMetadata(
         return data;
       });
 
-      cached = { ...cached, ...fetched };
-      writeTokenMetadataCache(tokenAddress, cached);
+      if (fetched) {
+        cached = Object.assign({}, cached, fetched) as TokenMetadata;
+        tokenMetadataCache.set(key, cached);
+      }
     } catch (error: any) {
       // 检查是否是 Service Worker 错误
       const errorMsg = error?.message || '';
@@ -1790,17 +1792,13 @@ async function ensureTokenMetadata(
           defaults.totalSupply = BigInt(0);
         }
         cached = { ...cached, ...defaults };
-        writeTokenMetadataCache(tokenAddress, cached);
+        tokenMetadataCache.set(key, cached);
       } else {
         // 其他错误继续抛出
         throw error;
       }
     }
   }
-    cached = Object.assign({}, cached, fetched) as TokenMetadata;
-    tokenMetadataCache.set(key, cached);
-  }
-  // 🚀 优化：移除手动更新 updatedAt，CacheManager 自动处理
 
   return cached;
 }
