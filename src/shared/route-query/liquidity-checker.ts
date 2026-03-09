@@ -9,7 +9,8 @@ import {
   MIN_LIQUIDITY_THRESHOLDS,
   MIN_V3_LIQUIDITY,
   PAIR_ABI,
-  V3_POOL_ABI
+  V3_POOL_ABI,
+  ERC20_ABI
 } from './constants.js';
 import { InsufficientLiquidityError } from './errors.js';
 
@@ -136,6 +137,69 @@ export class LiquidityChecker {
         error: error instanceof Error ? error.message : String(error)
       });
       return false;
+    }
+  }
+
+  /**
+   * 获取 V3 池子的流动性值（用于比较）
+   */
+  async getV3PoolLiquidity(
+    publicClient: any,
+    poolAddress: string
+  ): Promise<bigint | null> {
+    try {
+      const liquidity = await publicClient.readContract({
+        address: poolAddress as Address,
+        abi: V3_POOL_ABI,
+        functionName: 'liquidity'
+      }) as bigint;
+
+      structuredLogger.debug('[LiquidityChecker] 获取 V3 流动性', {
+        poolAddress,
+        liquidity: liquidity.toString()
+      });
+
+      return liquidity;
+    } catch (error) {
+      structuredLogger.error('[LiquidityChecker] 获取 V3 流动性失败', {
+        poolAddress,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+  }
+
+  /**
+   * 获取 V3 池子中 quote token 的余额（用于和 V2 比较流动性）
+   */
+  async getV3PoolQuoteBalance(
+    publicClient: any,
+    poolAddress: string,
+    quoteToken: string
+  ): Promise<bigint | null> {
+    try {
+      // 查询 pool 中 quote token 的余额
+      const balance = await publicClient.readContract({
+        address: quoteToken as Address,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [poolAddress as Address]
+      }) as bigint;
+
+      structuredLogger.debug('[LiquidityChecker] 获取 V3 pool quote token 余额', {
+        poolAddress,
+        quoteToken,
+        balance: balance.toString()
+      });
+
+      return balance;
+    } catch (error) {
+      structuredLogger.error('[LiquidityChecker] 获取 V3 pool quote token 余额失败', {
+        poolAddress,
+        quoteToken,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
     }
   }
 

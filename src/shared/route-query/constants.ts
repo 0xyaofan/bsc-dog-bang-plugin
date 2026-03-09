@@ -98,6 +98,19 @@ export const V3_POOL_ABI = [
 ] as const;
 
 /**
+ * ERC20 ABI - 用于查询余额
+ */
+export const ERC20_ABI = [
+  {
+    inputs: [{ internalType: 'address', name: 'account', type: 'address' }],
+    name: 'balanceOf',
+    outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function'
+  }
+] as const;
+
+/**
  * PancakeSwap V3 费率级别
  */
 export const PANCAKE_V3_FEE_TIERS = [500, 2500, 10000] as const;

@@ -81,6 +81,13 @@ describe('Pancake Pair 查找器测试', () => {
           if (params.address === '0xpool2500') return BigInt(2e12);
           if (params.address === '0xpool10000') return BigInt(1.5e12);
         }
+        // ERC20 balanceOf（用于获取 V3 pool 的 quote token 余额）
+        if (params.functionName === 'balanceOf') {
+          // 根据 pool 地址返回不同的余额
+          if (params.args[0] === '0xpool500') return BigInt(100 * 1e18);
+          if (params.args[0] === '0xpool2500') return BigInt(200 * 1e18);
+          if (params.args[0] === '0xpool10000') return BigInt(150 * 1e18);
+        }
         return null;
       });
 
@@ -88,8 +95,8 @@ describe('Pancake Pair 查找器测试', () => {
 
       expect(result.hasLiquidity).toBe(true);
       expect(result.version).toBe('v3');
-      // 由于并发查询，会返回第一个找到的有效 pool（当前实现不比较 V3 流动性）
-      expect(['0xpool500', '0xpool2500', '0xpool10000']).toContain(result.pairAddress);
+      // 应该选择流动性最大的 pool（0xpool2500，余额 200）
+      expect(result.pairAddress).toBe('0xpool2500');
     });
 
     it('应该优先选择流动性更高的 pair', async () => {
@@ -109,7 +116,7 @@ describe('Pancake Pair 查找器测试', () => {
           if (fee === 2500) return '0xpool2500';
           if (fee === 10000) return '0xpool10000';
         }
-        // V2 Pair getReserves
+        // V2 Pair getReserves（V2 quoteReserve = 150 * 1e18）
         if (params.functionName === 'getReserves') {
           return [BigInt(150 * 1e18), BigInt(100 * 1e18), 0];
         }
@@ -127,15 +134,74 @@ describe('Pancake Pair 查找器测试', () => {
           if (params.address === '0xpool2500') return BigInt(3e12);
           if (params.address === '0xpool10000') return BigInt(2e12);
         }
+        // ERC20 balanceOf（V3 pool quote token 余额，设置为更高）
+        if (params.functionName === 'balanceOf') {
+          // 0xpool500 的余额最高（200 * 1e18），高于 V2 的 150 * 1e18
+          if (params.args[0] === '0xpool500') return BigInt(200 * 1e18);
+          if (params.args[0] === '0xpool2500') return BigInt(100 * 1e18);
+          if (params.args[0] === '0xpool10000') return BigInt(80 * 1e18);
+        }
         return null;
       });
 
       const result = await finder.findBestPair(mockPublicClient, tokenAddress, quoteToken);
 
       expect(result.hasLiquidity).toBe(true);
-      // 应该选择 V3（因为优先级更高）
+      // 应该选择流动性最高的（V3 的 0xpool500，余额 200 > V2 的 150）
       expect(result.version).toBe('v3');
       expect(result.pairAddress).toBe('0xpool500');
+    });
+
+    it('当 V2 流动性更高时应该选择 V2', async () => {
+      const tokenAddress = '0x1234567890123456789012345678901234567890';
+      const quoteToken = '0x55d398326f99059ff775485246999027b3197955';
+
+      // 使用 mockImplementation 来处理并发查询
+      mockPublicClient.readContract.mockImplementation(async (params: any) => {
+        // V2 Factory getPair
+        if (params.functionName === 'getPair') {
+          return '0xv2pair';
+        }
+        // V3 Factory getPool
+        if (params.functionName === 'getPool') {
+          const fee = params.args[2];
+          if (fee === 500) return '0xpool500';
+          if (fee === 2500) return '0xpool2500';
+          if (fee === 10000) return '0xpool10000';
+        }
+        // V2 Pair getReserves（V2 quoteReserve = 300 * 1e18，非常高）
+        if (params.functionName === 'getReserves') {
+          return [BigInt(300 * 1e18), BigInt(100 * 1e18), 0];
+        }
+        // Pair token0
+        if (params.functionName === 'token0') {
+          return quoteToken;
+        }
+        // Pair token1
+        if (params.functionName === 'token1') {
+          return tokenAddress;
+        }
+        // V3 Pool liquidity
+        if (params.functionName === 'liquidity') {
+          if (params.address === '0xpool500') return BigInt(5e12);
+          if (params.address === '0xpool2500') return BigInt(3e12);
+          if (params.address === '0xpool10000') return BigInt(2e12);
+        }
+        // ERC20 balanceOf（V3 pool quote token 余额较低）
+        if (params.functionName === 'balanceOf') {
+          if (params.args[0] === '0xpool500') return BigInt(150 * 1e18);
+          if (params.args[0] === '0xpool2500') return BigInt(100 * 1e18);
+          if (params.args[0] === '0xpool10000') return BigInt(80 * 1e18);
+        }
+        return null;
+      });
+
+      const result = await finder.findBestPair(mockPublicClient, tokenAddress, quoteToken);
+
+      expect(result.hasLiquidity).toBe(true);
+      // 应该选择流动性最高的（V2 的 300 > V3 最高的 150）
+      expect(result.version).toBe('v2');
+      expect(result.pairAddress).toBe('0xv2pair');
     });
 
     it('应该处理没有找到 pair 的情况', async () => {

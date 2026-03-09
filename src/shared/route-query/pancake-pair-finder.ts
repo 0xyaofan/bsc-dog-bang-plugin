@@ -112,14 +112,45 @@ export class PancakePairFinder {
           this.findV3Pool(publicClient, tokenAddress, normalizedQuote)
         ]);
 
-        // 优先使用 V3（通常流动性更好）
+        // 如果两个都找到，选择流动性更大的
+        if (v2Result && v3Result) {
+          const v2Liquidity = v2Result.liquidityAmount || BigInt(0);
+          const v3Liquidity = v3Result.liquidityAmount || BigInt(0);
+
+          const selected = v2Liquidity >= v3Liquidity ? v2Result : v3Result;
+          const improvement = v2Liquidity >= v3Liquidity
+            ? Number((v2Liquidity - v3Liquidity) * BigInt(10000) / v3Liquidity)
+            : Number((v3Liquidity - v2Liquidity) * BigInt(10000) / v2Liquidity);
+
+          structuredLogger.info('[PancakePairFinder] 比较 V2 和 V3 流动性', {
+            tokenAddress: normalizedToken,
+            quoteToken: normalizedQuote,
+            v2Liquidity: v2Liquidity.toString(),
+            v3Liquidity: v3Liquidity.toString(),
+            selected: selected.version,
+            improvementBps: improvement
+          });
+
+          this.cacheResult(normalizedToken, selected);
+          return selected;
+        }
+
+        // 只有 V3
         if (v3Result) {
+          structuredLogger.info('[PancakePairFinder] 只找到 V3 池子', {
+            tokenAddress: normalizedToken,
+            quoteToken: normalizedQuote
+          });
           this.cacheResult(normalizedToken, v3Result);
           return v3Result;
         }
 
-        // 使用 V2
+        // 只有 V2
         if (v2Result) {
+          structuredLogger.info('[PancakePairFinder] 只找到 V2 池子', {
+            tokenAddress: normalizedToken,
+            quoteToken: normalizedQuote
+          });
           this.cacheResult(normalizedToken, v2Result);
           return v2Result;
         }
@@ -290,25 +321,41 @@ export class PancakePairFinder {
         return null;
       }
 
-      // 检查流动性
-      const hasLiquidity = await this.liquidityChecker.checkV2PairLiquidity(
+      // 获取储备量（用于流动性比较）
+      const quoteReserve = await this.liquidityChecker.getQuoteReserve(
         publicClient,
         pair,
-        tokenAddress,
         quoteToken
       );
 
-      if (!hasLiquidity) {
+      if (quoteReserve === null) {
         return null;
       }
 
-      structuredLogger.debug('[PancakePairFinder] 找到 V2 pair', { pair, quoteToken });
+      // 检查流动性阈值
+      const threshold = this.liquidityChecker.getMinLiquidityThreshold(quoteToken);
+      if (quoteReserve < threshold) {
+        structuredLogger.debug('[PancakePairFinder] V2 pair 流动性不足', {
+          pair,
+          quoteToken,
+          quoteReserve: quoteReserve.toString(),
+          threshold: threshold.toString()
+        });
+        return null;
+      }
+
+      structuredLogger.debug('[PancakePairFinder] 找到 V2 pair', {
+        pair,
+        quoteToken,
+        liquidityAmount: quoteReserve.toString()
+      });
 
       return {
         hasLiquidity: true,
         quoteToken,
         pairAddress: pair,
-        version: 'v2'
+        version: 'v2',
+        liquidityAmount: quoteReserve
       };
     } catch (error) {
       // Service Worker 错误是预期的，使用 debug 级别
@@ -351,7 +398,7 @@ export class PancakePairFinder {
             return null;
           }
 
-          // 检查流动性
+          // 检查流动性（布尔值）
           const hasLiquidity = await this.liquidityChecker.checkV3PoolLiquidity(publicClient, pool);
 
           if (!hasLiquidity) {
@@ -359,14 +406,32 @@ export class PancakePairFinder {
             return null;
           }
 
-          structuredLogger.debug('[PancakePairFinder] 找到 V3 pool', { pool, quoteToken, fee });
+          // 获取 quote token 余额（用于比较）
+          const quoteBalance = await this.liquidityChecker.getV3PoolQuoteBalance(
+            publicClient,
+            pool,
+            quoteToken
+          );
+
+          if (quoteBalance === null) {
+            structuredLogger.warn('[PancakePairFinder] 无法获取 V3 pool quote token 余额', { pool });
+            return null;
+          }
+
+          structuredLogger.debug('[PancakePairFinder] 找到 V3 pool', {
+            pool,
+            quoteToken,
+            fee,
+            liquidityAmount: quoteBalance.toString()
+          });
 
           return {
             hasLiquidity: true,
             quoteToken,
             pairAddress: pool,
             version: 'v3' as const,
-            fee
+            fee,
+            liquidityAmount: quoteBalance
           };
         } catch (error) {
           // 忽略单个费率级别的错误
@@ -377,9 +442,21 @@ export class PancakePairFinder {
       // 等待所有查询完成
       const results = await Promise.all(poolPromises);
 
-      // 返回第一个有效结果
-      const validResult = results.find(r => r !== null);
-      return validResult || null;
+      // 过滤有效结果
+      const validResults = results.filter(r => r !== null);
+
+      if (validResults.length === 0) {
+        return null;
+      }
+
+      // 返回流动性最大的 pool
+      const bestPool = validResults.reduce((best, current) => {
+        const bestLiquidity = best!.liquidityAmount || BigInt(0);
+        const currentLiquidity = current!.liquidityAmount || BigInt(0);
+        return currentLiquidity > bestLiquidity ? current : best;
+      })!;
+
+      return bestPool;
     } catch (error) {
       // Service Worker 错误是预期的，使用 debug 级别
       if (isServiceWorkerError(error)) {
