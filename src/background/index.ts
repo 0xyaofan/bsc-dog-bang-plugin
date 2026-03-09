@@ -1149,15 +1149,35 @@ async function resolveTokenRoute(tokenAddress: string, options: { force?: boolea
   let metadata: Record<string, any> | undefined = routeResult.metadata
     ? { ...routeResult.metadata }
     : undefined;
+
+  // 🚀 优化：总是调用 ensureTokenMetadata 确保缓存被填充，但优先使用平台返回的 symbol
+  // Service Worker 环境中会快速失败（< 1ms），不影响性能
   try {
     const tokenMeta = await ensureTokenMetadata(normalized, { needSymbol: true });
     metadata = {
       ...(routeResult.metadata ?? {}),
+      // 优先使用平台合约返回的 symbol（更准确），回退到链上查询的 symbol
       symbol: routeResult.metadata?.symbol || tokenMeta.symbol,
-      name: routeResult.metadata?.name || tokenMeta.symbol
+      // 优先使用平台返回的 name，回退到 tokenMeta.name 或 symbol
+      name: routeResult.metadata?.name || tokenMeta.name || (routeResult.metadata?.symbol || tokenMeta.symbol)
     };
   } catch (metaError) {
     logger.debug('[Route] 读取代币元信息失败:', metaError);
+    // 如果 ensureTokenMetadata 失败，检查 routeResult.metadata 是否有 symbol
+    if (routeResult.metadata?.symbol) {
+      metadata = {
+        ...(routeResult.metadata ?? {}),
+        symbol: routeResult.metadata.symbol,
+        name: routeResult.metadata.name || routeResult.metadata.symbol
+      };
+    } else {
+      // 都没有，使用地址前缀作为 symbol
+      metadata = {
+        ...(routeResult.metadata ?? {}),
+        symbol: normalized.slice(0, 6),
+        name: normalized.slice(0, 6)
+      };
+    }
   }
 
   const migrationStatus = routeResult.readyForPancake
@@ -1661,6 +1681,17 @@ function readTokenMetadataCache(address: string): TokenMetadata | null {
   return tokenMetadataCache.get(key) || null;
 }
 
+/**
+ * 检查是否在 Service Worker 环境中
+ */
+function isServiceWorkerEnvironment(): boolean {
+  try {
+    return typeof self !== 'undefined' && self.constructor.name === 'ServiceWorkerGlobalScope';
+  } catch {
+    return false;
+  }
+}
+
 async function ensureTokenMetadata(
   tokenAddress: string,
   options: { needSymbol?: boolean; needTotalSupply?: boolean } = {}
@@ -1681,6 +1712,29 @@ async function ensureTokenMetadata(
   }
 
   if (missingFields.length > 0) {
+    // 🚀 优化：Service Worker 环境中，直接返回默认值，避免超时
+    if (isServiceWorkerEnvironment()) {
+      logger.warn(`[ensureTokenMetadata] Service Worker 环境，使用默认值`, {
+        tokenAddress,
+        missingFields
+      });
+
+      const defaults: Partial<TokenMetadata> = {};
+      if (missingFields.includes('decimals')) {
+        defaults.decimals = 18;
+      }
+      if (missingFields.includes('symbol')) {
+        defaults.symbol = tokenAddress.slice(0, 6);
+      }
+      if (missingFields.includes('totalSupply')) {
+        defaults.totalSupply = BigInt(0);
+      }
+
+      cached = { ...cached, ...defaults };
+      writeTokenMetadataCache(tokenAddress, cached);
+      return cached;
+    }
+
     if (!publicClient) {
       await createClients();
     }
