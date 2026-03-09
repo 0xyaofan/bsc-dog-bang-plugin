@@ -234,16 +234,47 @@ export class FourPlatformQuery extends BasePlatformQuery {
         }) as string;
       });
 
+      // 如果返回非零地址，优先检查 V2 流动性
       if (pairAddress && !this.isZeroAddress(pairAddress)) {
-        return {
-          hasLiquidity: true,
-          quoteToken,
-          pairAddress,
-          version: 'v2' // Four.meme helper 返回的是 V2 pair
-        };
+        structuredLogger.debug('[FourQuery] Four.meme helper 返回 V2 pair 地址，检查流动性', {
+          tokenAddress,
+          pairAddress
+        });
+
+        // 检查 V2 pair 流动性
+        const hasV2Liquidity = quoteToken
+          ? await this.liquidityChecker.checkV2PairLiquidity(
+              this.publicClient,
+              pairAddress,
+              tokenAddress,
+              quoteToken
+            )
+          : false;
+
+        if (hasV2Liquidity) {
+          structuredLogger.info('[FourQuery] V2 pair 流动性充足，使用 V2', {
+            tokenAddress,
+            pairAddress,
+            quoteToken
+          });
+          return {
+            hasLiquidity: true,
+            quoteToken,
+            pairAddress,
+            version: 'v2'
+          };
+        } else {
+          structuredLogger.warn('[FourQuery] V2 pair 流动性不足，重新比较 V2 和 V3', {
+            tokenAddress,
+            pairAddress,
+            quoteToken
+          });
+          // V2 流动性不足，通过 Factory 重新查找并比较 V2 和 V3
+          return await this.checkPancakeFallback(tokenAddress, quoteToken);
+        }
       }
 
-      // getPancakePair 返回零地址，通过 Factory 查找
+      // getPancakePair 返回零地址，通过 Factory 查找并比较 V2 和 V3
       structuredLogger.debug('[FourQuery] getPancakePair 返回零地址，尝试通过 Factory 查找');
       return await this.checkPancakeFallback(tokenAddress, quoteToken);
     } catch (error) {

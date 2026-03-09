@@ -9,6 +9,7 @@ import { CONTRACTS } from '../trading-config.js';
 import type { RouteFetchResult, TokenPlatform, PancakePairCheckResult } from './types.js';
 import { ServiceWorkerError, isServiceWorkerError, toServiceWorkerError } from './errors.js';
 import { pancakePairFinder } from './pancake-pair-finder.js';
+import { LiquidityChecker } from './liquidity-checker.js';
 
 /**
  * 平台查询基类
@@ -16,10 +17,12 @@ import { pancakePairFinder } from './pancake-pair-finder.js';
 export abstract class BasePlatformQuery {
   protected publicClient: any;
   protected platform: TokenPlatform;
+  protected liquidityChecker: LiquidityChecker;
 
   constructor(publicClient: any, platform: TokenPlatform) {
     this.publicClient = publicClient;
     this.platform = platform;
+    this.liquidityChecker = new LiquidityChecker();
   }
 
   /**
