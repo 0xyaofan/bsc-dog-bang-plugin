@@ -1714,7 +1714,7 @@ async function ensureTokenMetadata(
   if (missingFields.length > 0) {
     // 🚀 优化：Service Worker 环境中，直接返回默认值，避免超时
     if (isServiceWorkerEnvironment()) {
-      logger.warn(`[ensureTokenMetadata] Service Worker 环境，使用默认值`, {
+      logger.debug(`[ensureTokenMetadata] Service Worker 环境，使用默认值`, {
         tokenAddress,
         missingFields
       });
@@ -1727,7 +1727,8 @@ async function ensureTokenMetadata(
         defaults.symbol = tokenAddress.slice(0, 6);
       }
       if (missingFields.includes('totalSupply')) {
-        defaults.totalSupply = BigInt(0);
+        // 使用 MAX_UINT256 作为默认值，确保授权检查时不会误判
+        defaults.totalSupply = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
       }
 
       cached = { ...cached, ...defaults };
