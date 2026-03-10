@@ -1515,9 +1515,13 @@ async function loadTokenRoute(tokenAddress: string, options: { force?: boolean }
       // 🚀 新增：检查是否需要启动迁移监控
       const route = currentTokenRoute;
       if (route && !route.readyForPancake) {
-        // 如果代币正在迁移中（progress >= 0.95 或 migrating === true），启动快速轮询
-        if (route.migrating || (route.progress !== undefined && route.progress >= 0.95)) {
-          logger.info('[Migration] 检测到代币迁移中，启动快速监控:', tokenAddress);
+        // 如果代币还未迁移完成，启动快速轮询
+        // 降低触发阈值：progress >= 0.8 或 migrating === true 时启动监控
+        if (route.migrating || (route.progress !== undefined && route.progress >= 0.8)) {
+          logger.info('[Migration] 检测到代币接近完成或迁移中，启动快速监控:', tokenAddress, {
+            progress: route.progress,
+            migrating: route.migrating
+          });
           startMigrationPolling(tokenAddress);
         } else {
           // 进度低于阈值，停止监控（如果之前在监控）
@@ -4137,7 +4141,8 @@ async function checkTokenMigrationStatus() {
         stopMigrationPolling();
 
         // 立即更新路由缓存和UI
-        await loadTokenRoute(tokenAddress, { force: true });
+        currentTokenRoute = route;
+        applyTokenRouteToUI(route);
 
         // 通知用户
         safeSendMessageNoThrow({
@@ -4147,9 +4152,13 @@ async function checkTokenMigrationStatus() {
             message: '代币已迁移到 PancakeSwap，交易通道已自动切换'
           }
         });
-      } else if (route.migrating || (route.progress !== undefined && route.progress >= 0.95)) {
-        // 仍在迁移中，继续监控
-        logger.debug('[Migration] 代币迁移中，进度:', route.progress);
+      } else if (route.migrating || (route.progress !== undefined && route.progress >= 0.8)) {
+        // 仍在迁移中，更新进度显示
+        logger.debug('[Migration] 代币迁移中，进度:', route.progress, 'migrating:', route.migrating);
+
+        // 立即更新UI，显示最新进度
+        currentTokenRoute = route;
+        applyTokenRouteToUI(route);
       } else {
         // 进度低于阈值，停止监控
         logger.debug('[Migration] 代币进度低于阈值，停止监控:', route.progress);
@@ -4179,9 +4188,11 @@ function startMigrationPolling(tokenAddress: string) {
   // 立即检查一次
   checkTokenMigrationStatus();
 
-  // 每1秒检查一次
+  // 每1秒检查一次（即使页面隐藏也继续监控）
   migrationPollingTimer = setInterval(() => {
-    if (!document.hidden && !isWalletLocked) {
+    // 移除 document.hidden 检查，确保即使页面隐藏也继续监控
+    // 只检查钱包是否锁定
+    if (!isWalletLocked) {
       checkTokenMigrationStatus();
     }
   }, 1000);  // 1秒
