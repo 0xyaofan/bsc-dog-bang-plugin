@@ -424,10 +424,27 @@ async function quoteViaPancakeV3(params: {
   throw lastError || new Error('未找到匹配的 V3 流动池');
 }
 
-async function resolveV3FeeTier(publicClient: any, tokenA: string, tokenB: string) {
+/**
+ * 解析最佳 V3 Fee Tier（选择流动性最高的）
+ *
+ * 🚀 修复：查询所有 fee tier 的流动性，选择最高的，避免使用流动性极低的 pool
+ *
+ * @param publicClient - Viem public client
+ * @param tokenA - 第一个代币地址
+ * @param tokenB - 第二个代币地址（通常是 WBNB）
+ * @returns 流动性最高的 fee tier，如果没有找到则返回 null
+ *
+ * @internal - 仅用于测试导出
+ */
+export async function resolveV3FeeTier(publicClient: any, tokenA: string, tokenB: string) {
   if (!CONTRACTS.PANCAKE_V3_FACTORY) {
     return null;
   }
+
+  // 🚀 修复：查询所有 fee tier 的流动性，选择最高的
+  let bestFee: number | null = null;
+  let bestLiquidity = 0n;
+
   for (const fee of V3_FEE_TIERS) {
     try {
       const pool = await readContractWithFallback(
@@ -440,14 +457,51 @@ async function resolveV3FeeTier(publicClient: any, tokenA: string, tokenB: strin
         },
         { label: 'Pancake V3 fee probe', quoteToken: tokenB }
       );
-      if (pool && normalizeAddress(pool) !== ZERO_ADDRESS) {
-        return fee;
+
+      if (!pool || normalizeAddress(pool) === ZERO_ADDRESS) {
+        continue;
+      }
+
+      // 🚀 新增：检查该 pool 的流动性（通过 tokenB 的余额）
+      try {
+        const liquidity = await publicClient.readContract({
+          address: tokenB as Address,
+          abi: ERC20_ABI,
+          functionName: 'balanceOf',
+          args: [pool as Address]
+        }) as bigint;
+
+        logger.debug(`[Aggregator] V3 Pool 流动性检查`, {
+          fee,
+          pool,
+          tokenB,
+          liquidity: liquidity.toString()
+        });
+
+        // 选择流动性最高的 fee tier
+        if (liquidity > bestLiquidity) {
+          bestLiquidity = liquidity;
+          bestFee = fee;
+        }
+      } catch (error) {
+        logger.debug(`[Aggregator] 获取 V3 Pool 流动性失败 (fee: ${fee}):`, error?.message || error);
+        continue;
       }
     } catch (error) {
       continue;
     }
   }
-  return null;
+
+  if (bestFee !== null) {
+    logger.info(`[Aggregator] 选择流动性最高的 V3 Pool`, {
+      tokenA,
+      tokenB,
+      bestFee,
+      bestLiquidity: bestLiquidity.toString()
+    });
+  }
+
+  return bestFee;
 }
 
 async function planAggregatorQuoteSwap(params: {

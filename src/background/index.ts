@@ -3929,11 +3929,21 @@ async function handleSellToken({ tokenAddress, percent, slippage, gasPrice, chan
         performance: perfResult
       });
 
+      // 🚀 优化：返回当前 BNB 余额，让 frontend 可以立即显示更新
+      let currentBnbBalance: string | undefined;
+      try {
+        const balance = await publicClient.getBalance({ address: walletAccount.address });
+        currentBnbBalance = formatEther(balance);
+      } catch (balanceError) {
+        logger.debug('[Sell] 获取当前 BNB 余额失败:', balanceError);
+      }
+
       return {
         success: true,
         txHash,
         channel: resolvedChannelId,
         route: clientRouteInfo || undefined,
+        bnbBalance: currentBnbBalance,  // 🚀 新增：返回当前 BNB 余额
         performance: {
           totalTime: perfResult.totalTime,
           steps: perfResult.steps

@@ -1511,6 +1511,23 @@ async function loadTokenRoute(tokenAddress: string, options: { force?: boolean }
     if (response && response.success) {
       currentTokenRoute = response.data;
       applyTokenRouteToUI(currentTokenRoute);
+
+      // 🚀 新增：检查是否需要启动迁移监控
+      const route = currentTokenRoute;
+      if (route && !route.readyForPancake) {
+        // 如果代币正在迁移中（progress >= 0.95 或 migrating === true），启动快速轮询
+        if (route.migrating || (route.progress !== undefined && route.progress >= 0.95)) {
+          logger.info('[Migration] 检测到代币迁移中，启动快速监控:', tokenAddress);
+          startMigrationPolling(tokenAddress);
+        } else {
+          // 进度低于阈值，停止监控（如果之前在监控）
+          stopMigrationPolling();
+        }
+      } else if (route && route.readyForPancake) {
+        // 已迁移完成，停止监控
+        stopMigrationPolling();
+      }
+
       const nextDelay = typeof currentTokenRoute?.nextUpdateIn === 'number'
         ? currentTokenRoute.nextUpdateIn
         : CONTENT_CONFIG.ROUTE_REFRESH_DEFAULT_DELAY_MS;
@@ -1879,11 +1896,21 @@ async function handleSell(tokenAddress) {
         }
       });
 
-      // 卖出成功后立即更新余额显示
+      // 🚀 优化：立即更新 BNB 余额显示（如果后端返回了余额）
+      const bnbBalanceEl = document.getElementById('bnb-balance');
+      if (response.bnbBalance && bnbBalanceEl) {
+        const bnbValue = parseFloat(response.bnbBalance);
+        if (!isNaN(bnbValue)) {
+          bnbBalanceEl.textContent = bnbValue.toFixed(4);
+          logger.debug(`[SidePanel] BNB 余额立即更新: ${bnbValue.toFixed(4)}`);
+        }
+      }
+
+      // 卖出成功后立即更新代币余额显示
       const is100PercentSell = parseFloat(percent) === 100;
       const previousBalance = currentTokenInfo?.balance || '0';
 
-      // 🚀 性能优化：立即计算并显示预期余额，无需等待链上确认
+      // 🚀 性能优化：立即计算并显示预期代币余额，无需等待链上确认
       const tokenBalanceEl = document.getElementById('token-balance');
       if (tokenBalanceEl) {
         if (is100PercentSell) {
@@ -1907,7 +1934,8 @@ async function handleSell(tokenAddress) {
         }
       }
 
-      loadWalletStatus();  // 刷新 BNB 余额（卖出获得了 BNB）
+      // 后台刷新钱包状态（更新真实链上余额）
+      loadWalletStatus();
       loadTokenRoute(tokenAddress, { force: true });  // 刷新路由缓存（卖出后可能影响流动性）
 
       // 启动快速轮询，等待链上确认后更新真实余额
@@ -4028,6 +4056,8 @@ if (shouldMountEmbeddedPanel) {
 // 混合策略：页面可见性检测 + 定时检查
 
 let routeCacheRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let migrationPollingTimer: ReturnType<typeof setInterval> | null = null;
+let currentMigrationTokenAddress: string | null = null;
 
 // 主动刷新路由缓存（如果即将过期或已过期）
 async function refreshRouteCacheIfNeeded() {
@@ -4075,6 +4105,98 @@ async function refreshRouteCacheIfNeeded() {
   }
 }
 
+// 🚀 新增：迁移监控 - 快速轮询检测代币迁移状态变化
+async function checkTokenMigrationStatus() {
+  const tokenAddress = currentTokenAddress;
+  if (!tokenAddress || tokenAddress !== currentMigrationTokenAddress) {
+    // Token 已切换，停止监控
+    stopMigrationPolling();
+    return;
+  }
+
+  try {
+    logger.debug('[Migration] 检查代币迁移状态:', tokenAddress);
+
+    // 强制刷新路由信息
+    const response = await sendMessageViaAdapter({
+      action: 'get_token_route',
+      data: {
+        tokenAddress,
+        force: true  // 强制刷新
+      }
+    });
+
+    if (response?.success && response.data) {
+      const route = response.data;
+
+      // 检查是否已迁移完成
+      if (route.readyForPancake && route.preferredChannel === 'pancake') {
+        logger.info('[Migration] ✅ 代币已迁移完成，更新通道显示');
+
+        // 停止迁移监控
+        stopMigrationPolling();
+
+        // 立即更新路由缓存和UI
+        await loadTokenRoute(tokenAddress, { force: true });
+
+        // 通知用户
+        safeSendMessageNoThrow({
+          action: 'show_notification',
+          data: {
+            title: '代币已迁移',
+            message: '代币已迁移到 PancakeSwap，交易通道已自动切换'
+          }
+        });
+      } else if (route.migrating || (route.progress !== undefined && route.progress >= 0.95)) {
+        // 仍在迁移中，继续监控
+        logger.debug('[Migration] 代币迁移中，进度:', route.progress);
+      } else {
+        // 进度低于阈值，停止监控
+        logger.debug('[Migration] 代币进度低于阈值，停止监控:', route.progress);
+        stopMigrationPolling();
+      }
+    }
+  } catch (error) {
+    logger.debug('[Migration] 检查迁移状态失败:', error);
+  }
+}
+
+// 🚀 新增：启动迁移监控
+function startMigrationPolling(tokenAddress: string) {
+  // 如果已经在监控同一个代币，不重复启动
+  if (migrationPollingTimer && currentMigrationTokenAddress === tokenAddress) {
+    logger.debug('[Migration] 已在监控该代币迁移状态');
+    return;
+  }
+
+  // 停止之前的监控
+  stopMigrationPolling();
+
+  currentMigrationTokenAddress = tokenAddress;
+
+  logger.info('[Migration] 🚀 启动迁移监控（每1秒检查一次）:', tokenAddress);
+
+  // 立即检查一次
+  checkTokenMigrationStatus();
+
+  // 每1秒检查一次
+  migrationPollingTimer = setInterval(() => {
+    if (!document.hidden && !isWalletLocked) {
+      checkTokenMigrationStatus();
+    }
+  }, 1000);  // 1秒
+}
+
+// 🚀 新增：停止迁移监控
+function stopMigrationPolling() {
+  if (migrationPollingTimer) {
+    clearInterval(migrationPollingTimer);
+    migrationPollingTimer = null;
+    currentMigrationTokenAddress = null;
+    logger.debug('[Migration] 停止迁移监控');
+  }
+}
+
 // 启动定时检查（每5分钟）
 function startRouteCacheRefreshTimer() {
   if (routeCacheRefreshTimer) {
@@ -4109,6 +4231,11 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     logger.debug('[Route Cache] 页面激活，检查缓存是否需要刷新');
     refreshRouteCacheIfNeeded();
+
+    // 如果有正在迁移的代币，也立即检查
+    if (currentMigrationTokenAddress) {
+      checkTokenMigrationStatus();
+    }
   }
 });
 
