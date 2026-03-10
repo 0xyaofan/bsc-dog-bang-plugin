@@ -1516,8 +1516,8 @@ async function loadTokenRoute(tokenAddress: string, options: { force?: boolean }
       const route = currentTokenRoute;
       if (route && !route.readyForPancake) {
         // 如果代币还未迁移完成，启动快速轮询
-        // 降低触发阈值：progress >= 0.8 或 migrating === true 时启动监控
-        if (route.migrating || (route.progress !== undefined && route.progress >= 0.8)) {
+        // 降低触发阈值：progress >= 0.9 或 migrating === true 时启动监控
+        if (route.migrating || (route.progress !== undefined && route.progress >= 0.9)) {
           logger.info('[Migration] 检测到代币接近完成或迁移中，启动快速监控:', tokenAddress, {
             progress: route.progress,
             migrating: route.migrating
@@ -4152,7 +4152,7 @@ async function checkTokenMigrationStatus() {
             message: '代币已迁移到 PancakeSwap，交易通道已自动切换'
           }
         });
-      } else if (route.migrating || (route.progress !== undefined && route.progress >= 0.8)) {
+      } else if (route.migrating || (route.progress !== undefined && route.progress >= 0.9)) {
         // 仍在迁移中，更新进度显示
         logger.debug('[Migration] 代币迁移中，进度:', route.progress, 'migrating:', route.migrating);
 
