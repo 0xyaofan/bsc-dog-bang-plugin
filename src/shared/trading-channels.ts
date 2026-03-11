@@ -684,6 +684,29 @@ export async function prepareTokenSell({ publicClient, tokenAddress, accountAddr
     });
   }
 
+  // 🚀 修复：如果缓存的余额为0，强制重新查询链上余额（可能是买入后缓存未更新）
+  if (balance === 0n && hasValidCache) {
+    logger.warn('[PrepareTokenSell] 缓存余额为0，强制重新查询链上余额');
+    const queryStart = perf.now();
+    const state = await fetchTokenState(
+      publicClient,
+      tokenAddress,
+      accountAddress,
+      spenderAddress,
+      { includeDecimals: requireGweiPrecision }
+    );
+    balance = state.balance;
+    allowance = state.allowance;
+    totalSupply = state.totalSupply;
+    if (requireGweiPrecision) {
+      decimals = state.decimals;
+    }
+    logger.debug(`[PrepareTokenSell] 链上查询完成 (${perf.measure(queryStart).toFixed(2)}ms)`, {
+      balance: balance.toString(),
+      allowance: allowance.toString()
+    });
+  }
+
   if (balance === 0n) {
     logger.debug('[PrepareTokenSell] ❌ 代币余额为 0');
     throw new Error('代币余额为 0');
