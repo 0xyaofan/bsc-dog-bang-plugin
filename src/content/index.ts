@@ -15,6 +15,7 @@ import {
   onUserSettingsChange
 } from '../shared/user-settings.js';
 import * as FrontendAdapter from '../shared/frontend-adapter.js';
+import { contentTokenCache } from './token-info-cache.js';
 
 declare global {
   interface Window {
@@ -1223,6 +1224,9 @@ async function loadTokenInfo(tokenAddress) {
         allowances: response.data.allowances  // 保存授权信息
       };
 
+      // 🚀 新增：保存到 contentTokenCache
+      contentTokenCache.set(tokenAddress, currentTokenInfo);
+
       logger.debug('[Dog Bang] 代币信息已更新:', {
         symbol: currentTokenInfo.symbol,
         decimals: currentTokenInfo.decimals
@@ -2429,6 +2433,9 @@ export function createTradingPanel(options: TradingPanelOptions = {}) {
   }
 
   currentTokenAddress = tokenAddress;
+  // 🚀 设置 contentTokenCache 的当前代币
+  contentTokenCache.setCurrentToken(tokenAddress);
+
   // 修复：代币切换时重置 userChannelOverride，让系统自动选择正确的通道
   // 避免使用旧代币的手动通道设置导致新代币交易失败
   userChannelOverride = false;
@@ -2628,8 +2635,29 @@ export function switchTradingPanelToken(tokenAddress: string, options: SwitchTok
     panel.remove();
     panelReady = false;
   }
+
+  // 🚀 优化：保存当前代币信息到缓存
+  if (currentTokenAddress && currentTokenInfo) {
+    contentTokenCache.set(currentTokenAddress, currentTokenInfo);
+    logger.debug('[Dog Bang] 切换代币：保存当前代币信息到缓存', { currentTokenAddress });
+  }
+
+  // 更新当前代币地址
   currentTokenAddress = null;
-  currentTokenInfo = null;
+
+  // 🚀 优化：尝试从缓存恢复新代币信息
+  const cachedTokenInfo = contentTokenCache.get(tokenAddress, { maxAge: 60000 }); // 1分钟内有效
+  if (cachedTokenInfo) {
+    currentTokenInfo = cachedTokenInfo;
+    logger.debug('[Dog Bang] 切换代币：从缓存恢复代币信息', { tokenAddress });
+  } else {
+    currentTokenInfo = null;
+    logger.debug('[Dog Bang] 切换代币：缓存未命中，将重新加载', { tokenAddress });
+  }
+
+  // 设置缓存的当前代币
+  contentTokenCache.setCurrentToken(tokenAddress);
+
   currentTokenRoute = null;
   stopSellEstimateTimer();
   updateSellEstimateDisplay(null);
@@ -2705,6 +2733,9 @@ export function createFloatingTradingWindow(tokenAddressOverride?: string) {
   }
 
   currentTokenAddress = tokenAddress;
+  // 🚀 设置 contentTokenCache 的当前代币
+  contentTokenCache.setCurrentToken(tokenAddress);
+
   // 修复：代币切换时重置 userChannelOverride，让系统自动选择正确的通道
   // 避免使用旧代币的手动通道设置导致新代币交易失败
   userChannelOverride = false;
@@ -3733,6 +3764,9 @@ function handleExtensionMessage(request) {
   } else if (request.action === 'token_balance_updated') {
     logger.debug('[Dog Bang] PUSH: 收到代币余额更新');
     handleTokenBalancePush(request.data);
+  } else if (request.action === 'token_info_updated') {
+    logger.debug('[Dog Bang] PUSH: 收到代币信息更新');
+    handleTokenInfoPush(request.data);
   } else if (request.action === 'wallet_unlocked') {
     logger.debug('[Dog Bang] Wallet unlocked (legacy)');
   } else if (request.action === 'tx_confirmed') {
@@ -3964,6 +3998,53 @@ function handleTokenBalancePush(data, options: { fromPending?: boolean } = {}) {
   }
 }
 
+/**
+ * 处理代币信息推送（多代币缓存）
+ * 🚀 新增：支持多代币缓存，所有代币的信息都会被缓存
+ */
+function handleTokenInfoPush(data) {
+  if (!data || !data.tokenAddress) return;
+
+  logger.debug('[Dog Bang] PUSH: 收到代币信息更新', {
+    tokenAddress: data.tokenAddress,
+    version: data.version,
+    source: data.source
+  });
+
+  // 🚀 更新 contentTokenCache（无论是否为当前代币）
+  contentTokenCache.update(data.tokenAddress, {
+    tokenInfo: data.tokenInfo,
+    version: data.version,
+    updatedAt: data.updatedAt,
+    source: data.source
+  });
+
+  // 如果是当前代币，更新 currentTokenInfo 和 UI
+  if (data.tokenAddress === currentTokenAddress) {
+    logger.debug('[Dog Bang] PUSH: 更新当前代币信息');
+
+    // 更新 currentTokenInfo
+    if (!currentTokenInfo) {
+      currentTokenInfo = data.tokenInfo;
+    } else {
+      // 合并更新（保留 currentTokenInfo 中可能有的其他字段）
+      currentTokenInfo = {
+        ...currentTokenInfo,
+        ...data.tokenInfo
+      };
+    }
+
+    // 更新 UI 显示
+    updateTokenBalanceDisplay(currentTokenAddress);
+    logger.debug('[Dog Bang] PUSH: 当前代币信息已更新');
+  } else {
+    logger.debug('[Dog Bang] PUSH: 缓存非当前代币信息', {
+      cachedToken: data.tokenAddress,
+      currentToken: currentTokenAddress
+    });
+  }
+}
+
 function flushPendingUiUpdates() {
   if (!panelReady) return;
 
@@ -4013,6 +4094,13 @@ if (shouldMountEmbeddedPanel) {
 
 // 确认 content script 已加载
 console.log('[Dog Bang] Content script loaded on:', window.location.href);
+
+// 🚀 初始化 contentTokenCache 回调
+contentTokenCache.setUpdateCallback((tokenAddress, tokenInfo) => {
+  logger.debug('[ContentTokenCache] 当前代币更新，刷新 UI', { tokenAddress });
+  // 回调会在 handleTokenInfoPush 中被调用，这里不需要额外处理
+  // currentTokenInfo 已在 handleTokenInfoPush 中更新
+});
 
 registerRuntimeListeners();
 connectBackgroundPort();

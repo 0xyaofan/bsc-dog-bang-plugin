@@ -82,6 +82,7 @@ import {
   isAggregatorUnsupportedError
 } from './custom-aggregator-agent.js';
 import { createBatchQueryHandlers, type BatchQueryDependencies } from './batch-query-handlers.js';
+import { tokenInfoStore, type TokenInfo as StoredTokenInfo } from './token-info-store.js';
 
 // 全局变量
 let publicClient = null;
@@ -868,6 +869,20 @@ function setupTokenContextSyncFromStorage() {
 
 setupTokenContextSyncFromStorage();
 
+// 🚀 初始化 TokenInfoStore 推送回调
+tokenInfoStore.setPushCallback((tokenAddress, entry) => {
+  broadcastToContentPorts({
+    action: 'token_info_updated',
+    data: {
+      tokenAddress,
+      tokenInfo: entry.data,
+      version: entry.version,
+      updatedAt: entry.updatedAt,
+      source: entry.source
+    }
+  });
+});
+
 type PendingRpcRequest = {
   resolve: (value: any) => void;
   reject: (reason?: any) => void;
@@ -924,7 +939,8 @@ const tokenMetadataCache = new CacheManager<TokenMetadata>({
   cleanupInterval: 300000  // 5分钟清理一次过期缓存
 });
 
-const tokenInfoCache = new Map<string, TokenInfoCacheEntry>();
+// 🚀 优化：使用 TokenInfoStore 替代简单 Map
+// const tokenInfoCache = new Map<string, TokenInfoCacheEntry>(); // 已弃用，使用 tokenInfoStore
 type PendingTradeContext = {
   tokenAddress: string;
   type: 'buy' | 'sell';
@@ -996,42 +1012,46 @@ function getTokenInfoCacheKey(walletAddress?: string | null, tokenAddress?: stri
 }
 
 function readCachedTokenInfo(tokenAddress: string, walletAddress: string, needAllowances: boolean) {
-  const key = getTokenInfoCacheKey(walletAddress, tokenAddress);
-  if (!key) {
+  // 🚀 使用 TokenInfoStore 替代 Map
+  const entry = tokenInfoStore.get(tokenAddress, walletAddress, {
+    maxAge: TOKEN_INFO_CACHE_TTL,
+    minConfidence: 80 // 至少 80% 可信度
+  });
+
+  if (!entry) {
     return null;
   }
-  const cached = tokenInfoCache.get(key);
-  if (!cached) {
+
+  // 检查是否需要授权信息
+  if (needAllowances && !entry.data.hasAllowances) {
     return null;
   }
-  if (Date.now() - cached.updatedAt > TOKEN_INFO_CACHE_TTL) {
-    tokenInfoCache.delete(key);
-    return null;
-  }
-  if (needAllowances && !cached.hasAllowances) {
-    return null;
-  }
-  return cached.data;
+
+  return entry.data;
 }
 
-function writeCachedTokenInfo(tokenAddress: string, walletAddress: string, data: TokenInfoResult) {
-  const key = getTokenInfoCacheKey(walletAddress, tokenAddress);
-  if (!key) {
-    return;
-  }
-  tokenInfoCache.set(key, {
-    data,
-    updatedAt: Date.now(),
+function writeCachedTokenInfo(tokenAddress: string, walletAddress: string, data: TokenInfoResult, source: 'chain' | 'tx' = 'chain') {
+  // 🚀 使用 TokenInfoStore 替代 Map
+  // 转换 TokenInfoResult 到 StoredTokenInfo
+  const storedData: StoredTokenInfo = {
+    address: tokenAddress,
+    symbol: data.symbol,
+    decimals: data.decimals,
+    totalSupply: data.totalSupply,
+    balance: data.balance,
+    allowances: data.allowances,
     hasAllowances: Boolean(data.allowances)
-  });
+  };
+
+  tokenInfoStore.set(tokenAddress, walletAddress, storedData, { source });
 }
 
 function invalidateTokenInfoCache(walletAddress?: string | null, tokenAddress?: string | null) {
-  const key = getTokenInfoCacheKey(walletAddress, tokenAddress);
-  if (!key) {
+  if (!walletAddress || !tokenAddress) {
     return;
   }
-  tokenInfoCache.delete(key);
+  // 🚀 使用 TokenInfoStore 替代 Map
+  tokenInfoStore.invalidate(tokenAddress, walletAddress);
 }
 
 function computeRouteTtl(readyForPancake: boolean, progress: number, migrating: boolean) {
@@ -2540,7 +2560,7 @@ function initializeBatchQueryHandlers() {
     ERC20_ABI,
     CONTRACTS,
     TOKEN_INFO_CACHE_TTL,
-    tokenInfoCache,
+    tokenInfoCache: new Map(), // 🚀 批量查询处理器使用独立的 Map（已弃用，将逐步迁移到 tokenInfoStore）
     getCacheScope,
     normalizeAddressValue,
     ensureTokenMetadata,
